@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>Agent Link</name>
+  <description>Drive FreeCAD from an agent over the Model Context Protocol: six tools to make, check, review and export parts, in the GUI or headless.</description>
+  <version>0.1.0</version>
+  <date>2026-11-09</date>
+  <maintainer email="jamesK1000011@users.noreply.github.com">jamesK1000011</maintainer>
+  <license file="LICENSE">LGPL-2.1-or-later</license>
+  <freecadmin>1.0.0</freecadmin>
+  <content>
+    <workbench>
+      <classname>AgentLinkWorkbench</classname>
+      <subdirectory>./</subdirectory>
+    </workbench>
+  </content>
+</package>
