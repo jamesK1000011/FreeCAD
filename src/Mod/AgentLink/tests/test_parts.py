@@ -61,7 +61,7 @@ class Parts(Base):
         self.assertAlmostEqual(made["magnets"]["hole"], 6.2, places=3)  # 6 mm + the typical printer's 0.2
         self.assertAlmostEqual(made["parts"][0]["size"][2], 3.0 + 4.65, delta=0.011)
         self.sound("Magnet plate")
-        err, e = self.call("gen_part", {"generator": "gridfinity_baseplate", "params": {"style": "magnets", "floor": 2.6}})
+        err, e = self.call("gen_part", {"generator": "gridfinity_baseplate", "params": {"style": "magnets", "floor": 2.5}})
         self.assertTrue(err)
         self.assertIn("floor", e["error"]["message"])
 

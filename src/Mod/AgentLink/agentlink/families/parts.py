@@ -26,6 +26,17 @@ def calibration(doc):
     return {"hole": 0.2, "shaft": 0.0}, "none — the typical printer assumed (holes print 0.2 mm small)"
 
 
+def tight_box(shape):
+    """The shape's extent, mm, tight: the plain bounding box runs a little
+    loose round lofted faces."""
+    try:
+        b = shape.optimalBoundingBox(True, False)
+    except Exception:  # an older FreeCAD without it: the plain box
+        b = shape.BoundBox
+    r = geo.r3
+    return {"min": [r(b.XMin), r(b.YMin), r(b.ZMin)], "max": [r(b.XMax), r(b.YMax), r(b.ZMax)], "size": [r(b.XLength), r(b.YLength), r(b.ZLength)]}
+
+
 def build(gen, given, cal):
     """[(name, shape)] and what was made, for a generator and its params."""
     p = boxes.check(GENERATORS[gen], given)
@@ -65,7 +76,7 @@ def tools(session):
             raise ToolError("invalid_input", f"generator: one of {', '.join(GENERATORS)} (gridfinity_bin is gen_make's).")
         cal, said = calibration(s.doc)
         p, made, info = build(gen, a.get("params") or {}, cal)
-        parts = [{"name": n, "volume": round(sh.Volume, 1), **geo.box_of(sh)} for (n, sh) in made]
+        parts = [{"name": n, "volume": round(sh.Volume, 1), **tight_box(sh)} for (n, sh) in made]
         out = {"generator": gen, "values": p, "parts": parts, **info, "printerFit": said}
         if a.get("measure"):
             return {**out, "made": False}

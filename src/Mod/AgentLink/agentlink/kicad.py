@@ -326,11 +326,11 @@ def read_board(text, source=None):
         m = HOLE_NAME.search(name)
         if m or "mountinghole" in name.lower():
             d = float(m.group(1)) if m else max((dd for (_, dd, _) in drills), default=3.2)
-            holes.append({"at": entry["at"], "d": d, "ref": entry["ref"]})
+            holes.append({"at": entry["at"], "d": d, "ref": entry["ref"], "kind": "mounting"})
         else:
             for (pp, dd, kind) in drills:
                 if kind == "np_thru_hole" and dd >= 2.0:
-                    holes.append({"at": [round(pp[0], 4), round(pp[1], 4)], "d": dd, "ref": entry["ref"]})
+                    holes.append({"at": [round(pp[0], 4), round(pp[1], 4)], "d": dd, "ref": entry["ref"], "kind": "unplated"})
     if not edge:
         raise ValueError("no board outline: nothing on the Edge.Cuts layer. Draw the outline in KiCad's PCB editor first.")
     closed, open_ = loops(edge)

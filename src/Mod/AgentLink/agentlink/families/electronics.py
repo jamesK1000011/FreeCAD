@@ -151,7 +151,7 @@ def tools(session):
             "copperLayers": b["copperLayers"],
             "size": b["size"],
             "box": [round(x0 + off[0], 3), round(y0 + off[1], 3), round(x1 + off[0], 3), round(y1 + off[1], 3)],
-            "holes": [{"at": [round(h["at"][0] + off[0], 3), round(h["at"][1] + off[1], 3)], "d": h["d"]} for h in b["holes"]],
+            "holes": [{"at": [round(h["at"][0] + off[0], 3), round(h["at"][1] + off[1], 3)], "d": h["d"], "kind": h["kind"]} for h in b["holes"]],
             "footprints": [
                 {"ref": f["ref"], "value": f["value"], "side": f["side"], "courtyard": [round(f["courtyard"][0] + off[0], 3), round(f["courtyard"][1] + off[1], 3), round(f["courtyard"][2] + off[0], 3), round(f["courtyard"][3] + off[1], 3)] if f["courtyard"] else None, "height": f["height"]}
                 for f in b["footprints"]
@@ -205,9 +205,12 @@ def tools(session):
         params = {k: a[k] for k in ("wall", "floor", "radius", "lid", "lip", "clearance", "gap", "margin") if k in a}
         params["board"] = [x1 - x0, y1 - y0]
         params["thickness"] = b["thickness"]
-        params["holes"] = [[h["at"][0] - x0, h["at"][1] - y0] for h in b["holes"]]
-        if b["holes"]:
-            params["screw"] = a.get("screw") or kicad.screw_for(min(h["d"] for h in b["holes"]))
+        # Standoffs under the mounting holes; other unplated holes (a
+        # connector's pegs, say) only when the board has no mounting hole.
+        holes = [h for h in b["holes"] if h.get("kind") == "mounting"] or b["holes"]
+        params["holes"] = [[h["at"][0] - x0, h["at"][1] - y0] for h in holes]
+        if holes:
+            params["screw"] = a.get("screw") or kicad.screw_for(min(h["d"] for h in holes))
         params["standoff"] = a.get("standoff") or max(5.0, max((f["height"] for f in under), default=0) + 1.0)
         params["headroom"] = a.get("headroom") or max(5.0, max((f["height"] for f in top), default=0) + 2.0)
         openings, guessed = [], []
