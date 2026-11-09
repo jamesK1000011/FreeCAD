@@ -88,6 +88,10 @@ def tools(session):
         label = s.unique(label)
         f = b.newObject(kind, kind.split("::")[-1])
         f.Label = label
+        # Some releases leave the tip where it was for a pattern: the body
+        # is the new feature's shape from here on.
+        if kind != "PartDesign::Plane" and b.Tip != f:
+            b.Tip = f
         return f
 
     def sketched(kind, additive):

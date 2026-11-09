@@ -48,12 +48,6 @@ class FeatureTools(Base):
         self.assertLess(h["volumeChange"], -100)
         self.assertIn("M5", h["thread"])
         p = self.ok("pd_linear_pattern", {"features": ["Pocket"], "direction": "y", "occurrences": 2, "spacing": 6})
-        if p["volumeChange"] > -50:
-            import FreeCAD
-            d = self.session.doc
-            lp = d.getObjectsByLabel("LinearPattern")[0]
-            print("\nDEBUG", p, [(x, str(getattr(lp, x))) for x in ("Direction", "Originals", "Mode", "Length", "Offset", "Occurrences", "TransformMode", "BaseFeature", "State")], lp.getStatusString(),
-                  [(o.Name, o.Label, getattr(o, "Role", None)) for o in d.getObjectsByLabel("Block")[0].Origin.OutList], lp.Shape.Volume, d.getObjectsByLabel("Block")[0].Tip.Label)
         self.assertLess(p["volumeChange"], -50)
 
     def test_6_edit_suppress_remove(self):
