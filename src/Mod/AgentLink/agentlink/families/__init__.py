@@ -15,6 +15,10 @@ NAMES = [
     "sketch",
     "feature",
     "param",
+    "material",
+    "mass",
+    "strength",
+    "thread",
 ]
 
 

@@ -279,12 +279,48 @@ class Session:
             out["setup"] = f"{setup['name']} ({setup['id']})"
         return out
 
+    def _card(self, label, given=None):
+        """The body's material: (id, density g/cm³, filament word or None,
+        name) — from the material library and custom materials when the
+        material family is in the build, else the filaments here."""
+        mid = given or store.materials(self.doc).get(label) or "pla"
+        c = None
+        try:
+            from .families import material as fm
+
+            c = fm.card(self.doc, mid)
+        except ImportError:
+            pass
+        key = str(mid).lower()
+        if c is None and key in DENSITY:
+            c = {"density": DENSITY[key], "name": key.upper()}
+        if not c or not c.get("density"):
+            raise ToolError("invalid_input", f"material {mid!r}: not known, or without a density — material_list finds one, material_set gives a body its own.")
+        filament = key.split("-")[0] if key in DENSITY else None
+        return mid, float(c["density"]), filament, c.get("name", str(mid))
+
+    def _encased(self, label):
+        """Everything dropped into the part mid-print: each with its mass
+        (g) and the height to pause at — the magnets gen_make records, the
+        ballast mass_ballast cuts, and the parts hw_embed seals in."""
+        m = self.meta.get(label) or {}
+        out = []
+        mags = m.get("encased")
+        if mags:
+            out.append({"what": f"{mags['count']} {mags['what']}", "mass": mags["count"] * math.pi * 3.0 ** 2 * MAGNET_T_MM * NDFEB / 1000.0, "pauseAt": mags["top"]})
+        b = m.get("ballast")
+        if b and b.get("pockets"):
+            top = max(p["at"][2] + p["depth"] for p in b["pockets"])
+            out.append({"what": f"{b['what']} ballast in {len(b['pockets'])} pockets", "mass": sum(p.get("fill", 0) for p in b["pockets"]), "pauseAt": top})
+        for e in m.get("embeds") or []:
+            if isinstance(e, dict) and "pauseAt" in e:
+                out.append({"what": e.get("what", "a part"), "mass": float(e.get("mass", 0) or 0), "pauseAt": e["pauseAt"]})
+        return out
+
     def part_review(self, a):
         o = self.body(a.get("body"))
         spec = {**store.spec(self.doc), **(a.get("spec") or {})}
-        material = (a.get("material") or store.materials(self.doc).get(o.Label) or "pla").lower()
-        if material not in DENSITY:
-            raise ToolError("invalid_input", f"material: one of {', '.join(DENSITY)}.")
+        material, rho, _, _ = self._card(o.Label, a.get("material"))
         shape = o.Shape
         findings, checks, unjudged, informed = [], {}, [], []
 
@@ -324,7 +360,6 @@ class Session:
                 unjudged.append(f"minWall: the least wall is waived, and the check reads walls only under {rules['minWall']} mm")
 
         vol = shape.Volume
-        rho = DENSITY[material]
         walls = int((setup or {}).get("walls", 2))
         infill = float((setup or {}).get("infill", 15)) / 100
         if printed:
@@ -334,16 +369,32 @@ class Session:
         else:
             body_g = vol * rho / 1000.0
             as_ = "solid"
-        mags = (self.meta.get(o.Label) or {}).get("encased")
-        mag_g = mags["count"] * math.pi * 3.0 ** 2 * MAGNET_T_MM * NDFEB / 1000.0 if mags else 0.0
+        encased = self._encased(o.Label)
+        mag_g = sum(e["mass"] for e in encased)
+        mags = encased
         mass = body_g + mag_g
         checks["mass"] = "ran"
         if "massMax" in spec and mass > spec["massMax"]:
             find(findings, "mass", "error", f"Weighs {mass:.1f} g; the spec asks at most {spec['massMax']} g.")
         if "massMin" in spec and mass < spec["massMin"]:
             find(findings, "mass", "error", f"Weighs {mass:.1f} g; the spec asks at least {spec['massMin']} g.")
-        if "minSafety" in spec:
-            unjudged.append("minSafety: no strength solve in this build")
+        sfl = None
+        fea = getattr(self, "_agentlink_fea", None)
+        fea_ok = bool(fea and fea.get("body") == o.Label and fea.get("stats") == geo.stats(shape) and fea.get("result"))
+        if fea_ok:
+            r = fea["result"]
+            sf = r.get("safety")
+            across = (r.get("acrossLayers") or {}).get("safety")
+            sfl = min(x for x in (sf, across) if x is not None) if (sf is not None or across is not None) else None
+            checks["fea_results"] = "ran"
+            if sfl is not None and "minSafety" in spec and sfl < spec["minSafety"]:
+                find(findings, "fea_results", "error", f"Safety factor {sfl:.2f}, under the spec's {spec['minSafety']}.")
+        elif fea and fea.get("body") == o.Label:
+            checks["fea_results"] = "skipped: stale — the body changed since the solve; fea_solve again"
+        else:
+            checks["fea_results"] = "skipped: nothing solved"
+        if "minSafety" in spec and not fea_ok:
+            unjudged.append("minSafety: " + checks["fea_results"].replace("skipped: ", ""))
         order = {"error": 0, "warning": 1, "info": 2}
         findings.sort(key=lambda f: order[f["severity"]])
         verdict = "fix" if any(f["severity"] == "error" for f in findings) else ("unknown" if unjudged else "pass")
@@ -353,7 +404,8 @@ class Session:
             "processFrom": f"setup {setup['name']} ({setup['id']})" if setup else "not said — setup add records it",
             "verdict": verdict,
             "findings": findings[:8],
-            "figures": {"volume": round(vol, 1), "mass": round(mass, 1), "material": material, "as": as_, **({"encasedMass": round(mag_g, 1)} if mags else {}), **({"wall": least} if least is not None else {})},
+            "figures": {"volume": round(vol, 1), "mass": round(mass, 1), "material": material, "as": as_, **({"encasedMass": round(mag_g, 1)} if mags else {}),
+                **({"safety": sfl} if fea_ok and sfl is not None else {}), **({"wall": least} if least is not None else {})},
             "checks": checks,
             "spec": spec,
         }
@@ -363,8 +415,12 @@ class Session:
             out["unjudged"] = unjudged
         if mags and printed:
             lh = float(setup.get("layerHeight", 0.2))
-            layer = int(math.ceil(mags["top"] / lh))
-            out["printing"] = {"pauses": [{"z": round(layer * lh, 3), "afterLayer": layer, "note": f"Insert {mags['count']} {mags['what']}"}]}
+            pauses = {}
+            for e in mags:
+                layer = int(math.ceil(e["pauseAt"] / lh - 1e-9))
+                p = pauses.setdefault(layer, {"z": round(layer * lh, 3), "afterLayer": layer, "note": []})
+                p["note"].append(e["what"])
+            out["printing"] = {"pauses": [{**p, "note": "Insert " + "; ".join(p["note"])} for _, p in sorted(pauses.items())]}
         return out
 
     # ---- fits and hardware ----
@@ -433,9 +489,11 @@ class Session:
         if not setup:
             raise ToolError("invalid_state", f"{o.Label} is in no print setup: slicing prints it — setup add {{ type: \"print\", bodies: [\"{o.Label}\"] }} once the person says it is printed.")
         settings = {**setup, **(a.get("settings") or {})}
-        mat = store.materials(self.doc).get(o.Label) or "pla"
-        settings["filament"] = mat.split("-")[0]
-        settings["density"] = DENSITY.get(mat, 1.24)
+        mat, rho, filament, name = self._card(o.Label)
+        if filament is None:
+            raise ToolError("invalid_state", f"{o.Label} is in {name}, not a printing filament: material_set a filament (pla, petg, abs, asa, pa6-cf, tpu-95a) before slicing.")
+        settings["filament"] = filament
+        settings["density"] = rho
         import Mesh  # noqa: F401
         import MeshPart
 
@@ -449,10 +507,10 @@ class Session:
         except RuntimeError as e:
             raise ToolError("failed", str(e))
         read = slicer.read_gcode(gcode)
-        mags = (self.meta.get(o.Label) or {}).get("encased")
+        mags = self._encased(o.Label)
         pauses = []
         if mags:
-            pauses = slicer.insert_pauses(gcode, [{"z": mags["top"], "note": f"Insert {mags['count']} {mags['what']}"}], a.get("pauseCommand", "M601"))
+            pauses = slicer.insert_pauses(gcode, [{"z": e["pauseAt"], "note": f"Insert {e['what']}"} for e in mags], a.get("pauseCommand", "M601"))
         return {
             "body": o.Label,
             "slicer": os.path.basename(exe),
