@@ -5,6 +5,7 @@
 2. `fea_hold { faces }`: where it is mounted. Ask the person how it is held.
 3. `fea_load { faces, force | pressure }` or `{ gravity }`: what pushes on it, in N or MPa.
 4. `fea_solve`: von Mises peak and where, displacement, safety factor against yield; for a printed part the tension across the layers against half the yield.
+5. `view_render { map: "stress", views: "all" }`: look at where it is hot — a peak at a held face is the hold's, not the part's.
 
 ## Faces by query
 - `{ normal: [0,0,-1], z: 0 }`: flat faces facing down at z = 0.

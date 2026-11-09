@@ -701,8 +701,9 @@ GROUP_INFO = {
     "make": "How each part is made (setups), its limits and material, the printability check, the verdict, slicing.",
     "fits": "Fits, printer calibration, tolerance stacks and holes for hardware.",
 }
-# Listed by default (lean): core and the groups a part's make-check-verdict loop needs.
-LEAN = {"core", "parts", "make", "fits"}
+# Listed by default (lean): core, the groups a part's make-check-verdict loop
+# needs, and the pictures to check it by.
+LEAN = {"core", "parts", "make", "fits", "view"}
 GUIDES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guides")
 
 

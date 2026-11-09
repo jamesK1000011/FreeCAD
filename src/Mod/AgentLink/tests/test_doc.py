@@ -59,9 +59,6 @@ class Doc(unittest.TestCase):
         self.call("part_primitive", {"kind": "sphere", "radius": 2, "name": "Ball"})
         self.call("object_delete", {"objects": ["Ball"]})
         self.assertEqual([o["label"] for o in self.call("object_list")["objects"]], ["Brick"])
-        v = self.call("view_render", ok=None if FreeCAD.GuiUp else False)
-        if not FreeCAD.GuiUp:
-            self.assertEqual(v["error"]["code"], "unavailable")
 
     def test_files_round_trip(self):
         self.call("part_primitive", {"kind": "cylinder", "radius": 5, "height": 10, "name": "Can"})

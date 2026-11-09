@@ -12,4 +12,4 @@
 - A body imported from a mesh is made of triangles: measure, section and booleans work; fillets and `shape_query` by radius do not see round faces.
 - Booleans and fillets bake a parametric primitive into a plain shape: after that only `Placement` can be set.
 - `object_rename` does not carry setups, specs or waivers kept under the old label.
-- `view_render` needs the FreeCAD window; headless it is refused. Use `section` and `measure` to read the shape instead.
+- A picture of the parts is `view_render` (the view group), headless or not.

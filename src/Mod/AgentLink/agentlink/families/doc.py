@@ -16,12 +16,11 @@ from ..tools import obj
 from . import picks
 
 GROUP = "doc"
-INFO = "The document: new, open, save; objects listed, read, set, renamed, deleted; recompute; import and export files; a picture of the view."
+INFO = "The document: new, open, save; objects listed, read, set, renamed, deleted; recompute; import and export files."
 
 SOLID_FORMATS = {"step": ("step", "stp"), "iges": ("iges", "igs"), "brep": ("brep", "brp")}
 MESH_FORMATS = {"stl": ("stl",), "obj": ("obj",), "3mf": ("3mf",), "ply": ("ply",), "off": ("off",), "amf": ("amf",)}
 EXPORTS = ("step", "iges", "brep", "stl", "obj", "3mf")
-VIEWS = ("iso", "front", "back", "top", "bottom", "left", "right")
 SKIP_PROPS = {"Proxy", "ExpressionEngine", "_GroupTouched"}
 
 
@@ -408,29 +407,6 @@ def tools(session):
             verify = {"triangles": back.CountFacets, "volume": round(back.Volume, 2), "volumeDiff": round(abs(back.Volume - vol), 2), "closed": back.isSolid()}
         return {"objects": [o.Label for o in objs], "format": fmt, "path": p, "bytes": os.path.getsize(p), "verify": verify}
 
-    def view_render(a):
-        if not FreeCAD.GuiUp:
-            raise ToolError("unavailable", "view_render needs the FreeCAD window: start the link from the Agent Link workbench in FreeCAD (Start link), not headless. section and measure read the shape without it.")
-        import FreeCADGui
-
-        gd = FreeCADGui.getDocument(s.doc.Name)
-        view = gd.activeView() if gd else None
-        if view is None or not hasattr(view, "saveImage"):
-            raise ToolError("unavailable", "No 3D view open for this document: open one in FreeCAD, then again.")
-        which = a.get("view", "iso")
-        if which not in VIEWS:
-            raise ToolError("invalid_input", f"view: one of {', '.join(VIEWS)}.")
-        {"iso": view.viewIsometric, "front": view.viewFront, "back": view.viewRear, "top": view.viewTop, "bottom": view.viewBottom, "left": view.viewLeft, "right": view.viewRight}[which]()
-        if a.get("fit", True):
-            view.fitAll()
-        w, h = int(a.get("width", 800)), int(a.get("height", 600))
-        if not (16 <= w <= 4096 and 16 <= h <= 4096):
-            raise ToolError("invalid_input", "width and height: 16 to 4096 px.")
-        p = where(a.get("path") or f"view_{which}.png", ".png")
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        view.saveImage(p, w, h, a.get("background", "Current"))
-        return {"path": p, "view": which, "width": w, "height": h, "bytes": os.path.getsize(p)}
-
     objref = {"type": "string", "description": "An object's name or label."}
     return [
         Tool("doc_new", "Start a new, empty FreeCAD document and work in it from now on; the one before stays open (save it first: doc_save). Not undoable, and not in a batch's rollback.", obj({"name": {"type": "string"}}), doc_new),
@@ -444,5 +420,4 @@ def tools(session):
         Tool("recompute", "Recompute the document (force: true recomputes everything) and list each object that failed, with FreeCAD's reason.", obj({"force": {"type": "boolean"}}), recompute, changes=True),
         Tool("import_file", "Bring a file into the document: STEP, IGES, BREP as bodies (split: true makes a body of each solid); STL, OBJ, 3MF, PLY, OFF, AMF as a body made of its triangles when closed and up to 20000 triangles (solid: false keeps a mesh, solid: true forces a body up to 200000); DXF as Draft geometry. SVG, PDF, DWG, IFC need the FreeCAD window. .FCStd: doc_open.", obj({"path": {"type": "string"}, "name": {"type": "string"}, "split": {"type": "boolean"}, "solid": {"type": "boolean"}}, ["path"]), import_file, changes=True),
         Tool("export", "Write objects (the one body when left out; several go as one compound) as STEP, IGES, BREP, STL, OBJ or 3MF (format, or from path's extension), and read it back: verify gives the volume read against the bodies' (and triangles, closed for meshes). tolerance: a mesh's chord error, 0.01 mm.", obj({"objects": {}, "format": {"type": "string", "enum": list(EXPORTS)}, "path": {"type": "string"}, "tolerance": {"type": "number"}}), export),
-        Tool("view_render", "Save a PNG of the FreeCAD window's 3D view: view iso|front|back|top|bottom|left|right, fit (true), width, height, background. Needs the FreeCAD window — refused (unavailable) headless.", obj({"view": {"type": "string", "enum": list(VIEWS)}, "fit": {"type": "boolean"}, "width": {"type": "integer"}, "height": {"type": "integer"}, "background": {"type": "string"}, "path": {"type": "string"}}), view_render),
     ]

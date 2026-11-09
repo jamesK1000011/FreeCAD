@@ -107,6 +107,15 @@ class Strength(unittest.TestCase):
         self.assertEqual(r["acrossLayers"]["factor"], 0.5)
         err, again = self.call("fea_results")
         self.assertFalse(again["stale"])
+        # The stress as a picture: hottest at the held root.
+        import os
+
+        out = os.environ.get("AGENTLINK_RENDERS")
+        err, pic = self.call("view_render", {"map": "stress", "views": "all", "inline": False, **({"path": os.path.join(out, "beam_stress.png")} if out else {})})
+        self.assertFalse(err, pic)
+        print("\nstress map:", json.dumps(pic["map"]))
+        self.assertLess(pic["map"]["worst"]["at"][0], 15)
+        self.assertAlmostEqual(pic["map"]["max"], r["vonMisesMax"]["MPa"], delta=0.05 * r["vonMisesMax"]["MPa"])
         # Gravity alone on the same hold: a tiny sag, the right way.
         self.call("fea_load", {"gravity": True, "replace": True})
         err, results = self.call("fea_results")

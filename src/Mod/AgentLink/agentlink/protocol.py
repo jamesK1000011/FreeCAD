@@ -132,9 +132,18 @@ class Server:
         except Exception as e:
             traceback.print_exc(file=sys.stderr)
             return self.refusal("failed", f"{name} failed: {e}")
+        image = None
         if isinstance(out, dict):
+            # A picture for the agent to look at: image content beside the
+            # text (the file is written as well; inline false leaves it out).
+            image = out.pop("_png", None)
             out.setdefault("ms", int((time.time() - t0) * 1000))
-        return {"content": [{"type": "text", "text": compact(out)}]}
+        content = [{"type": "text", "text": compact(out)}]
+        if image is not None:
+            import base64
+
+            content.append({"type": "image", "data": base64.b64encode(image).decode("ascii"), "mimeType": "image/png"})
+        return {"content": content}
 
     @staticmethod
     def refusal(code, message):

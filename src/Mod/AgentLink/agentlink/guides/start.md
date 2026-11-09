@@ -11,6 +11,6 @@
 1. Make it, with `gen_make` or the modelling tools. Check the size first with `gen_make { measure: true }`.
 2. Ask how it will be made, then record it: `setup add { type: "print", bodies, settings }`. Don't assume a part is printed.
 3. Ask what it is made of and what it must meet: `part_spec { spec, material }`.
-4. `part_review` after every change. **pass** means every check ran and nothing needs putting right. **fix** lists the errors worst first. **unknown** means something could not be judged.
+4. `part_review` after every change. **pass** means every check ran and nothing needs putting right. **fix** lists the errors worst first. **unknown** means something could not be judged. Look too: `view_render { views: "all" }`, and `{ map: "wall" }` or `{ zoom: { at } }` on a finding.
 5. Waive a finding only when the person says it is meant (a stacking lip, say): `part_review { waive }` or `dfm_check { waive }`.
 6. Write `export_file` for STEP or STL, or `slice` for G-code. Starting a print is the person's call.

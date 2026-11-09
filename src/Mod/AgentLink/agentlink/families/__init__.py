@@ -29,6 +29,7 @@ NAMES = [
     "drawing",
     "electronics",
     "share",
+    "view",
 ]
 
 

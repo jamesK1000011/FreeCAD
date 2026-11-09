@@ -371,7 +371,11 @@ def tools(session):
         out["warnings"] = warnings
         out["files"] = wd
         out["seconds"] = round(time.time() - t0, 1)
-        s._agentlink_fea = {"body": o.Label, "stats": geo.stats(shape), "study": st, "result": out}
+        # Every node's stress and displacement, for a map of the part
+        # (view_render map stress): kept with the session, not the file.
+        ids = [n for n in vm if n in nodes]
+        field = {"points": [nodes[n] for n in ids], "vonMises": [vm[n] for n in ids], "displacement": [list(disp.get(n, (0, 0, 0))[:3]) for n in ids]}
+        s._agentlink_fea = {"body": o.Label, "stats": geo.stats(shape), "study": st, "result": out, "field": field}
         return out
 
     def fea_results(a):

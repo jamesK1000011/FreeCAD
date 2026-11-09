@@ -3,7 +3,7 @@
 
 An agent drives FreeCAD over the Model Context Protocol, in ScanRuler's
 manner: one call per job, small answers in millimetres and grams, and
-refusals that say what to do instead. There are 117 tools in 23 groups.
+refusals that say what to do instead. There are 119 tools in 24 groups.
 The lean list (the default) shows the core and the make-check-verdict
 loop; `tool_groups` shows the rest. Any tool can be called by name
 whether it is listed or not. Every change is one FreeCAD undo step.
@@ -11,7 +11,8 @@ whether it is listed or not. Every change is one FreeCAD undo step.
 | Group | Tools |
 |---|---|
 | core | `session_state`, `tool_groups`, `guide_read`, `batch` (rolls back whole), `history_undo` / `_redo` / `_checkpoint` / `_restore` / `_diff`, `body_check`, `export_file` |
-| doc | documents, objects and their properties, recompute, import and export (STEP, IGES, BREP, STL, OBJ, 3MF, DXF), `view_render` (window only) |
+| doc | documents, objects and their properties, recompute, import and export (STEP, IGES, BREP, STL, OBJ, 3MF, DXF) |
+| view | `view_render`: the parts drawn headless — any view or four at once, cut open, zoomed to a spot, with maps (wall thickness, FEA stress, a scan's deviation) and a legend — returned to the agent as an image; `view_snapshot` of the FreeCAD window |
 | model | Part primitives, booleans, transforms and arrays, fillet, chamfer, offset, shell, extrude, revolve, loft, sweep |
 | measure | `shape_query` (faces and edges picked by kind, normal, radius, place: the references other tools take), measure, section, `measure_mass`, clearance |
 | sketch, feature, param | PartDesign bodies, sketches and constraints with a ready-for-feature check; pad, pocket, revolve, groove, hole (ISO threads), fillet, chamfer, draft, shell, mirror, patterns, loft, pipe; spreadsheet parameters bound to features |
