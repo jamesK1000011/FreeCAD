@@ -61,7 +61,11 @@ def _wall(s, a):
         L = render.body_layer(o, i, tol=float(a.get("tolerance", 0.05)))
         V, F, vals = render.wall_map(L["V"], L["F"], reach=reach, cap=int(a.get("detail", 40000)))
         layers.append({"name": o.Label, "V": V, "F": F, "values": vals, "creases": True})
-    return {"layers": layers, "unit": "mm", "cmap": "jet_r", "worst": "min", "label": "WALL",
+    # Colours spent on the thin end: up to twice the typical wall.
+    allv = np.concatenate([l["values"] for l in layers]) if layers else np.zeros(0)
+    fin = allv[np.isfinite(allv)]
+    hi = min(reach, max(2.0, 2 * float(np.median(fin)))) if len(fin) else reach
+    return {"layers": layers, "unit": "mm", "cmap": "jet_r", "worst": "min", "label": "WALL", "range": [0.0, round(hi, 1)],
             "note": f"The wall at each spot: straight in from the surface to where the material ends; {reach:g} mm or more reads {reach:g}. Red is thin."}
 
 

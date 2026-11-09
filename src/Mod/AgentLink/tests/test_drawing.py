@@ -79,7 +79,10 @@ class Drawing(unittest.TestCase):
     def setUpClass(cls):
         from agentlink.tools import Session, build_server
 
-        cls.dir = tempfile.mkdtemp()
+        # With AGENTLINK_RENDERS set the sheets are kept there, to look at.
+        keep = os.environ.get("AGENTLINK_RENDERS")
+        cls.dir = os.path.join(keep, "drawing") if keep else tempfile.mkdtemp()
+        os.makedirs(cls.dir, exist_ok=True)
         cls.session = Session(out_dir=cls.dir)
         cls.server = build_server(cls.session, lean=False)
         err, m = cls.call(cls, "gen_part", {"generator": "project_box", "params": {"length": 80, "width": 60, "height": 30, "bosses": True}, "name": "Box"})

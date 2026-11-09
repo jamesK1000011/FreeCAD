@@ -113,7 +113,8 @@ class ViewRender(unittest.TestCase):
         print("\nwall map:", json.dumps(r["map"]))
         self.assertAlmostEqual(r["map"]["min"], 0.6, delta=0.05)
         at = r["map"]["worst"]["at"]
-        self.assertLess(at[0], 1.5)
+        # The pocket's floor (x = 1.4) or the inside face behind it (x = 2).
+        self.assertLessEqual(at[0], 2.01)
         self.assertTrue(11 <= at[1] <= 19 and 6 <= at[2] <= 14, at)
         err, z = self.call("view_render", {"map": "wall", "view": "left", "zoom": {"at": at, "size": 16}, "inline": False, "path": os.path.join(OUT, "cup_wall_zoom.png")})
         self.assertFalse(err, z)
