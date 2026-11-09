@@ -181,7 +181,7 @@ def tools(session):
 
     def cal(o):
         if hasattr(s, "_cal"):
-            return s._cal(o.Label)
+            return s.calibration(o.Label)
         return dict(fits_hw.DEFAULT_CAL), "none — the typical printer assumed"
 
     def hw_embed(a):

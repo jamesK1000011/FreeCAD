@@ -45,8 +45,8 @@ TYPES = {
             "infill": "Infill, percent.",
         },
     },
-    "cut": {"label": "Cut", "settings": {"machine": "laser, waterjet, plasma or router.", "thickness": "The sheet, mm.", "kerf": "The cut's width, mm."}},
-    "mill": {"label": "Mill", "settings": {"axes": "\"3\" or \"3+2\".", "minTool": "The least end mill, mm.", "grade": "The ISO 286 IT grade, 5 to 14."}},
+    "cut": {"label": "Cut", "settings": {"machine": "laser, waterjet, plasma or router.", "thickness": "The sheet, mm.", "kerf": "The cut's width, mm.", "material": "The sheet's material, for the least feature.", "sheet": "The sheet's size, [width, height] mm."}},
+    "mill": {"label": "Mill", "settings": {"axes": "\"3\" or \"3+2\".", "minTool": "The least end mill, mm.", "grade": "The ISO 286 IT grade, 5 to 14.", "directions": "Tool directions from the part to the spindle: \"+z\", \"-z\" or [x, y, z], one or more.", "material": "The stock's material.", "stock": "The stock's size [x, y, z], mm.", "reach": "How far the longest tool reaches below the top, mm."}},
 }
 
 

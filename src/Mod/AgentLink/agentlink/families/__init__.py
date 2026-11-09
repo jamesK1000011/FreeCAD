@@ -24,6 +24,10 @@ NAMES = [
     "embed",
     "printer",
     "slicing",
+    "parts",
+    "drawing",
+    "electronics",
+    "share",
 ]
 
 

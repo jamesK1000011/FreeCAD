@@ -280,3 +280,7 @@ def _ray_hits(shape, rays, reach, tol=0.01):
         m = ok & (u >= -1e-9) & (v >= -1e-9) & (u + v <= 1 + 1e-9) & (t > 2e-3) & (t <= reach)
         out.append(round(float(t[m].min()), 3) if m.any() else None)
     return out
+
+
+# For the families: rays against a part, as least_wall casts them.
+ray_hits = _ray_hits

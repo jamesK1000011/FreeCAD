@@ -36,6 +36,8 @@ class Session:
         self.doc = doc or FreeCAD.newDocument("AgentLink")
         self.doc.UndoMode = 1
         self.checkpoints = {}
+        # Each family's own state for the session, under its group's name.
+        self.family_state = {}
         self.out_dir = out_dir or os.getcwd()
         self.steps = []  # [{step, tool, bodies: {name: stats}}]
         self.meta = {}  # body name -> {encased: …, generator: …}
@@ -92,6 +94,8 @@ class Session:
         self.doc = doc
         self.doc.UndoMode = 1
         self.checkpoints = {}
+        # Each family's own state for the session, under its group's name.
+        self.family_state = {}
         self.steps = []
         self.meta = {}
 
@@ -303,18 +307,23 @@ class Session:
         """Everything dropped into the part mid-print: each with its mass
         (g) and the height to pause at — the magnets gen_make records, the
         ballast mass_ballast cuts, and the parts hw_embed seals in."""
+        # Heights from the part's lowest point, as it stands on the bed.
         m = self.meta.get(label) or {}
+        try:
+            z0 = self.body(label).Shape.BoundBox.ZMin
+        except ToolError:
+            z0 = 0.0
         out = []
         mags = m.get("encased")
         if mags:
-            out.append({"what": f"{mags['count']} {mags['what']}", "mass": mags["count"] * math.pi * 3.0 ** 2 * MAGNET_T_MM * NDFEB / 1000.0, "pauseAt": mags["top"]})
+            out.append({"what": f"{mags['count']} {mags['what']}", "mass": mags["count"] * math.pi * 3.0 ** 2 * MAGNET_T_MM * NDFEB / 1000.0, "pauseAt": mags["top"] - z0})
         b = m.get("ballast")
         if b and b.get("pockets"):
             top = max(p["at"][2] + p["depth"] for p in b["pockets"])
-            out.append({"what": f"{b['what']} ballast in {len(b['pockets'])} pockets", "mass": sum(p.get("fill", 0) for p in b["pockets"]), "pauseAt": top})
+            out.append({"what": f"{b['what']} ballast in {len(b['pockets'])} pockets", "mass": sum(p.get("fill", 0) for p in b["pockets"]), "pauseAt": top - z0})
         for e in m.get("embeds") or []:
-            if isinstance(e, dict) and "pauseAt" in e:
-                out.append({"what": e.get("what", "a part"), "mass": float(e.get("mass", 0) or 0), "pauseAt": e["pauseAt"]})
+            if isinstance(e, dict) and ("pauseZ" in e or "pauseAt" in e):
+                out.append({"what": e.get("what", "a part"), "mass": float(e.get("mass", 0) or 0), "pauseAt": e.get("pauseZ", e.get("pauseAt"))})
         return out
 
     def part_review(self, a):
@@ -424,6 +433,11 @@ class Session:
         return out
 
     # ---- fits and hardware ----
+
+    def calibration(self, body=None):
+        """The printer calibration sizes take: (hole, shaft diametral mm
+        dict, where it came from)."""
+        return self._cal(body)
 
     def _cal(self, body=None):
         """The printer calibration the sizes take: the body's print setup's,
