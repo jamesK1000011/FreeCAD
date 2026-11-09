@@ -155,6 +155,8 @@ def tools(session):
                 continue
             if all(w in hay for w in words):
                 hits.append(c)
+        # Those named by the words first, then those that only mention them.
+        hits.sort(key=lambda c: not all(w in (c["id"] + " " + c["name"]).lower() for w in words))
         limit = int(a.get("limit", 20))
         cats = sorted({c["category"] for c in cards})
         out = {"found": len(hits), "materials": [_brief(c) for c in hits[:limit]], "categories": cats}

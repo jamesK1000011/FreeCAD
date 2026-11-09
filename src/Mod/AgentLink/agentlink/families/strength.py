@@ -13,6 +13,7 @@ import subprocess
 import time
 
 import FreeCAD
+import Part
 
 from .. import ccx_io
 from .. import facepick
@@ -327,7 +328,7 @@ def tools(session):
 
         def where(n):
             p = nodes.get(n, (0, 0, 0))
-            vx = V(*p)
+            vx = Part.Vertex(V(*p))
             best = min(((vx.distToShape(f)[0], i) for i, f in enumerate(faces)), default=(0, 0))
             return {"at": [round(p[0], 2), round(p[1], 2), round(p[2], 2)], "face": f"Face{best[1] + 1}"}
 

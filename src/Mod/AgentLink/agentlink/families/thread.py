@@ -159,6 +159,7 @@ def tools(session):
         if depth <= 0:
             raise ToolError("invalid_input", "depth: mm, over 0 (the hole's length by default).")
         doc = s.doc
+        had = {x.Name for x in doc.Objects}
         made = []
         try:
             base = doc.addObject("Part::Feature", "AgentLinkThreadBase")
@@ -198,13 +199,22 @@ def tools(session):
             shape = shape.copy()
             hole_d = float(h.Diameter)
         finally:
+            # Everything the Hole needed goes again, the Body's own helpers too.
             for x in reversed(made):
                 try:
                     if x.isDerivedFrom("PartDesign::Body"):
                         x.Group = []
-                    doc.removeObject(x.Name)
                 except Exception:
                     pass
+            for _ in range(3):
+                extra = [x.Name for x in doc.Objects if x.Name not in had]
+                if not extra:
+                    break
+                for n in extra:
+                    try:
+                        doc.removeObject(n)
+                    except Exception:
+                        pass
             doc.recompute()
         if len(shape.Solids) == 1 and shape.ShapeType != "Solid":
             shape = shape.Solids[0]

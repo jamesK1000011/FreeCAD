@@ -53,6 +53,7 @@ class Material(unittest.TestCase):
         err, lib = self.call("material_list", {"words": "pla", "category": "thermoplast"})
         if not lib["found"]:
             self.skipTest("no material library in this build")
+        self.assertIn("PLA", lib["materials"][0]["name"])
         err, r = self.call("material_set", {"id": lib["materials"][0]["id"]})
         self.assertFalse(err, r)
         print("\nlibrary set:", r)

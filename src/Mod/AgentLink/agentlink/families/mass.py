@@ -330,6 +330,10 @@ def tools(session):
             if Ct is not None:
                 dv = c - Ct
                 j += sum(((dv.x, dv.y, dv.z)[i] / L) ** 2 for i in range(3) if mask[i]) * 100
+            else:
+                # No centre asked for: keep it where it was, as near as the pockets allow.
+                dv = c - C0
+                j += (dv.x ** 2 + dv.y ** 2 + dv.z ** 2) / (L * L) * 10
             return j
 
         def pocket(cd, h):
