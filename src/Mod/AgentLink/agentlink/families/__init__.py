@@ -8,7 +8,7 @@ import importlib
 import sys
 
 # One line each, in the order they are listed.
-NAMES = []
+NAMES = ["cut", "mill", "embed", "printer", "slicing"]
 
 
 def load():
