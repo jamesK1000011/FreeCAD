@@ -1,16 +1,22 @@
 <!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
 # Agent Link for FreeCAD (spike)
 
-An agent drives FreeCAD over the Model Context Protocol with six tools, in
-ScanRuler's manner: few tools, one call per job, small answers in
-millimetres, and refusals that say what to do instead.
+An agent drives FreeCAD over the Model Context Protocol, in ScanRuler's
+manner: few tools, one call per job, small answers in millimetres, and
+refusals that say what to do instead.
 
 | Tool | What it does |
 |---|---|
 | `session_state` | What the document holds: each body's volume, area, faces, solids and size |
-| `gen_make` | A Gridfinity bin made to size (`measure: true` sizes it without making it); magnets come back as encased, with the height to pause at |
-| `body_check` | Valid, closed, one solid, no sliver faces or very short edges, and where any problem is |
-| `part_review` | One verdict (pass, fix or unknown): soundness, least wall by rays, mass as printed with the magnets, against a spec; `waive` accepts a thin place on purpose |
+| `gen_make` | A Gridfinity bin made to size (`measure: true` sizes it without making it). Magnets come back as encased, with the height to pause at |
+| `body_check` | Valid, closed, one solid, no sliver faces or very short edges |
+| `setup` | How each part is made (print, cut, mill) and that process's settings, kept with the document |
+| `part_spec` | The limits parts must meet (least wall, mass) and what each is made of |
+| `dfm_check` | Printability with the part's print setup: thin walls, overhangs, bridges, small holes, bed contact, tall and thin, build volume. `waive` keeps a finding accepted on purpose |
+| `part_review` | One verdict: pass, fix or unknown. How the part is made decides which checks judge it |
+| `fit` | Hole and peg sizes for press, snug, slide and free fits; the printer's calibration; tolerance stacks |
+| `hw_hole` | Clearance, counterbore, countersink, nut-trap, heat-set insert and magnet holes at standard sizes |
+| `slice` | PrusaSlicer's command line with the setup's settings: time, filament and layers, with the magnet pause written into the G-code |
 | `export_file` | STEP or STL, read back to verify |
 | `history_diff` | What changed since a step, per body |
 
