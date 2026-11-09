@@ -12,6 +12,9 @@ NAMES = [
     "doc",
     "model",
     "measure",
+    "sketch",
+    "feature",
+    "param",
 ]
 
 

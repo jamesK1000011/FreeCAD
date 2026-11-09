@@ -75,6 +75,12 @@ class Session:
                 continue
             if any(p.TypeId not in passive for p in o.InList):
                 continue
+            try:
+                parent = o.getParentGeoFeatureGroup()
+            except Exception:
+                parent = None
+            if parent is not None and parent.TypeId == "PartDesign::Body":
+                continue  # a feature: its Body is the part
             if getattr(o, "Visibility", True) is False:
                 continue
             out.append(o)
