@@ -364,10 +364,16 @@ def tools(session):
             flat, outer, holes = flatten(o.Shape, info)
             wires = [outer] + holes
             if comp:
-                face = Part.makeFace(wires, "Part::FaceMakerBullseye")
-                off = face.makeOffset2D(kerf / 2, 0)
-                ow = off.Faces[0].OuterWire if off.Faces else off.Wires[0]
-                wires = [ow] + [w for w in off.Wires if not w.isSame(ow)]
+                # Each loop on its own (a face with holes trips the offset):
+                # the outside grown, each hole shrunk, by half the kerf.
+                def grown(w, by):
+                    off = Part.Face(w).makeOffset2D(by, 0)
+                    return off.Faces[0].OuterWire if off.Faces else off.Wires[0]
+
+                try:
+                    wires = [grown(wires[0], kerf / 2)] + [grown(h, -kerf / 2) for h in wires[1:]]
+                except Exception as e:
+                    raise ToolError("failed", f"The kerf offset failed on {o.Label} ({e}): export with compensate: false and let the cutter's software take off the kerf.")
             prims = primitives(wires[0], sf.OUTER) + [p for w in wires[1:] for p in primitives(w, sf.HOLES)]
             bb = wires[0].BoundBox
             n = int(copies.get(o.Label, 1)) if isinstance(copies, dict) else int(copies)

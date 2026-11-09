@@ -55,12 +55,19 @@ def _samples(f, solid, k=3):
 
 
 def _share(solid, p, axis, eps=0.05):
-    """How much of a small circle round p, square to axis, is material."""
+    """How much of a small circle round p, square to axis, is material, and
+    a point on the circle off the material (None when there is none)."""
     a = axis.cross(V(1, 0, 0)) if abs(axis.x) < 0.9 else axis.cross(V(0, 1, 0))
     a.normalize()
     b = axis.cross(a)
-    hits = sum(1 for i in range(24) if solid.isInside(p + a * (eps * math.cos(i * math.pi / 12)) + b * (eps * math.sin(i * math.pi / 12)), 1e-6, True))
-    return hits / 24
+    hits, empty = 0, []
+    for i in range(24):
+        q = p + a * (eps * math.cos(i * math.pi / 12)) + b * (eps * math.sin(i * math.pi / 12))
+        if solid.isInside(q, 1e-6, True):
+            hits += 1
+        else:
+            empty.append(q)
+    return hits / 24, (empty[len(empty) // 2] if empty else None)
 
 
 def check(shape, dirs, tool, reach, wall, stock):
@@ -121,6 +128,7 @@ def check(shape, dirs, tool, reach, wall, stock):
     r_tool = tool / 2
     corners, holes = [], []
     for name, d in dirs.items():
+        cand = []
         for e in shape.Edges:
             if type(e.Curve).__name__ not in ("Line", "LineSegment"):
                 continue
@@ -132,8 +140,14 @@ def check(shape, dirs, tool, reach, wall, stock):
             if abs(abs(t.dot(d)) - 1) > 1e-6:
                 continue
             mid = (a + b) * 0.5
-            if _share(solid, mid, d) > 0.55:
-                corners.append((0.0, mid, name))
+            share, off = _share(solid, mid, d)
+            if share > 0.55 and off is not None:
+                cand.append((mid, off))
+        # Only a corner the tool can come down into along d: from beside it,
+        # off the material, nothing in the way out along d.
+        if cand:
+            free = geo._ray_hits(shape, [(off, d * -1) for _, off in cand], bb.DiagonalLength + 1)
+            corners += [(0.0, mid, name) for (mid, _), h in zip(cand, free) if h is None]
         for i, f in enumerate(shape.Faces):
             srf = f.Surface
             if type(srf).__name__ != "Cylinder" or abs(abs(srf.Axis.dot(d)) - 1) > 1e-6:

@@ -52,7 +52,12 @@ def pauses(records, first, lh):
     out = []
     for k in sorted(by):
         p = by[k]
-        out.append({"afterLayer": k, "z": round(p["z"], 3), "ids": [i for i in p["ids"] if i], "note": "; ".join(p["notes"]), "merged": len(p["notes"]) > 1})
+        seen = []
+        for n in p["notes"]:
+            if n not in seen:
+                seen.append(n)
+        note = "; ".join(n + (f" (x{p['notes'].count(n)})" if p["notes"].count(n) > 1 else "") for n in seen)
+        out.append({"afterLayer": k, "z": round(p["z"], 3), "ids": [i for i in p["ids"] if i], "note": note, "merged": len(p["notes"]) > 1})
     return out
 
 

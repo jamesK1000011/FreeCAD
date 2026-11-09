@@ -68,6 +68,8 @@ class MillTools(unittest.TestCase):
         self.assertFalse(err, r)
         print("\nmill_check 3+2:", json.dumps(r))
         self.assertNotIn("undercut", [f["rule"] for f in r["findings"]])
+        # The pocket's floor corners run along y, but no tool comes at them from -y.
+        self.assertEqual(len([f for f in r["findings"] if f["rule"] == "inside-corner"]), 4)
         err, r = self.call("mill_check", {"body": "Block", "stock": [50, 50, 50]})
         self.assertIn("stock", [f["rule"] for f in r["findings"]])
 

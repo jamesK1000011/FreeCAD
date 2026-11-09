@@ -27,11 +27,11 @@ class Grid(unittest.TestCase):
         self.assertEqual(E.layer_at_or_above(2.4, 0.3, 0.2), (12, 2.5))
 
     def test_merged(self):
-        ps = E.pauses([{"id": "E1", "layer": 26, "note": "a"}, {"id": "E2", "layer": 28, "note": "b"}, {"id": "E3", "layer": 26, "note": "c"}], 0.2, 0.2)
+        ps = E.pauses([{"id": "E1", "layer": 26, "note": "a"}, {"id": "E2", "layer": 28, "note": "b"}, {"id": "E3", "layer": 26, "note": "c"}, {"id": "E4", "layer": 26, "note": "c"}], 0.2, 0.2)
         self.assertEqual([p["afterLayer"] for p in ps], [26, 28])
         self.assertTrue(ps[0]["merged"])
-        self.assertEqual(ps[0]["note"], "a; c")
-        self.assertEqual(ps[0]["ids"], ["E1", "E3"])
+        self.assertEqual(ps[0]["note"], "a; c (x2)")
+        self.assertEqual(ps[0]["ids"], ["E1", "E3", "E4"])
         self.assertEqual(ps[1]["z"], 5.6)
 
 
