@@ -746,6 +746,12 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         for t in fam.tools(session):
             t.group = fam.GROUP
             tools.append(t)
+    # Two tools of one name: the second would hide the first without a word.
+    seen = {}
+    for t in tools:
+        if t.name in seen:
+            raise RuntimeError(f"Agent Link: two tools are named {t.name} ({seen[t.name]} and {t.group}) — rename one.")
+        seen[t.name] = t.group
     server = Server(name, version, tools, INSTRUCTIONS, run=session.execute, groups=set(LEAN) if lean else None, resources=Resources(session))
     s = session
 

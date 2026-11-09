@@ -397,7 +397,7 @@ def tools(session):
             section,
         ),
         Tool(
-            "mass_properties",
+            "measure_mass",
             "Volume, area, mass, centre of mass and inertia (g·mm² about the centre of mass; principal moments and axes for one solid) of a body solid through: material (" + ", ".join(picks.MATERIALS) + ") or density g/cm³; the part_spec material when neither is given. Trap: a printed part is not solid — part_review estimates its printed mass.",
             obj({"body": body, "material": {"type": "string"}, "density": {"type": "number"}}),
             mass_properties,
