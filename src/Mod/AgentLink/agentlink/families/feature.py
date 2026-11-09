@@ -85,8 +85,9 @@ def tools(session):
         return {"sketchDof": dof} if dof else {}
 
     def new(b, kind, label):
-        f = b.newObject(kind, label)
-        f.Label = s.unique(label)
+        label = s.unique(label)
+        f = b.newObject(kind, kind.split("::")[-1])
+        f.Label = label
         return f
 
     def sketched(kind, additive):
@@ -164,11 +165,17 @@ def tools(session):
         f.Profile = sk
         thread = a.get("thread")
         if thread:
-            f.ThreadType = "ISOMetricFineProfile" if "x" in str(thread).lower() else "ISOMetricProfile"
-            sizes = f.getEnumerationsOfProperty("ThreadSize")
-            if thread not in sizes:
-                raise ToolError("invalid_input", f"thread {thread!r}: not an ISO size — e.g. {', '.join(sizes[:12])} …")
-            f.ThreadSize = thread
+            f.ThreadType = "ISOMetricProfile"
+            sizes = list(f.getEnumerationsOfProperty("ThreadSize"))
+            # "M5" is the coarse M5 (named "M5" or "M5x0.8" by release); a pitch given picks it.
+            pick = next((z for z in sizes if z == thread), None) or next((z for z in sizes if z.startswith(f"{thread}x")), None)
+            if pick is None:
+                f.ThreadType = "ISOMetricFineProfile"
+                fine = list(f.getEnumerationsOfProperty("ThreadSize"))
+                pick = next((z for z in fine if z == thread), None)
+                if pick is None:
+                    raise ToolError("invalid_input", f"thread {thread!r}: not an ISO size — e.g. {', '.join(sizes[6:16])} …; fine: {', '.join(fine[10:14])} …")
+            f.ThreadSize = pick
             f.Threaded = bool(a.get("threaded", True))
             if f.Threaded and has(f, "ModelThread"):
                 f.ModelThread = bool(a.get("modelThread", False))

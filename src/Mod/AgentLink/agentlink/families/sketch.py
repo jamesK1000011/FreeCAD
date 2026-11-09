@@ -90,6 +90,13 @@ def state_of(sk):
         openv = [_pt(v) for v in (sk.OpenVertices or [])]
     except Exception:
         openv = []
+    if not openv and wires and closed < len(wires):
+        # Older releases leave OpenVertices empty: the ends of the open wires.
+        inv = sk.Placement.inverse()
+        for w in wires:
+            if not w.isClosed():
+                vs = [v for v in w.Vertexes if sum(1 for e in w.Edges for ev in e.Vertexes if ev.isSame(v)) == 1]
+                openv += [_pt(inv.multVec(v.Point)) for v in vs]
     out = {
         "sketch": sk.Label,
         "solver": SOLVE.get(code, f"code {code}"),
@@ -377,8 +384,9 @@ def tools(session):
         b = pc.pd_body(doc(), a.get("body"))
         if ("plane" in a) == ("face" in a):
             raise ToolError("invalid_input", "Give plane (XY, XZ, YZ or a datum plane's name) or face ({ at, normal } on the body), one of them.")
+        label = s.unique(a.get("name") or "Sketch")
         sk = b.newObject("Sketcher::SketchObject", "Sketch")
-        sk.Label = s.unique(a.get("name") or "Sketch")
+        sk.Label = label
         sup = pc.support_prop(sk)
         link, what = pc.plane_ref(b, a["plane"] if "plane" in a else a["face"], "plane")
         setattr(sk, sup, [(link[0], link[1][0])])
