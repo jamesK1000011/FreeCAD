@@ -8,7 +8,11 @@ import importlib
 import sys
 
 # One line each, in the order they are listed.
-NAMES = []
+NAMES = [
+    "doc",
+    "model",
+    "measure",
+]
 
 
 def load():

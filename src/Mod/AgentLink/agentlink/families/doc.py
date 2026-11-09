@@ -1,0 +1,448 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# The document: new, open and save; its objects listed, read, set, renamed
+# and deleted; recompute with each object's error; files imported and
+# exported (read back to check); and a picture of the 3D view, which needs
+# the FreeCAD window.
+
+import difflib
+import os
+
+import FreeCAD
+import Part
+
+from .. import geometry as geo
+from ..protocol import Tool, ToolError
+from ..tools import obj
+from . import picks
+
+GROUP = "doc"
+INFO = "The document: new, open, save; objects listed, read, set, renamed, deleted; recompute; import and export files; a picture of the view."
+
+SOLID_FORMATS = {"step": ("step", "stp"), "iges": ("iges", "igs"), "brep": ("brep", "brp")}
+MESH_FORMATS = {"stl": ("stl",), "obj": ("obj",), "3mf": ("3mf",), "ply": ("ply",), "off": ("off",), "amf": ("amf",)}
+EXPORTS = ("step", "iges", "brep", "stl", "obj", "3mf")
+VIEWS = ("iso", "front", "back", "top", "bottom", "left", "right")
+SKIP_PROPS = {"Proxy", "ExpressionEngine", "_GroupTouched"}
+
+
+def fmt_of(path):
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    for k, exts in {**SOLID_FORMATS, **MESH_FORMATS}.items():
+        if ext in exts:
+            return k
+    return ext
+
+
+def readonly(o, p):
+    try:
+        if "ReadOnly" in (o.getEditorMode(p) or []):
+            return True
+    except Exception:
+        pass
+    try:
+        st = o.getPropertyStatus(p)
+        return "ReadOnly" in st or "Output" in st
+    except Exception:
+        return False
+
+
+def errors(doc):
+    out = []
+    for o in doc.Objects:
+        st = list(getattr(o, "State", []) or [])
+        if "Invalid" in st or "Error" in st or (hasattr(o, "isValid") and not o.isValid()):
+            try:
+                why = o.getStatusString()
+            except Exception:
+                why = ", ".join(st)
+            out.append({"object": o.Label, "type": o.TypeId, "error": why})
+    return out
+
+
+def to_value(o, p, v):
+    """A JSON value into what the property takes, by its type."""
+    t = o.getTypeIdOfProperty(p)
+    try:
+        if t in ("App::PropertyBool",):
+            if not isinstance(v, bool):
+                raise ValueError("true or false")
+            return v
+        if t.startswith("App::PropertyInteger"):
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or int(v) != v:
+                raise ValueError("a whole number")
+            return int(v)
+        if t in ("App::PropertyFloat", "App::PropertyLength", "App::PropertyDistance", "App::PropertyAngle", "App::PropertyFloatConstraint", "App::PropertyPercent", "App::PropertyArea", "App::PropertyVolume", "App::PropertyQuantity", "App::PropertyQuantityConstraint", "App::PropertyPrecision") or t.startswith("App::PropertyFloat"):
+            if isinstance(v, str):
+                return v  # "10 mm", "2 in": FreeCAD parses the unit
+            return float(picks.num(v, p))
+        if t in ("App::PropertyString", "App::PropertyFont", "App::PropertyFile", "App::PropertyPath"):
+            if not isinstance(v, str):
+                raise ValueError("a string")
+            return v
+        if t == "App::PropertyEnumeration":
+            choices = o.getEnumerationsOfProperty(p) or []
+            if v not in choices:
+                raise ValueError(f"one of {', '.join(map(str, choices))}")
+            return v
+        if t in ("App::PropertyVector", "App::PropertyVectorDistance", "App::PropertyPosition", "App::PropertyDirection"):
+            return picks.vec3(v, p)
+        if t == "App::PropertyPlacement":
+            if not isinstance(v, dict):
+                raise ValueError("{ at: [x,y,z], axis: [x,y,z], angle: degrees }")
+            return FreeCAD.Placement(picks.vec3(v.get("at"), f"{p}.at", (0, 0, 0)), FreeCAD.Rotation(picks.direction(v.get("axis"), f"{p}.axis", (0, 0, 1)), picks.num(v.get("angle", 0), f"{p}.angle")))
+        if t in ("App::PropertyLink", "App::PropertyLinkGlobal", "App::PropertyLinkChild"):
+            return None if v is None else picks.find(o.Document, v)
+        if t in ("App::PropertyLinkList", "App::PropertyLinkListGlobal", "App::PropertyLinkListChild"):
+            return [picks.find(o.Document, x) for x in v]
+        if t in ("App::PropertyColor", "App::PropertyMaterialColor"):
+            if isinstance(v, str) and v.startswith("#") and len(v) == 7:
+                return tuple(int(v[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+            return tuple(float(x) for x in v)
+        if t == "App::PropertyStringList":
+            return [str(x) for x in v]
+        if t == "App::PropertyFloatList":
+            return [float(x) for x in v]
+        if t == "App::PropertyIntegerList":
+            return [int(x) for x in v]
+    except ToolError:
+        raise
+    except (ValueError, TypeError) as e:
+        raise ToolError("invalid_input", f"values.{p} ({t}): {e}.")
+    raise ToolError("invalid_input", f"values.{p}: a {t} is not set here — set it in FreeCAD, or another tool makes it.")
+
+
+def tools(session):
+    s = session
+
+    def switch(doc):
+        doc.UndoMode = 1
+        s.doc = doc
+        s.checkpoints = {}
+        s.meta = {}
+        if FreeCAD.GuiUp:
+            try:
+                import FreeCADGui
+
+                FreeCAD.setActiveDocument(doc.Name)
+                FreeCADGui.getDocument(doc.Name)
+            except Exception:
+                pass
+        s.snapshot("doc")
+
+    def where(path, ext=None):
+        if not isinstance(path, str) or not path:
+            raise ToolError("invalid_input", "path: a file path (relative ones go in the session's folder).")
+        p = os.path.expanduser(path)
+        if not os.path.isabs(p):
+            p = os.path.join(s.out_dir, p)
+        if ext and not p.lower().endswith(ext.lower()):
+            p += ext
+        return p
+
+    def doc_new(a):
+        name = a.get("name") or "Unnamed"
+        d = FreeCAD.newDocument(name.replace(" ", "_"))
+        d.Label = name
+        old = s.doc.Name
+        switch(d)
+        return {"document": d.Name, "label": d.Label, "previous": old, "note": "The previous document stays open; doc_open { path } returns to it if saved."}
+
+    def doc_open(a):
+        p = where(a.get("path"))
+        if not os.path.isfile(p):
+            raise ToolError("not_found", f"{p}: no such file.")
+        if not p.lower().endswith(".fcstd"):
+            raise ToolError("invalid_input", f"{os.path.basename(p)}: doc_open opens FreeCAD documents (.FCStd) — import_file brings STEP, STL and the rest into this one.")
+        d = next((x for x in FreeCAD.listDocuments().values() if os.path.abspath(x.FileName or "") == os.path.abspath(p)), None)
+        if d is None:
+            try:
+                d = FreeCAD.openDocument(p)
+            except Exception as e:
+                raise ToolError("failed", f"FreeCAD could not open {p}: {e}")
+        d.recompute()
+        switch(d)
+        return {"document": d.Name, "label": d.Label, "path": p, "objects": len(d.Objects), "bodies": [o.Label for o in s.bodies()], "errors": errors(d)}
+
+    def doc_save(a):
+        d = s.doc
+        if a.get("path"):
+            p = where(a["path"], ".FCStd")
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            d.saveAs(p)
+        elif d.FileName:
+            d.save()
+            p = d.FileName
+        else:
+            p = where(f"{d.Label or d.Name}.FCStd")
+            d.saveAs(p)
+        return {"document": d.Name, "path": p, "bytes": os.path.getsize(p)}
+
+    def object_list(a):
+        kind = (a.get("type") or "").lower()
+        out = []
+        for o in s.doc.Objects:
+            if kind and kind not in o.TypeId.lower():
+                continue
+            e = {"name": o.Name, "label": o.Label, "type": o.TypeId}
+            if hasattr(o, "Visibility"):
+                e["visible"] = bool(o.Visibility)
+            parents = [p.Label for p in o.InList]
+            if parents:
+                e["parents"] = parents
+            sh = getattr(o, "Shape", None)
+            if isinstance(sh, Part.Shape) and not sh.isNull():
+                e["shape"] = geo.stats(sh) if sh.Solids else {"faces": len(sh.Faces), "edges": len(sh.Edges), "box": geo.box_of(sh)["size"]}
+            elif hasattr(o, "Mesh"):
+                e["mesh"] = {"triangles": o.Mesh.CountFacets, "closed": o.Mesh.isSolid()}
+            st = list(getattr(o, "State", []) or [])
+            if "Invalid" in st or "Error" in st:
+                e["error"] = True
+            out.append(e)
+        return {"document": s.doc.Name, "count": len(out), "objects": out}
+
+    def object_get(a):
+        o = picks.find(s.doc, a.get("object"))
+        flt = a.get("filter")
+        names = [p for p in o.PropertiesList if p not in SKIP_PROPS]
+        if isinstance(flt, list):
+            names = [p for p in names if p in flt]
+        elif isinstance(flt, str) and flt:
+            names = [p for p in names if flt.lower() in p.lower() or flt.lower() in (o.getGroupOfProperty(p) or "").lower()]
+        props = {}
+        for p in names:
+            try:
+                v = picks.json_safe(getattr(o, p))
+            except Exception as e:
+                v = f"<unreadable: {e}>"
+            entry = {"value": v, "type": o.getTypeIdOfProperty(p).replace("App::Property", "")}
+            if readonly(o, p):
+                entry["readOnly"] = True
+            props[p] = entry
+        return {"name": o.Name, "label": o.Label, "type": o.TypeId, "properties": props}
+
+    def object_set(a):
+        o = picks.find(s.doc, a.get("object"))
+        vals = a.get("values")
+        if not isinstance(vals, dict) or not vals:
+            raise ToolError("invalid_input", "values: { Property: value, … } — object_get gives the names and types.")
+        props = set(o.PropertiesList)
+        for p, v in vals.items():
+            if p not in props:
+                near = difflib.get_close_matches(p, list(props), 3)
+                raise ToolError("not_found", f"values.{p}: {o.Label} has no such property{' — did you mean ' + ', '.join(near) if near else ''}. object_get lists them.")
+            if readonly(o, p):
+                raise ToolError("invalid_input", f"values.{p}: read-only on {o.Label} (FreeCAD computes it).")
+        before = {p: picks.json_safe(getattr(o, p)) for p in vals}
+        for p, v in vals.items():
+            try:
+                setattr(o, p, to_value(o, p, v))
+            except ToolError:
+                raise
+            except Exception as e:
+                raise ToolError("invalid_input", f"values.{p}: FreeCAD refused {v!r} — {e}")
+        s.doc.recompute()
+        errs = errors(s.doc)
+        if errs:
+            raise ToolError("failed", f"The recompute failed after setting it: {errs[0]['object']}: {errs[0]['error']} — nothing was kept.")
+        s.snapshot("object_set")
+        return {"object": o.Label, "set": {p: {"from": before[p], "to": picks.json_safe(getattr(o, p))} for p in vals}, "step": len(s.steps)}
+
+    def object_delete(a):
+        names = a.get("objects")
+        if isinstance(names, str):
+            names = [names]
+        if not names:
+            raise ToolError("invalid_input", "objects: the names or labels to delete.")
+        objs = [picks.find(s.doc, n) for n in names]
+        going = {o.Name for o in objs}
+        for o in objs:
+            users = [p.Label for p in o.InList if p.Name not in going]
+            if users and not a.get("force"):
+                raise ToolError("invalid_state", f"{o.Label} is used by {', '.join(users)}: delete those too, or force: true leaves them broken.")
+        labels = [o.Label for o in objs]
+        for o in objs:
+            s.doc.removeObject(o.Name)
+        s.doc.recompute()
+        s.snapshot("object_delete")
+        return {"deleted": labels, "errors": errors(s.doc), "step": len(s.steps)}
+
+    def object_rename(a):
+        o = picks.find(s.doc, a.get("object"))
+        label = a.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise ToolError("invalid_input", "label: the new name.")
+        if any(x.Label == label for x in s.doc.Objects if x is not o):
+            raise ToolError("invalid_input", f"label {label!r}: taken — another name.")
+        old = o.Label
+        o.Label = label
+        if old in s.meta:
+            s.meta[label] = s.meta.pop(old)
+        s.snapshot("object_rename")
+        return {"name": o.Name, "from": old, "to": o.Label, "note": "Setups, specs and waivers kept by the old label are not renamed with it." if old != o.Label else ""}
+
+    def recompute(a):
+        if a.get("force"):
+            for o in s.doc.Objects:
+                o.touch()
+        n = s.doc.recompute()
+        errs = errors(s.doc)
+        s.snapshot("recompute")
+        return {"recomputed": n, "ok": not errs, "errors": errs}
+
+    def import_file(a):
+        p = where(a.get("path"))
+        if not os.path.isfile(p):
+            raise ToolError("not_found", f"{p}: no such file.")
+        fmt = fmt_of(p)
+        d = s.doc
+        before = {o.Name for o in d.Objects}
+        base = a.get("name") or os.path.splitext(os.path.basename(p))[0]
+        made = []
+        if fmt in SOLID_FORMATS:
+            sh = Part.Shape()
+            try:
+                sh.read(p)
+            except Exception as e:
+                raise ToolError("failed", f"{os.path.basename(p)} could not be read as {fmt.upper()}: {e}")
+            pieces = sh.Solids if (a.get("split") and len(sh.Solids) > 1) else [sh]
+            for i, piece in enumerate(pieces):
+                o = d.addObject("Part::Feature", "Import")
+                o.Label = s.unique(base if len(pieces) == 1 else f"{base} {i + 1}")
+                o.Shape = piece
+                made.append(o)
+        elif fmt in MESH_FORMATS:
+            import Mesh
+
+            try:
+                m = Mesh.Mesh(p)
+            except Exception as e:
+                raise ToolError("failed", f"{os.path.basename(p)} could not be read as a mesh: {e}")
+            if m.CountFacets == 0:
+                raise ToolError("failed", f"{os.path.basename(p)}: no triangles read.")
+            want_solid = a.get("solid", m.CountFacets <= 20000)
+            if want_solid:
+                if m.CountFacets > 200000:
+                    raise ToolError("invalid_input", f"solid: {m.CountFacets} triangles is too many to turn into a solid here — import it as a mesh (solid: false), or decimate it first.")
+                sh = Part.Shape()
+                sh.makeShapeFromMesh(m.Topology, 0.05)
+                try:
+                    sh = Part.Solid(Part.Shell(sh.Faces))
+                    if sh.Volume < 0:
+                        sh.reverse()
+                    sh = geo.clean(sh)
+                except Exception:
+                    pass
+                o = d.addObject("Part::Feature", "Import")
+                o.Shape = sh
+            else:
+                o = d.addObject("Mesh::Feature", "Import")
+                o.Mesh = m
+            o.Label = s.unique(base)
+            made.append(o)
+        elif fmt == "dxf":
+            try:
+                import Import
+
+                Import.readDXF(p, d.Name)
+            except Exception as e:
+                raise ToolError("unavailable", f"DXF import failed here ({e}): open it in the FreeCAD window (Draft's importer).")
+            made = [o for o in d.Objects if o.Name not in before]
+        elif fmt == "fcstd":
+            raise ToolError("invalid_input", "A FreeCAD document: doc_open { path } opens it.")
+        elif fmt in ("svg", "pdf", "dwg", "dae", "ifc", "png", "jpg"):
+            raise ToolError("unavailable", f"{fmt.upper()} comes in through the FreeCAD window's importers (Draft, BIM, image planes), not headless here: open it there.")
+        else:
+            raise ToolError("invalid_input", f"{fmt or 'no extension'}: import_file reads STEP, IGES, BREP, STL, OBJ, 3MF, PLY, OFF, AMF and DXF.")
+        d.recompute()
+        s.snapshot("import_file")
+        out = []
+        for o in made:
+            e = {"name": o.Name, "label": o.Label, "type": o.TypeId}
+            sh = getattr(o, "Shape", None)
+            if isinstance(sh, Part.Shape) and not sh.isNull():
+                e.update(geo.stats(sh) if sh.Solids else {"faces": len(sh.Faces), "edges": len(sh.Edges)})
+                if fmt in MESH_FORMATS:
+                    e["closed"] = bool(sh.Solids)
+                    e["note"] = "Made of the mesh's triangles: measure and boolean work; fillets and face queries do not see round faces."
+            elif hasattr(o, "Mesh"):
+                e["mesh"] = {"triangles": o.Mesh.CountFacets, "closed": o.Mesh.isSolid()}
+                e["note"] = "A mesh, not a body: import_file { solid: true } makes a body of it."
+            out.append(e)
+        return {"path": p, "format": fmt, "objects": out, "count": len(out), "step": len(s.steps)}
+
+    def export(a):
+        names = a.get("objects")
+        if isinstance(names, str):
+            names = [names]
+        objs = [picks.shaped(s.doc, n) for n in names] if names else [s.body(None)]
+        fmt = (a.get("format") or "").lower()
+        if not fmt and a.get("path"):
+            fmt = fmt_of(a["path"])
+        fmt = fmt or "step"
+        if fmt not in EXPORTS:
+            raise ToolError("invalid_input", f"format: one of {', '.join(EXPORTS)}.")
+        ext = {"step": ".step", "iges": ".iges", "brep": ".brep"}.get(fmt, "." + fmt)
+        p = where(a.get("path") or (objs[0].Label.replace(" ", "_") + ext))
+        if os.path.splitext(p)[1].lower().lstrip(".") not in (SOLID_FORMATS.get(fmt) or MESH_FORMATS.get(fmt)):
+            p += ext
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        shape = objs[0].Shape if len(objs) == 1 else Part.Compound([o.Shape for o in objs])
+        vol = sum(o.Shape.Volume for o in objs if o.Shape.Solids)
+        if fmt in SOLID_FORMATS:
+            {"step": shape.exportStep, "iges": shape.exportIges, "brep": shape.exportBrep}[fmt](p)
+            back = Part.Shape()
+            back.read(p)
+            verify = {"volume": round(back.Volume, 2), "volumeDiff": round(abs(back.Volume - vol), 3), "solids": len(back.Solids), "faces": len(back.Faces)}
+            if fmt == "iges" and not back.Solids:
+                verify["note"] = "IGES carries faces, not solids, as most readers take it."
+        else:
+            import Mesh
+            import MeshPart
+
+            tol = picks.num(a.get("tolerance", 0.01), "tolerance")
+            if tol <= 0:
+                raise ToolError("invalid_input", "tolerance: the chord error, above 0 mm.")
+            m = MeshPart.meshFromShape(Shape=shape, LinearDeflection=tol, AngularDeflection=0.0873, Relative=False)
+            m.write(p)
+            back = Mesh.Mesh(p)
+            verify = {"triangles": back.CountFacets, "volume": round(back.Volume, 2), "volumeDiff": round(abs(back.Volume - vol), 2), "closed": back.isSolid()}
+        return {"objects": [o.Label for o in objs], "format": fmt, "path": p, "bytes": os.path.getsize(p), "verify": verify}
+
+    def view_render(a):
+        if not FreeCAD.GuiUp:
+            raise ToolError("unavailable", "view_render needs the FreeCAD window: start the link from the Agent Link workbench in FreeCAD (Start link), not headless. section and measure read the shape without it.")
+        import FreeCADGui
+
+        gd = FreeCADGui.getDocument(s.doc.Name)
+        view = gd.activeView() if gd else None
+        if view is None or not hasattr(view, "saveImage"):
+            raise ToolError("unavailable", "No 3D view open for this document: open one in FreeCAD, then again.")
+        which = a.get("view", "iso")
+        if which not in VIEWS:
+            raise ToolError("invalid_input", f"view: one of {', '.join(VIEWS)}.")
+        {"iso": view.viewIsometric, "front": view.viewFront, "back": view.viewRear, "top": view.viewTop, "bottom": view.viewBottom, "left": view.viewLeft, "right": view.viewRight}[which]()
+        if a.get("fit", True):
+            view.fitAll()
+        w, h = int(a.get("width", 800)), int(a.get("height", 600))
+        if not (16 <= w <= 4096 and 16 <= h <= 4096):
+            raise ToolError("invalid_input", "width and height: 16 to 4096 px.")
+        p = where(a.get("path") or f"view_{which}.png", ".png")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        view.saveImage(p, w, h, a.get("background", "Current"))
+        return {"path": p, "view": which, "width": w, "height": h, "bytes": os.path.getsize(p)}
+
+    objref = {"type": "string", "description": "An object's name or label."}
+    return [
+        Tool("doc_new", "Start a new, empty FreeCAD document and work in it from now on; the one before stays open (save it first: doc_save). Not undoable, and not in a batch's rollback.", obj({"name": {"type": "string"}}), doc_new),
+        Tool("doc_open", "Open a FreeCAD document (.FCStd, path) and work in it from now on — recomputed, with any object's error listed. Other formats come in with import_file. Not undoable.", obj({"path": {"type": "string"}}, ["path"]), doc_open),
+        Tool("doc_save", "Save the document as .FCStd: path (relative goes in the session's folder), else where it was saved, else <label>.FCStd there. What setup and part_spec recorded is saved with it.", obj({"path": {"type": "string"}}), doc_save),
+        Tool("object_list", "Every object in the document: name, label, type, visible, parents (what uses it) and its shape (volume, area, faces, solids, size for a solid; faces and edges else) or mesh. type: a part of the type to keep (\"Part::\", \"Sketch\").", obj({"type": {"type": "string"}}), object_list),
+        Tool("object_get", "One object's properties: value (mm, degrees; placements as { at, axis, angle }; links by label; a shape as its stats), type, readOnly. filter: a word in the name or group (\"Placement\", \"Base\"), or a list of names.", obj({"object": objref, "filter": {}}, ["object"]), object_get),
+        Tool("object_set", "Set properties of an object by name: values { Length: 20, Placement: { at, axis, angle }, Refine: true, Base: \"Box\", Mode: \"…\" } — each converted to its type (numbers in mm and degrees, or strings with a unit \"1 in\"); enumerations checked; read-only ones refused. Recomputes; refused and undone when that fails. Trap: a plain shape (Part::Feature from a boolean) has no sizes to set — only placement.", obj({"object": objref, "values": {"type": "object"}}, ["object", "values"]), object_set, changes=True),
+        Tool("object_delete", "Delete objects (objects: names or labels). Refused while another object uses one (force: true deletes it anyway and the user breaks); recomputes and lists any error.", obj({"objects": {}, "force": {"type": "boolean"}}, ["objects"]), object_delete, changes=True),
+        Tool("object_rename", "Give an object a new label (its internal name stays). Trap: setups, specs and waivers keep the old label.", obj({"object": objref, "label": {"type": "string"}}, ["object", "label"]), object_rename, changes=True),
+        Tool("recompute", "Recompute the document (force: true recomputes everything) and list each object that failed, with FreeCAD's reason.", obj({"force": {"type": "boolean"}}), recompute, changes=True),
+        Tool("import_file", "Bring a file into the document: STEP, IGES, BREP as bodies (split: true makes a body of each solid); STL, OBJ, 3MF, PLY, OFF, AMF as a body made of its triangles when closed and up to 20000 triangles (solid: false keeps a mesh, solid: true forces a body up to 200000); DXF as Draft geometry. SVG, PDF, DWG, IFC need the FreeCAD window. .FCStd: doc_open.", obj({"path": {"type": "string"}, "name": {"type": "string"}, "split": {"type": "boolean"}, "solid": {"type": "boolean"}}, ["path"]), import_file, changes=True),
+        Tool("export", "Write objects (the one body when left out; several go as one compound) as STEP, IGES, BREP, STL, OBJ or 3MF (format, or from path's extension), and read it back: verify gives the volume read against the bodies' (and triangles, closed for meshes). tolerance: a mesh's chord error, 0.01 mm.", obj({"objects": {}, "format": {"type": "string", "enum": list(EXPORTS)}, "path": {"type": "string"}, "tolerance": {"type": "number"}}), export),
+        Tool("view_render", "Save a PNG of the FreeCAD window's 3D view: view iso|front|back|top|bottom|left|right, fit (true), width, height, background. Needs the FreeCAD window — refused (unavailable) headless.", obj({"view": {"type": "string", "enum": list(VIEWS)}, "fit": {"type": "boolean"}, "width": {"type": "integer"}, "height": {"type": "integer"}, "background": {"type": "string"}, "path": {"type": "string"}}), view_render),
+    ]
