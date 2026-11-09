@@ -103,6 +103,7 @@ class Strength(unittest.TestCase):
         self.assertLess(r["vonMisesMax"]["at"][0], 15)
         self.assertAlmostEqual(r["safety"], 50 / r["vonMisesMax"]["MPa"], delta=0.02)
         self.assertIn("acrossLayers", r)
+        self.assertFalse(any("large" in w for w in r["warnings"]), r["warnings"])
         self.assertEqual(r["acrossLayers"]["factor"], 0.5)
         err, again = self.call("fea_results")
         self.assertFalse(again["stale"])
