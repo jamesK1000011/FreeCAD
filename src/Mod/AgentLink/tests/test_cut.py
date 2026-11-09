@@ -45,6 +45,19 @@ class SheetFiles(unittest.TestCase):
         # y flipped: the line on y = 0 is at the bottom.
         self.assertIn('y1="10"', text)
 
+    def test_kerf_offset(self):
+        # A rounded square walked any way round: grown out, the arcs too.
+        rr = [("line", 2, 0, 8, 0), ("arc", 8, 2, 2, 270, 360), ("line", 10, 8, 10, 2), ("arc", 8, 8, 2, 0, 90),
+              ("line", 8, 10, 2, 10), ("arc", 2, 8, 2, 90, 180), ("line", 0, 8, 0, 2), ("arc", 2, 2, 2, 180, 270)]
+        self.assertEqual(tuple(round(v, 6) for v in sf.bbox(sf.offset_loop(rr, 0.5))), (-0.5, -0.5, 10.5, 10.5))
+        self.assertEqual(tuple(round(v, 6) for v in sf.bbox(sf.offset_loop(rr, -0.5))), (0.5, 0.5, 9.5, 9.5))
+        # An L: the inside corner mitred too.
+        L = [("line", 0, 0, 6, 0), ("line", 6, 0, 6, 2), ("line", 6, 2, 2, 2), ("line", 2, 2, 2, 5), ("line", 2, 5, 0, 5), ("line", 0, 5, 0, 0)]
+        self.assertIn(("line", 6.5, 2.5, 2.5, 2.5), [tuple(round(v, 6) if isinstance(v, float) else v for v in p) for p in sf.offset_loop(L, 0.5)])
+        self.assertEqual(sf.offset_loop([("circle", 0, 0, 1)], -0.1), [("circle", 0, 0, 0.9)])
+        with self.assertRaises(ValueError):
+            sf.offset_loop([("circle", 0, 0, 0.05)], -0.1)
+
     def test_shelf(self):
         at = sf.shelf([(100, 60)] * 3, 250, 150, 3)
         self.assertEqual(at, [(3, 3), (106, 3), (3, 66)])

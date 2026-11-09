@@ -362,33 +362,29 @@ def tools(session):
                 raise ToolError("invalid_input", f"{o.Label} is {info['thickness']:g} mm, the others {thick:g} mm: one sheet per file — export them apart.")
             thick = info["thickness"]
             flat, outer, holes = flatten(o.Shape, info)
-            wires = [outer] + holes
+            loops = [[p for _, p in primitives(w, None)] for w in [outer] + holes]
             if comp:
-                # Each loop on its own (a face with holes trips the offset):
-                # the outside grown, each hole shrunk, by half the kerf.
-                def grown(w, by):
-                    off = Part.Face(w).makeOffset2D(by, 0)
-                    return off.Faces[0].OuterWire if off.Faces else off.Wires[0]
-
+                # Each loop moved off the material by half the kerf: the
+                # outside out, the holes in.
                 try:
-                    wires = [grown(wires[0], kerf / 2)] + [grown(h, -kerf / 2) for h in wires[1:]]
-                except Exception as e:
-                    raise ToolError("failed", f"The kerf offset failed on {o.Label} ({e}): export with compensate: false and let the cutter's software take off the kerf.")
-            prims = primitives(wires[0], sf.OUTER) + [p for w in wires[1:] for p in primitives(w, sf.HOLES)]
-            bb = wires[0].BoundBox
+                    loops = [sf.offset_loop(loops[0], kerf / 2)] + [sf.offset_loop(h, -kerf / 2) for h in loops[1:]]
+                except ValueError as e:
+                    raise ToolError("failed", f"The kerf offset on {o.Label}: {e} — export with compensate: false and let the cutter's software take off the kerf.")
+            prims = [(sf.OUTER, p) for p in loops[0]] + [(sf.HOLES, p) for h in loops[1:] for p in h]
+            bb = sf.bbox(loops[0])
             n = int(copies.get(o.Label, 1)) if isinstance(copies, dict) else int(copies)
             if n < 1 or n > 500:
                 raise ToolError("invalid_input", "copies: 1 to 500 (a number, or { body: n }).")
             for _ in range(n):
                 parts.append((o.Label, prims, bb))
         sw, sh = (float(sheet[0]), float(sheet[1])) if sheet else (None, None)
-        at = sf.shelf([(bb.XLength, bb.YLength) for _, _, bb in parts], sw, sh, gap)
+        at = sf.shelf([(bb[2] - bb[0], bb[3] - bb[1]) for _, _, bb in parts], sw, sh, gap)
         items, placed, left = [], {}, {}
         for (label, prims, bb), pos in zip(parts, at):
             if pos is None:
                 left[label] = left.get(label, 0) + 1
                 continue
-            dx, dy = pos[0] - bb.XMin, pos[1] - bb.YMin
+            dx, dy = pos[0] - bb[0], pos[1] - bb[1]
             items += [(layer, sf.shift(p, dx, dy)) for layer, p in prims]
             placed[label] = placed.get(label, 0) + 1
         if not items:
@@ -396,8 +392,8 @@ def tools(session):
         if sheet:
             W, H = sw, sh
         else:
-            W = max(pos[0] + bb.XLength for (_, _, bb), pos in zip(parts, at) if pos) + gap
-            H = max(pos[1] + bb.YLength for (_, _, bb), pos in zip(parts, at) if pos) + gap
+            W = max(pos[0] + bb[2] - bb[0] for (_, _, bb), pos in zip(parts, at) if pos) + gap
+            H = max(pos[1] + bb[3] - bb[1] for (_, _, bb), pos in zip(parts, at) if pos) + gap
         base = os.path.join(s.out_dir, a.get("name") or (objs[0].Label.replace(" ", "_") + "-cut"))
         os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
         wrote = {}

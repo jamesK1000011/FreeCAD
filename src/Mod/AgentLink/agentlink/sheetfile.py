@@ -156,3 +156,145 @@ def shelf(sizes, sheet_w, sheet_h, gap):
         x += w + gap
         row_h = max(row_h, h)
     return at
+
+
+# ---- extent and kerf offset, on the primitives ---------------------------------------------
+
+def _arc_pt(cx, cy, r, a):
+    return cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a))
+
+
+def bbox(prims):
+    """(xmin, ymin, xmax, ymax) of primitives (no layers)."""
+    xs, ys = [], []
+    for p in prims:
+        k = p[0]
+        if k == "line":
+            xs += [p[1], p[3]]
+            ys += [p[2], p[4]]
+        elif k == "circle":
+            xs += [p[1] - p[3], p[1] + p[3]]
+            ys += [p[2] - p[3], p[2] + p[3]]
+        elif k == "arc":
+            cx, cy, r, a0, a1 = p[1:]
+            sweep = (a1 - a0) % 360 or 360
+            angs = [a0, a0 + sweep] + [q for q in (0, 90, 180, 270, 360, 450, 540, 630) if a0 < q < a0 + sweep or a0 < q + 360 < a0 + sweep]
+            for a in angs:
+                x, y = _arc_pt(cx, cy, r, a)
+                xs.append(x)
+                ys.append(y)
+        else:
+            xs += [x for x, _ in p[1]]
+            ys += [y for _, y in p[1]]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _ends(p):
+    if p[0] == "line":
+        return (p[1], p[2]), (p[3], p[4])
+    cx, cy, r, a0, a1 = p[1:]
+    return _arc_pt(cx, cy, r, a0), _arc_pt(cx, cy, r, a1)
+
+
+def _close(a, b, tol=1e-4):
+    return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
+
+
+def chain(prims):
+    """Lines and arcs of one closed loop, in order: [(prim, forward)] where
+    forward says it is walked from its first end (an arc's a0) to its last."""
+    left = list(prims)
+    out = [(left.pop(0), True)]
+    start = _ends(out[0][0])[0]
+    while left:
+        end = _ends(out[-1][0])[1 if out[-1][1] else 0]
+        for i, p in enumerate(left):
+            a, b = _ends(p)
+            if _close(a, end):
+                out.append((left.pop(i), True))
+                break
+            if _close(b, end):
+                out.append((left.pop(i), False))
+                break
+        else:
+            raise ValueError("the loop is not closed")
+    if not _close(_ends(out[-1][0])[1 if out[-1][1] else 0], start):
+        raise ValueError("the loop is not closed")
+    return out
+
+
+def _walk_dir(p, fwd, at_end):
+    """The unit direction of travel at a primitive's start or end."""
+    if p[0] == "line":
+        dx, dy = p[3] - p[1], p[4] - p[2]
+        n = math.hypot(dx, dy)
+        dx, dy = dx / n, dy / n
+        return (dx, dy) if fwd else (-dx, -dy)
+    cx, cy, r, a0, a1 = p[1:]
+    a = (a1 if at_end else a0) if fwd else (a0 if at_end else a1)
+    tx, ty = -math.sin(math.radians(a)), math.cos(math.radians(a))  # counter-clockwise
+    return (tx, ty) if fwd else (-tx, -ty)
+
+
+def offset_loop(prims, d):
+    """A closed loop of lines and arcs (or one circle) offset by d: d > 0
+    grows the area it encloses, d < 0 shrinks it. Sharp corners between
+    lines are mitred; an arc must meet its neighbours tangent."""
+    if len(prims) == 1 and prims[0][0] == "circle":
+        p = prims[0]
+        if p[3] + d <= 1e-6:
+            raise ValueError(f"a hole Ø{2 * p[3]:.2f} closes at this kerf")
+        return [("circle", p[1], p[2], p[3] + d)]
+    if any(p[0] not in ("line", "arc") for p in prims):
+        raise ValueError("only lines and arcs are offset here (a spline is in the profile)")
+    loop = chain(prims)
+    pts = []
+    for p, fwd in loop:
+        a, b = _ends(p)
+        pts.append(a if fwd else b)
+        if p[0] == "arc":
+            cx, cy, r, a0, a1 = p[1:]
+            pts.append(_arc_pt(cx, cy, r, a0 + ((a1 - a0) % 360 or 360) / 2))
+    area = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts))) / 2
+    if area < 0:  # walk it counter-clockwise: the inside on the left
+        loop = [(p, not f) for p, f in reversed(loop)]
+    n = len(loop)
+    # Each line moved to its right (out) by d, each arc's radius changed.
+    moved = []
+    for p, fwd in loop:
+        if p[0] == "line":
+            tx, ty = _walk_dir(p, fwd, False)
+            ox, oy = ty * d, -tx * d
+            a, b = _ends(p)
+            if not fwd:
+                a, b = b, a
+            moved.append(["line", [a[0] + ox, a[1] + oy], [b[0] + ox, b[1] + oy]])
+        else:
+            cx, cy, r, a0, a1 = p[1:]
+            r2 = r + d if fwd else r - d  # walked counter-clockwise: bulges out
+            if r2 <= 1e-6:
+                raise ValueError(f"an arc of radius {r:.2f} closes at this kerf")
+            moved.append(["arc", cx, cy, r2, a0, a1])
+    for i in range(n):
+        j = (i + 1) % n
+        (p, f), (q, g) = loop[i], loop[j]
+        t1, t2 = _walk_dir(p, f, True), _walk_dir(q, g, False)
+        cross = t1[0] * t2[1] - t1[1] * t2[0]
+        if abs(cross) < 1e-6 and t1[0] * t2[0] + t1[1] * t2[1] > 0:
+            continue  # tangent: the moved ends meet already
+        if p[0] != "line" or q[0] != "line":
+            raise ValueError("an arc meets a neighbour at a sharp corner")
+        (a1, b1), (a2, b2) = moved[i][1:], moved[j][1:]
+        # Where the two moved lines cross: the mitred corner.
+        den = (b1[0] - a1[0]) * (b2[1] - a2[1]) - (b1[1] - a1[1]) * (b2[0] - a2[0])
+        s = ((a2[0] - a1[0]) * (b2[1] - a2[1]) - (a2[1] - a1[1]) * (b2[0] - a2[0])) / den
+        x, y = a1[0] + s * (b1[0] - a1[0]), a1[1] + s * (b1[1] - a1[1])
+        moved[i][2] = [x, y]
+        moved[j][1] = [x, y]
+    out = []
+    for m in moved:
+        if m[0] == "line":
+            out.append(("line", m[1][0], m[1][1], m[2][0], m[2][1]))
+        else:
+            out.append(tuple(m))
+    return out
