@@ -24,12 +24,17 @@ class ToolError(Exception):
 
 
 class Tool:
-    def __init__(self, name, description, schema, fn, changes=False):
+    def __init__(self, name, description, schema, fn, changes=False, group="core"):
         self.name = name
         self.description = description
         self.schema = schema
         self.fn = fn
+        # A change runs as one undo step (the session wraps it in a
+        # transaction); a read changes nothing.
         self.changes = changes
+        # Its group: listed when the group is on (tool_groups), callable
+        # by name whether listed or not.
+        self.group = group
 
     def listing(self):
         return {"name": self.name, "description": self.description, "inputSchema": self.schema}
@@ -54,14 +59,29 @@ def compact(obj):
 
 
 class Server:
-    def __init__(self, name, version, tools, instructions="", run=None):
+    def __init__(self, name, version, tools, instructions="", run=None, groups=None, resources=None):
         self.name = name
         self.version = version
         self.tools = {t.name: t for t in tools}
         self.instructions = instructions
-        # How a call is run: directly, or handed to another thread (the
-        # GUI's, where FreeCAD's document must be touched).
-        self.run = run or (lambda fn: fn())
+        # How a call is run: run(tool, fn) — directly, or as one undo step
+        # (the session's), or handed to the GUI's thread.
+        self.run = run or (lambda tool, fn: fn())
+        # The groups listed now; None lists every tool.
+        self.groups = groups
+        self.resources = resources
+        # Notifications to send after the reply in hand (list_changed).
+        self.outbox = []
+
+    def add(self, tool):
+        self.tools[tool.name] = tool
+
+    def listed(self):
+        return [t for t in self.tools.values() if self.groups is None or t.group in self.groups]
+
+    def set_groups(self, groups):
+        self.groups = groups
+        self.outbox.append({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
 
     def handle(self, msg):
         """One message in; the reply, or None for a notification."""
@@ -73,14 +93,18 @@ class Server:
             if method == "initialize":
                 result = {
                     "protocolVersion": PROTOCOL,
-                    "capabilities": {"tools": {"listChanged": False}},
+                    "capabilities": {"tools": {"listChanged": True}, **({"resources": {}} if self.resources else {})},
                     "serverInfo": {"name": self.name, "version": self.version},
                     "instructions": self.instructions,
                 }
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
-                result = {"tools": [t.listing() for t in self.tools.values()]}
+                result = {"tools": [t.listing() for t in self.listed()]}
+            elif method == "resources/list" and self.resources:
+                result = {"resources": self.resources.list()}
+            elif method == "resources/read" and self.resources:
+                result = {"contents": [self.resources.read((msg.get("params") or {}).get("uri", ""))]}
             elif method == "tools/call":
                 result = self.call(msg.get("params") or {})
             elif mid is None:
@@ -100,7 +124,7 @@ class Server:
         t0 = time.time()
         try:
             check_input(tool.schema, args)
-            out = self.run(lambda: tool.fn(args))
+            out = self.run(tool, lambda: tool.fn(args))
         except ToolError as e:
             return self.refusal(e.code, e.message)
         except ValueError as e:
@@ -134,3 +158,5 @@ def serve_lines(server, readline, write):
         reply = server.handle(msg)
         if reply is not None:
             write(compact(reply) + "\n")
+        while server.outbox:
+            write(compact(server.outbox.pop(0)) + "\n")

@@ -13,8 +13,8 @@ import threading
 
 import FreeCAD
 
-from .protocol import Server, compact
-from .tools import INSTRUCTIONS, Session, make_tools
+from .protocol import compact
+from .tools import Session, build_server
 
 PORT = 7318
 
@@ -29,7 +29,7 @@ class Link:
         self.session = Session(doc=doc, out_dir=FreeCAD.getUserAppDataDir())
         from .server import VERSION
 
-        self.server = Server("freecad-agentlink", VERSION, make_tools(self.session), INSTRUCTIONS)
+        self.server = build_server(self.session, version=VERSION)
 
     def start(self):
         from PySide import QtCore
@@ -78,12 +78,14 @@ class Link:
                 reply = self.server.handle(json.loads(line))
             except ValueError:
                 reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "not JSON"}}
-            if reply is not None:
-                try:
+            try:
+                if reply is not None:
                     f.write(compact(reply) + "\n")
-                    f.flush()
-                except OSError:
-                    pass
+                while self.server.outbox:
+                    f.write(compact(self.server.outbox.pop(0)) + "\n")
+                f.flush()
+            except OSError:
+                pass
             if FreeCAD.GuiUp:
                 import FreeCADGui
 

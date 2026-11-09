@@ -19,7 +19,7 @@ import socket
 import sys
 import threading
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 def _protocol_stdout():
@@ -83,11 +83,11 @@ def main(argv=None):
         relay(port, out)
         return 0
     _import_freecad()
-    from .protocol import Server, serve_lines
-    from .tools import INSTRUCTIONS, Session, make_tools
+    from .protocol import serve_lines
+    from .tools import Session, build_server
 
     session = Session(out_dir=out_dir)
-    server = Server("freecad-agentlink", VERSION, make_tools(session), INSTRUCTIONS)
+    server = build_server(session, version=VERSION)
 
     def write(text):
         out.write(text)

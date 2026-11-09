@@ -23,12 +23,11 @@ BRIEF = {"x": 2, "y": 1, "units": 4, "magnets": True, "dividersX": 1, "label": 1
 class Tools(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from agentlink.protocol import Server
-        from agentlink.tools import INSTRUCTIONS, Session, make_tools
+        from agentlink.tools import Session, build_server
 
         cls.dir = tempfile.mkdtemp()
         cls.session = Session(out_dir=cls.dir)
-        cls.server = Server("t", "0", make_tools(cls.session), INSTRUCTIONS)
+        cls.server = build_server(cls.session, lean=False)
 
     def call(self, name, args=None):
         r = self.server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args or {}}})["result"]
@@ -129,6 +128,32 @@ class Tools(unittest.TestCase):
         self.assertLess(r["pauses"][0]["z"], 2.8)
         with open(r["gcode"]) as f:
             self.assertIn("M601 ; Insert 8 6x2 magnets", f.read())
+
+    def test_6_undo_batch_groups_guides(self):
+        state = lambda: self.call("session_state")[1]
+        n = len(state()["bodies"])
+        err, m = self.call("gen_make", {"params": {"x": 1, "y": 1, "units": 2}, "name": "Small"})
+        self.assertFalse(err, m)
+        self.assertEqual(len(state()["bodies"]), n + 1)
+        err, u = self.call("history_undo")
+        self.assertFalse(err, u)
+        self.assertEqual(u["steps"], ["gen_make"])
+        self.assertEqual(len(state()["bodies"]), n)
+        self.call("history_redo")
+        self.assertEqual(len(state()["bodies"]), n + 1)
+        self.call("history_undo")
+        # A batch stands or falls whole.
+        err, b = self.call("batch", {"calls": [{"tool": "gen_make", "arguments": {"params": {"x": 1, "y": 1, "units": 2}, "name": "B1"}}, {"tool": "gen_make", "arguments": {"params": {"x": 99}}}]})
+        self.assertFalse(err, b)
+        self.assertEqual(b["stopped"], 1)
+        self.assertEqual(b["undone"], 1)
+        self.assertEqual(len(state()["bodies"]), n)
+        err, g = self.call("tool_groups")
+        self.assertIn("core", [x["group"] for x in g["groups"]])
+        err, gi = self.call("guide_read")
+        self.assertTrue(gi["guides"])
+        lst = self.server.handle({"jsonrpc": "2.0", "id": 9, "method": "resources/list"})["result"]["resources"]
+        self.assertTrue(any(r["uri"].startswith("agentlink://guide/") for r in lst))
 
     def test_5_diff_and_refusals(self):
         err, d = self.call("history_diff", {"since": 0})

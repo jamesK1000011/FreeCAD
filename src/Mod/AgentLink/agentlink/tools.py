@@ -1,17 +1,14 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# The six tools, in ScanRuler's manner: few, each one call for one job,
-# answers small and in millimetres, a refusal saying what to do instead.
-#
-#   session_state  what the document holds: bodies with their numbers, steps
-#   gen_make       a standard part made to size (a Gridfinity bin), or measured
-#   body_check     sound or not: valid, closed, one solid, no slivers
-#   part_review    one verdict on a part: soundness, least wall, mass, a spec
-#   export_file    a body as STEP or STL
-#   history_diff   what a change did, per body, since a step
+# The tools, in ScanRuler's manner: few per job, each one call, answers
+# small and in millimetres, a refusal saying what to do instead. They come
+# in groups (tool_groups): core is always listed; the lean list (the
+# default) adds the groups a part's make-check-verdict loop needs, the rest
+# are listed when asked for — and every tool is callable by name, listed or
+# not, alone or in a batch.
 #
 # The document is FreeCAD's own: in the GUI the person watches the bodies
 # arrive; headless (FreeCADCmd or a Python with FreeCAD) the same calls run
-# on a document of their own.
+# on a document of their own. Every change is one undo step.
 
 import math
 import os
@@ -37,9 +34,25 @@ class Session:
         """doc: the document to work in — the GUI's open one — or None for a
         new one of its own (headless)."""
         self.doc = doc or FreeCAD.newDocument("AgentLink")
+        self.doc.UndoMode = 1
+        self.checkpoints = {}
         self.out_dir = out_dir or os.getcwd()
         self.steps = []  # [{step, tool, bodies: {name: stats}}]
         self.meta = {}  # body name -> {encased: …, generator: …}
+
+    # ---- every change one undo step ----
+
+    def execute(self, tool, fn):
+        if not tool.changes:
+            return fn()
+        self.doc.openTransaction(tool.name)
+        try:
+            out = fn()
+        except BaseException:
+            self.doc.abortTransaction()
+            raise
+        self.doc.commitTransaction()
+        return out
 
     # ---- the document ----
 
@@ -543,3 +556,202 @@ def make_tools(session):
         ),
         Tool("history_diff", "What changed since a step (the one before the last by default): per body its volume, area, faces, solids and size from and to, and the steps between.", obj({"since": {"type": "integer"}}), s.history_diff),
     ]
+
+
+# ---- groups, guides, batches, undo: the server as a whole ---------------------------------
+
+GROUP_OF = {
+    "session_state": "core", "body_check": "core", "export_file": "core", "history_diff": "core",
+    "gen_make": "parts",
+    "setup": "make", "part_spec": "make", "dfm_check": "make", "part_review": "make", "slice": "make",
+    "fit": "fits", "hw_hole": "fits",
+}
+GROUP_INFO = {
+    "core": "The session, groups, guides, batches, undo, soundness, export. Always listed.",
+    "parts": "Standard parts made to size: Gridfinity bins and baseplates, project boxes, board enclosures.",
+    "make": "How each part is made (setups), its limits and material, the printability check, the verdict, slicing.",
+    "fits": "Fits, printer calibration, tolerance stacks and holes for hardware.",
+}
+# Listed by default (lean): core and the groups a part's make-check-verdict loop needs.
+LEAN = {"core", "parts", "make", "fits"}
+GUIDES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guides")
+
+
+class Resources:
+    """The guides and the files the session wrote, as MCP resources."""
+
+    def __init__(self, session):
+        self.s = session
+
+    def list(self):
+        out = []
+        if os.path.isdir(GUIDES):
+            for n in sorted(os.listdir(GUIDES)):
+                if n.endswith(".md"):
+                    out.append({"uri": f"agentlink://guide/{n[:-3]}", "name": n[:-3], "mimeType": "text/markdown"})
+        if os.path.isdir(self.s.out_dir):
+            for n in sorted(os.listdir(self.s.out_dir))[:200]:
+                p = os.path.join(self.s.out_dir, n)
+                if os.path.isfile(p):
+                    out.append({"uri": "file://" + p, "name": n, "size": os.path.getsize(p)})
+        return out
+
+    def read(self, uri):
+        import base64
+
+        if uri.startswith("agentlink://guide/"):
+            p = os.path.join(GUIDES, uri.rsplit("/", 1)[1] + ".md")
+        elif uri.startswith("file://"):
+            p = uri[7:]
+            if not os.path.abspath(p).startswith(os.path.abspath(self.s.out_dir)):
+                raise ValueError("Only the session's own files are served.")
+        else:
+            raise ValueError(f"{uri}: not a resource here.")
+        if p.endswith((".md", ".json", ".txt", ".gcode", ".csv", ".svg", ".step", ".stp")):
+            with open(p, encoding="utf-8", errors="replace") as f:
+                return {"uri": uri, "mimeType": "text/plain", "text": f.read()}
+        with open(p, "rb") as f:
+            data = f.read()
+        if len(data) > 8 * 1024 * 1024:
+            raise ValueError("Over 8 MB: read it from the file itself.")
+        return {"uri": uri, "mimeType": "application/octet-stream", "blob": base64.b64encode(data).decode()}
+
+
+def _guide_index():
+    out = []
+    if os.path.isdir(GUIDES):
+        for n in sorted(os.listdir(GUIDES)):
+            if n.endswith(".md"):
+                with open(os.path.join(GUIDES, n), encoding="utf-8") as f:
+                    text = f.read()
+                first = next((l.lstrip("# ").strip() for l in text.splitlines() if l.strip()), n)
+                out.append({"topic": n[:-3], "title": first, "chars": len(text)})
+    return out
+
+
+def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
+    """The server: every family's tools, grouped, with the core ones that
+    act on the server itself (groups, guides, batch, undo)."""
+    from . import families
+    from .protocol import Server
+
+    if lean is None:
+        lean = os.environ.get("AGENTLINK_TOOLS", "lean") != "full"
+    tools = make_tools(session)
+    for t in tools:
+        t.group = GROUP_OF.get(t.name, t.group)
+    info = dict(GROUP_INFO)
+    for fam in families.load():
+        info[fam.GROUP] = fam.INFO
+        for t in fam.tools(session):
+            t.group = fam.GROUP
+            tools.append(t)
+    server = Server(name, version, tools, INSTRUCTIONS, run=session.execute, groups=set(LEAN) if lean else None, resources=Resources(session))
+    s = session
+
+    def tool_groups(a):
+        groups = sorted({t.group for t in server.tools.values()})
+        on = set(groups) if server.groups is None else set(server.groups)
+        if a.get("enable") or a.get("disable"):
+            bad = [g for g in (a.get("enable") or []) + (a.get("disable") or []) if g not in groups]
+            if bad:
+                raise ToolError("invalid_input", f"{bad[0]}: not a group — they are: {', '.join(groups)}.")
+            on |= set(a.get("enable") or [])
+            on -= set(a.get("disable") or []) - {"core"}
+            server.set_groups(on)
+        return {"groups": [{"group": g, "on": g in on, "tools": sorted(t.name for t in server.tools.values() if t.group == g), "about": info.get(g, "")} for g in groups], "note": "Every tool is callable by name, listed or not."}
+
+    def guide_read(a):
+        topic = a.get("topic")
+        if not topic:
+            return {"guides": _guide_index()}
+        p = os.path.join(GUIDES, f"{topic}.md")
+        if not os.path.isfile(p):
+            raise ToolError("not_found", f"{topic}: no such guide — they are: {', '.join(g['topic'] for g in _guide_index())}.")
+        with open(p, encoding="utf-8") as f:
+            text = f.read()
+        sec = a.get("section")
+        if sec:
+            parts = text.split("\n## ")
+            hit = [x for x in parts[1:] if x.lower().startswith(sec.lower())]
+            if not hit:
+                raise ToolError("not_found", f"section {sec!r}: the sections are: {', '.join(x.splitlines()[0] for x in parts[1:])}.")
+            text = "## " + hit[0]
+        return {"topic": topic, "text": text}
+
+    def batch(a):
+        calls = a.get("calls") or []
+        rollback = a.get("rollback", True)
+        stop = a.get("stopOnError", True)
+        mark = s.doc.UndoCount
+        results = []
+        for i, c in enumerate(calls):
+            if c.get("tool") == "batch":
+                raise ToolError("invalid_input", f"calls.{i}: a batch does not run another batch.")
+            r = server.call({"name": c.get("tool"), "arguments": c.get("arguments") or {}})
+            import json as _json
+
+            body = _json.loads(r["content"][0]["text"])
+            ok = not r.get("isError")
+            results.append({"tool": c.get("tool"), "ok": ok, **({"result": body} if ok else {"error": body.get("error")})})
+            if not ok and stop:
+                out = {"results": results, "stopped": i}
+                if rollback:
+                    undone = 0
+                    while s.doc.UndoCount > mark:
+                        s.doc.undo()
+                        undone += 1
+                    s.doc.recompute()
+                    s.snapshot("batch rolled back")
+                    out["undone"] = undone
+                return out
+        return {"results": results, "ran": len(results)}
+
+    def history(action):
+        def run(a):
+            d = s.doc
+            if action == "undo":
+                n = int(a.get("steps", 1))
+                names = list(d.UndoNames)[:n]
+                for _ in range(n):
+                    if d.UndoCount == 0:
+                        break
+                    d.undo()
+            elif action == "redo":
+                n = int(a.get("steps", 1))
+                names = list(d.RedoNames)[:n]
+                for _ in range(n):
+                    if d.RedoCount == 0:
+                        break
+                    d.redo()
+            elif action == "checkpoint":
+                cid = f"cp{len(s.checkpoints) + 1}"
+                s.checkpoints[cid] = {"undo": d.UndoCount, "step": len(s.steps)}
+                return {"checkpoint": cid, "undoCount": d.UndoCount, "step": len(s.steps)}
+            elif action == "restore":
+                cp = s.checkpoints.get(a.get("checkpoint"))
+                if not cp:
+                    raise ToolError("not_found", f"checkpoint {a.get('checkpoint')!r}: the checkpoints are {', '.join(s.checkpoints) or 'none'} — history_checkpoint takes one.")
+                names = []
+                while d.UndoCount > cp["undo"]:
+                    names.append(d.UndoNames[0])
+                    d.undo()
+            d.recompute()
+            s.snapshot(f"history_{action}")
+            return {"done": action, "steps": names, "undoCount": d.UndoCount, "redoCount": d.RedoCount, "bodies": [o.Label for o in s.bodies()]}
+
+        return run
+
+    core = [
+        Tool("tool_groups", "The tool groups, which are listed and what each holds; enable / disable: [group …] lists or hides them (core stays). Every tool is callable by name either way.", obj({"enable": {"type": "array", "items": {"type": "string"}}, "disable": {"type": "array", "items": {"type": "string"}}}), tool_groups),
+        Tool("guide_read", "How to do a task with these tools: the workflow and the traps the tools' own descriptions do not carry. No topic: the index. topic: a guide whole; section: one of its ## sections.", obj({"topic": {"type": "string"}, "section": {"type": "string"}}), guide_read),
+        Tool("batch", "Run several tools in one call, in order: calls [{ tool, arguments }]. The first refused stops the rest (stopOnError: false runs them all), and with rollback (the default) undoes what the batch changed before it, so it stands or falls whole.", obj({"calls": {"type": "array", "items": {"type": "object"}}, "rollback": {"type": "boolean"}, "stopOnError": {"type": "boolean"}}, ["calls"]), batch),
+        Tool("history_undo", "Undo the last change (steps: how many), as FreeCAD's Edit › Undo does.", obj({"steps": {"type": "integer"}}), history("undo")),
+        Tool("history_redo", "Redo what was undone (steps: how many).", obj({"steps": {"type": "integer"}}), history("redo")),
+        Tool("history_checkpoint", "Mark the session now, to come back to with history_restore or measure from with history_diff { since: its step }.", obj({}), history("checkpoint")),
+        Tool("history_restore", "Undo every change since a checkpoint.", obj({"checkpoint": {"type": "string"}}, ["checkpoint"]), history("restore")),
+    ]
+    for t in core:
+        t.group = "core"
+        server.add(t)
+    return server
