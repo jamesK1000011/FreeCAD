@@ -75,7 +75,10 @@ class Session:
         for o in self.doc.Objects:
             if not self._solid(o):
                 continue
-            if any(p.TypeId not in passive for p in o.InList):
+            # Built into another solid (a boolean, the next feature): not a
+            # part of its own. A drawing, a folder or a spreadsheet using it
+            # leaves it one.
+            if any(p.TypeId not in passive and self._solid(p) for p in o.InList):
                 continue
             try:
                 parent = o.getParentGeoFeatureGroup()
