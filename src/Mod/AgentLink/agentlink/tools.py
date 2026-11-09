@@ -20,7 +20,7 @@ import FreeCAD
 import Part
 
 from . import geometry as geo
-from . import gridfinity, printability, store
+from . import fits_hw, gridfinity, printability, store
 from .protocol import Tool, ToolError
 
 DENSITY = {"pla": 1.24, "petg": 1.27, "abs": 1.04, "asa": 1.07, "pa6-cf": 1.12, "tpu-95a": 1.21}
@@ -312,6 +312,66 @@ class Session:
             out["printing"] = {"pauses": [{"z": round(layer * lh, 3), "afterLayer": layer, "note": f"Insert {mags['count']} {mags['what']}"}]}
         return out
 
+    # ---- fits and hardware ----
+
+    def _cal(self, body=None):
+        """The printer calibration the sizes take: the body's print setup's,
+        else the document's (fit calibrate), else the typical printer's."""
+        s = store.setup_of(self.doc, body, "print") if body else None
+        c = (s or {}).get("fit") or store.read(self.doc, "fit", None)
+        return (c, "calibrated") if c else (dict(fits_hw.DEFAULT_CAL), "none — the typical printer assumed (holes print 0.2 mm small)")
+
+    def fit(self, a):
+        act = a.get("action", "size")
+        if act == "calibrate":
+            c = {"hole": float(a.get("hole", 0.2)), "shaft": float(a.get("shaft", 0.0))}
+            if not (-1 <= c["hole"] <= 1 and -1 <= c["shaft"] <= 1):
+                raise ToolError("invalid_input", "hole and shaft: how much a printed hole comes out small and a peg big, diametral mm, -1 to 1.")
+            store.write(self.doc, "fit", c)
+            return {"calibration": c, "note": "Every hole and fit sized from now on takes it; a print setup's own fit wins for its parts."}
+        if act == "stack":
+            items = a.get("items") or []
+            if not items or not all(isinstance(i.get("nominal"), (int, float)) for i in items):
+                raise ToolError("invalid_input", "items: [{ name, nominal (mm, signed), tol (± mm) }], one or more.")
+            out = fits_hw.stack(items)
+            if "target" in a:
+                lo, hi = a["target"]
+                out["worstCaseOk"] = lo <= out["worstCase"][0] and out["worstCase"][1] <= hi
+                out["rssOk"] = lo <= out["rss"][0] and out["rss"][1] <= hi
+            return out
+        if act == "size":
+            cal, said = self._cal(a.get("body"))
+            nominal = a.get("nominal")
+            if not isinstance(nominal, (int, float)):
+                raise ToolError("invalid_input", "nominal: the size to fit, mm — the bought part's, or the mating part's.")
+            out = {k: round(fits_hw.size_fit(k, nominal, a.get("of", "hole"), cal), 3) for k in ([a["kind"]] if a.get("kind") else fits_hw.FITS)}
+            return {"of": a.get("of", "hole"), "nominal": nominal, "model": out, "printerFit": said}
+        raise ToolError("invalid_input", "action: size, calibrate or stack.")
+
+    def hw_hole(self, a):
+        o = self.body(a.get("body"))
+        kind = a.get("kind")
+        if kind not in fits_hw.KINDS:
+            raise ToolError("invalid_input", f"kind: one of {', '.join(fits_hw.KINDS)}.")
+        at = a.get("at")
+        if not (isinstance(at, list) and len(at) == 3):
+            raise ToolError("invalid_input", "at: [x, y, z], mm — where the hole enters the part, on its face.")
+        cal, said = self._cal(o.Label)
+        bb = o.Shape.BoundBox
+        depth = a.get("depth", "through")
+        depth = bb.DiagonalLength if depth == "through" else float(depth)
+        tool, sizes = fits_hw.hole_tool(kind, a.get("size", "M3"), at, a.get("dir", "-z"), depth, a.get("fit", "normal"), cal)
+        before = o.Shape.Volume
+        cut = geo.clean(o.Shape.cut(tool))
+        removed = before - cut.Volume
+        if removed < 1e-3:
+            raise ToolError("failed", f"The hole cut nothing at {at} going {a.get('dir', '-z')}: put at on the part's face, dir into the material.")
+        o.Shape = cut
+        self.doc.recompute()
+        self.snapshot("hw_hole")
+        s = geo.soundness(cut)
+        return {"body": o.Label, "kind": kind, "size": a.get("size", "M3"), "sizes": sizes, "printerFit": said, "removed": round(removed, 2), "sound": s["ok"], **({"problems": s["problems"]} if not s["ok"] else {}), "step": len(self.steps)}
+
     def export_file(self, a):
         o = self.body(a.get("body"))
         fmt = (a.get("format") or "step").lower()
@@ -417,6 +477,19 @@ def make_tools(session):
                 "waive": {"type": "array", "items": {"type": "object"}},
             }),
             s.part_review,
+        ),
+        Tool(
+            "fit",
+            "Fits for made parts: action size { nominal, of: hole|shaft, kind: press|snug|slide|free (all when left out), body } gives the size to model at, the printer calibration added; calibrate { hole, shaft } keeps how much this printer prints a hole small and a peg big (diametral mm); stack { items: [{ name, nominal, tol }], target: [lo, hi] } adds a tolerance stack worst case and RSS.",
+            obj({"action": {"type": "string", "enum": ["size", "calibrate", "stack"]}, "nominal": {"type": "number"}, "of": {"type": "string", "enum": ["hole", "shaft"]}, "kind": {"type": "string"}, "body": body, "hole": {"type": "number"}, "shaft": {"type": "number"}, "items": {"type": "array", "items": {"type": "object"}}, "target": {"type": "array", "items": {"type": "number"}}}),
+            s.fit,
+        ),
+        Tool(
+            "hw_hole",
+            "Cut a hole for hardware into a body: kind clearance, counterbore, countersink, nut_trap (screws M2 to M8, fit close|normal|loose), insert (heat-set, typical sizes), magnet (size \"6x2\"); at [x,y,z] where it enters, on the face; dir into the material (-z by default; +x … or [x,y,z]); depth mm or \"through\". Sizes from the standards, the printer calibration added; answers the sizes used and whether the body is still sound.",
+            obj({"body": body, "kind": {"type": "string", "enum": list(fits_hw.KINDS)}, "size": {"type": "string"}, "at": {"type": "array", "items": {"type": "number"}}, "dir": {}, "depth": {}, "fit": {"type": "string", "enum": ["close", "normal", "loose"]}}, ["kind", "at"]),
+            s.hw_hole,
+            changes=True,
         ),
         Tool(
             "export_file",

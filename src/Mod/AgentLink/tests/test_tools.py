@@ -52,6 +52,8 @@ class Tools(unittest.TestCase):
         self.assertEqual(c["narrow"], [], "no sliver faces")
         # ScanRuler makes this brief 30233 mm³; the two must agree closely.
         self.assertAlmostEqual(c["volume"], 30233, delta=30233 * 0.01)
+        err, d = self.call("dfm_check", {"body": "Bin"})
+        self.assertFalse(any(f["rule"] == "bridge" for f in d["findings"]), "no bridge: the strip between the feet is a short span")
 
     def test_3_review_follows_the_setup(self):
         # In no setup: printing findings are information only.
@@ -80,6 +82,29 @@ class Tools(unittest.TestCase):
         err, d = self.call("dfm_check", {"body": "Bin"})
         self.assertTrue(any(f.get("waived") for f in d["findings"]), d["findings"])
         self.assertEqual(d["setup"], "Print (S1)")
+
+    def test_35_fits_and_hardware(self):
+        err, f = self.call("fit", {"action": "size", "nominal": 8.0, "of": "hole"})
+        self.assertFalse(err, f)
+        self.assertAlmostEqual(f["model"]["slide"], 8.4, places=3)  # 8 + 0.2 gap + 0.2 the typical printer
+        err, c = self.call("fit", {"action": "calibrate", "hole": 0.15, "shaft": 0.05})
+        err, f = self.call("fit", {"action": "size", "nominal": 8.0, "of": "shaft", "kind": "press"})
+        self.assertAlmostEqual(f["model"]["press"], 7.95, places=3)
+        err, st = self.call("fit", {"action": "stack", "items": [{"nominal": 10, "tol": 0.1}, {"nominal": -9.6, "tol": 0.1}], "target": [0.1, 0.8]})
+        self.assertEqual(st["worstCase"], [0.2, 0.6])
+        self.assertTrue(st["worstCaseOk"])
+        self.call("fit", {"action": "calibrate", "hole": 0.2, "shaft": 0.0})
+        before = self.call("session_state")[1]["bodies"][0]["volume"]
+        err, h = self.call("hw_hole", {"body": "Bin", "kind": "clearance", "size": "M3", "at": [-20, -5, 5.75], "dir": "-z", "depth": "through"})
+        self.assertFalse(err, h)
+        print("\nhole:", json.dumps(h))
+        self.assertTrue(h["sound"])
+        self.assertAlmostEqual(h["sizes"]["clearance"], 3.6, places=3)
+        self.assertAlmostEqual(h["removed"], 3.14159 * 1.8 ** 2 * 5.75, delta=2.0)
+        self.assertLess(self.call("session_state")[1]["bodies"][0]["volume"], before)
+        err, miss = self.call("hw_hole", {"body": "Bin", "kind": "clearance", "size": "M3", "at": [0, 0, 200]})
+        self.assertTrue(miss)
+        self.assertIn("cut nothing", miss["error"]["message"])
 
     def test_4_export_reads_back(self):
         err, s = self.call("export_file", {"body": "Bin", "format": "step"})

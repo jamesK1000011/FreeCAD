@@ -80,7 +80,9 @@ def _regions(shape, keep, tol=0.05):
     regions = []
     for r in out.values():
         a = r["area"]
-        regions.append({"area": a, "at": [round(s / a, 2) for s in r["sum"]], "worst": r["worst"], "span": max(r["hi"][0] - r["lo"][0], r["hi"][1] - r["lo"][1])})
+        regions.append({"area": a, "at": [round(s / a, 2) for s in r["sum"]], "worst": r["worst"], # A bridge spans the short way across, between the walls on either side
+        # of it: a long narrow strip is a short bridge.
+        "span": min(r["hi"][0] - r["lo"][0], r["hi"][1] - r["lo"][1])})
     return sorted(regions, key=lambda r: -r["area"])
 
 
