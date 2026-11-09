@@ -56,10 +56,46 @@ class Session:
 
     # ---- the document ----
 
+    @staticmethod
+    def _solid(o):
+        try:
+            return hasattr(o, "Shape") and not o.Shape.isNull() and bool(o.Shape.Solids)
+        except Exception:
+            return False
+
     def bodies(self):
-        return [o for o in self.doc.Objects if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull() and o.Shape.Solids]
+        """The parts: solid objects that nothing else is built from (a
+        PartDesign Body, not its features; a boolean's result, not its
+        inputs) and that are shown. A folder or a spreadsheet using one
+        does not count."""
+        passive = ("App::DocumentObjectGroup", "Spreadsheet::Sheet", "App::Part")
+        out = []
+        for o in self.doc.Objects:
+            if not self._solid(o):
+                continue
+            if any(p.TypeId not in passive for p in o.InList):
+                continue
+            if getattr(o, "Visibility", True) is False:
+                continue
+            out.append(o)
+        return out
+
+    def switch(self, doc):
+        """Work in another document from now on: its own undo, checkpoints
+        and steps."""
+        self.doc = doc
+        self.doc.UndoMode = 1
+        self.checkpoints = {}
+        self.steps = []
+        self.meta = {}
 
     def body(self, ref):
+        # Named, any solid object answers (a hidden one, a feature); left
+        # out, the one part shown.
+        if ref is not None:
+            for o in self.doc.Objects:
+                if self._solid(o) and (o.Label == ref or o.Name == ref or o.Label.lower() == str(ref).lower()):
+                    return o
         bs = self.bodies()
         if not bs:
             raise ToolError("not_found", "No body in the document: gen_make makes one.")
@@ -624,7 +660,7 @@ def _guide_index():
             if n.endswith(".md"):
                 with open(os.path.join(GUIDES, n), encoding="utf-8") as f:
                     text = f.read()
-                first = next((l.lstrip("# ").strip() for l in text.splitlines() if l.strip()), n)
+                first = next((l.lstrip("# ").strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("<!--")), n)
                 out.append({"topic": n[:-3], "title": first, "chars": len(text)})
     return out
 
