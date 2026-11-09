@@ -117,8 +117,22 @@ class Drawing(unittest.TestCase):
         self.assertIn("scale", e["error"]["message"])
 
     def test_2_exploded(self):
-        err, x = self.call("drawing_exploded", {"steps": [{"title": "The box", "add": ["Box"]}, {"title": "The lid", "add": ["Box lid"], "note": "Four M3 screws."}], "name": "box"})
+        steps = [{"title": "The box", "add": ["Box"]}, {"title": "The lid", "add": ["Box lid"], "note": "Four M3 screws."}]
+        # As printed, the lid lies beside the box: said so.
+        err, x = self.call("drawing_exploded", {"steps": steps, "name": "laid_out"})
         self.assertFalse(err, x)
+        self.assertIn("Box lid", x["warnings"][0])
+        # Put on: turned over about X (the 2 mm plate then lies from z -2 to
+        # 0) and lifted onto the box's 30 mm rim.
+        lid = self.session.body("Box lid")
+        bb = lid.Shape.BoundBox
+        err, r = self.call("object_set", {"object": "Box lid", "values": {"Placement": {"at": [-bb.Center.x, 0, 32], "axis": [1, 0, 0], "angle": 180}}})
+        self.assertFalse(err, r)
+        err, pic = self.call("view_render", {"views": ["iso", "front"], "inline": False, "path": os.path.join(self.dir, "box_assembled.png")})
+        self.assertFalse(err, pic)
+        err, x = self.call("drawing_exploded", {"steps": steps, "name": "box"})
+        self.assertFalse(err, x)
+        self.assertNotIn("warnings", x)
         self.assertEqual(len(x["steps"]), 2)
         self.assertEqual([b["item"] for b in x["bom"]], [1, 2])
         with open(x["manual"], encoding="utf-8") as f:

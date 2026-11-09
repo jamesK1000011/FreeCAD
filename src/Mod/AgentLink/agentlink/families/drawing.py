@@ -318,6 +318,19 @@ def tools(session):
         }
         if missing:
             out["notInAnyStep"] = missing
+        # Each part is lifted over where it is in the document: one lying
+        # apart from everything before it (printed beside the box, say) is
+        # lifted over the wrong place, and the arrow points at nothing.
+        apart = []
+        for o in order:
+            prior = [p for p in order if seen[p.Label] < seen[o.Label]]
+            if not prior:
+                continue
+            b = o.Shape.BoundBox
+            if not any(b.XMin < p.Shape.BoundBox.XMax and p.Shape.BoundBox.XMin < b.XMax and b.YMin < p.Shape.BoundBox.YMax and p.Shape.BoundBox.YMin < b.YMax for p in prior):
+                apart.append(o.Label)
+        if apart:
+            out["warnings"] = [f"{', '.join(apart)} lie apart from the parts before them, not where they go: each part is lifted over its place in the document, so put them there first (object_set Placement — a lid printed top down turns over about X), then again. view_render shows where they are."]
         return out
 
     # ---- patent_figures --------------------------------------------------------------------
