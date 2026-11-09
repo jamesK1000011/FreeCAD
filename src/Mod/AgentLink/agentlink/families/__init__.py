@@ -19,6 +19,11 @@ NAMES = [
     "mass",
     "strength",
     "thread",
+    "cut",
+    "mill",
+    "embed",
+    "printer",
+    "slicing",
 ]
 
 
