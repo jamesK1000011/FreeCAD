@@ -40,6 +40,9 @@ def slice_stl(stl, gcode, settings, timeout=900):
         "--perimeters", str(int(s.get("walls", 2))),
         "--fill-density", f"{int(s.get('infill', 15))}%",
         "--filament-type", str(s.get("filament", "PLA")).upper(),
+        # The slicer's own default density is 0, which reads as 0 g.
+        "--filament-density", str(s.get("density", 1.24)),
+        "--filament-diameter", str(s.get("filamentDiameter", 1.75)),
         "--output", gcode, stl,
     ]
     env = dict(os.environ)
@@ -54,7 +57,8 @@ def slice_stl(stl, gcode, settings, timeout=900):
 
 
 def read_gcode(path):
-    text = open(path, encoding="utf-8", errors="replace").read()
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
 
     def grab(pattern):
         m = re.search(pattern, text)
@@ -70,7 +74,8 @@ def read_gcode(path):
 def insert_pauses(path, pauses, command="M601"):
     """Write each pause in before the first layer whose height is past the
     top of the parts dropped in, so they are printed over. Returns where."""
-    lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
+    with open(path, encoding="utf-8", errors="replace") as f:
+        lines = f.read().split("\n")
     done = []
     todo = sorted(pauses, key=lambda p: p["z"])
     out = []
@@ -85,5 +90,6 @@ def insert_pauses(path, pauses, command="M601"):
                 done.append({"z": z, "note": p["note"]})
         out.append(line)
         i += 1
-    open(path, "w", encoding="utf-8").write("\n".join(out))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out))
     return done

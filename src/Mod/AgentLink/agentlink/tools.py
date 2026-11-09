@@ -378,7 +378,9 @@ class Session:
         if not setup:
             raise ToolError("invalid_state", f"{o.Label} is in no print setup: slicing prints it — setup add {{ type: \"print\", bodies: [\"{o.Label}\"] }} once the person says it is printed.")
         settings = {**setup, **(a.get("settings") or {})}
-        settings["filament"] = (store.materials(self.doc).get(o.Label) or "pla").split("-")[0]
+        mat = store.materials(self.doc).get(o.Label) or "pla"
+        settings["filament"] = mat.split("-")[0]
+        settings["density"] = DENSITY.get(mat, 1.24)
         import Mesh  # noqa: F401
         import MeshPart
 

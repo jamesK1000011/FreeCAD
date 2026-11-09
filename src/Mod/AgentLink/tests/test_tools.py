@@ -127,7 +127,8 @@ class Tools(unittest.TestCase):
         self.assertEqual(len(r["pauses"]), 1)
         self.assertGreater(r["pauses"][0]["z"], 2.4)
         self.assertLess(r["pauses"][0]["z"], 2.8)
-        self.assertIn("M601 ; Insert 8 6x2 magnets", open(r["gcode"]).read())
+        with open(r["gcode"]) as f:
+            self.assertIn("M601 ; Insert 8 6x2 magnets", f.read())
 
     def test_5_diff_and_refusals(self):
         err, d = self.call("history_diff", {"since": 0})
