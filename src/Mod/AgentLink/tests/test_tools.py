@@ -53,20 +53,33 @@ class Tools(unittest.TestCase):
         # ScanRuler makes this brief 30233 mm³; the two must agree closely.
         self.assertAlmostEqual(c["volume"], 30233, delta=30233 * 0.01)
 
-    def test_3_review_and_waive(self):
-        err, r = self.call("part_review", {"body": "Bin", "spec": {"minWall": 0.8, "massMax": 40}})
+    def test_3_review_follows_the_setup(self):
+        # In no setup: printing findings are information only.
+        err, r = self.call("part_review", {"body": "Bin", "spec": {"minWall": 0.8}})
         self.assertFalse(err, r)
-        self.assertIn(r["verdict"], ("pass", "fix"))
-        self.assertGreater(r["figures"]["mass"], 20)
-        self.assertLess(r["figures"]["mass"], 40)
-        thin = [f for f in r["findings"] if f["source"] == "wall" and f["severity"] == "error"]
-        print("\nreview:", json.dumps(r["findings"]), "\nfigures:", json.dumps(r["figures"]))
-        if thin:
-            err, r2 = self.call("part_review", {"body": "Bin", "spec": {"minWall": 0.8, "massMax": 40}, "waive": [{"at": thin[0]["at"], "reason": "stacking lip"}]})
-            print("waived:", json.dumps(r2["findings"]))
-            # The run waived comes back as info, not an error.
-            self.assertTrue(any(f["severity"] == "info" and "waived" in f["says"] for f in r2["findings"]), r2["findings"])
-            self.assertNotIn(thin[0]["at"], [f.get("at") for f in r2["findings"] if f["severity"] == "error"])
+        self.assertEqual(r["process"], "unknown")
+        self.assertIn("ifPrinted", r)
+        # Recorded as printed, with the spec kept: printing findings judge it.
+        err, a = self.call("setup", {"action": "add", "type": "print", "bodies": ["Bin"], "settings": {"printer": "h2d", "nozzle": 0.4, "layerHeight": 0.2}})
+        self.assertFalse(err, a)
+        self.assertEqual(a["added"]["id"], "S1")
+        err, dup = self.call("setup", {"action": "add", "type": "print", "bodies": ["Bin"]})
+        self.assertTrue(dup)
+        self.assertIn("S1", dup["error"]["message"])
+        self.call("part_spec", {"spec": {"minWall": 0.8, "massMax": 40}, "material": "pla"})
+        err, r = self.call("part_review", {"body": "Bin"})
+        self.assertEqual(r["process"], "printed")
+        print("\nreview:", json.dumps(r["findings"]), "\nfigures:", json.dumps(r["figures"]), "\nprinting:", json.dumps(r.get("printing")))
+        self.assertEqual(r["printing"]["pauses"][0]["afterLayer"], 12)
+        lip = [f for f in r["findings"] if "thin-wall" in f["says"] and f["at"][2] >= 28]
+        self.assertTrue(lip, "the lip's thin top is found")
+        err, r2 = self.call("part_review", {"body": "Bin", "waive": [{"rule": "thin-wall", "at": f["at"], "reason": "stacking lip"} for f in lip]})
+        print("waived:", json.dumps(r2["findings"]), r2["verdict"])
+        self.assertFalse(any("thin-wall" in f["says"] and f["at"][2] >= 28 for f in r2["findings"]))
+        # The waivers are kept: a check now says them waived.
+        err, d = self.call("dfm_check", {"body": "Bin"})
+        self.assertTrue(any(f.get("waived") for f in d["findings"]), d["findings"])
+        self.assertEqual(d["setup"], "Print (S1)")
 
     def test_4_export_reads_back(self):
         err, s = self.call("export_file", {"body": "Bin", "format": "step"})
