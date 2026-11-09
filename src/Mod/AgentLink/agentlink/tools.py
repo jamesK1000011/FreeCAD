@@ -375,9 +375,21 @@ class Session:
         walls = int((setup or {}).get("walls", 2))
         infill = float((setup or {}).get("infill", 15)) / 100
         if printed:
-            shell = min(vol, shape.Area / 2 * walls * LINE * 2)
-            body_g = (shell + infill * (vol - shell)) * rho / 1000.0
-            as_ = f"printed: {walls} walls of {LINE} mm, {infill * 100:.0f}% infill (an estimate)"
+            # Through the part along each wall ray: solid where the walls
+            # from both faces fill the thickness, infill in what they leave.
+            # Each ray stands for its patch of surface, so summing over the
+            # rays weighs by volume; each column is read from both of its
+            # faces, which the ratio cancels.
+            shell2 = 2 * walls * LINE
+            reads = [r[0] for r in (geo.least_wall(shape).get("readings") or [])]
+            if reads:
+                solid = sum(min(t, shell2) for t in reads)
+                total = sum(reads)
+                f = (solid + infill * (total - solid)) / total
+            else:
+                f = 1.0
+            body_g = vol * f * rho / 1000.0
+            as_ = f"printed: {walls} walls of {LINE} mm, {infill * 100:.0f}% infill — {f * 100:.0f}% of the solid, from the walls read (an estimate; the slicer's figure is the authority)"
         else:
             body_g = vol * rho / 1000.0
             as_ = "solid"
