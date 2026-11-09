@@ -20,7 +20,7 @@ import FreeCAD
 import Part
 
 from . import geometry as geo
-from . import fits_hw, gridfinity, printability, store
+from . import fits_hw, gridfinity, printability, slicer, store
 from .protocol import Tool, ToolError
 
 DENSITY = {"pla": 1.24, "petg": 1.27, "abs": 1.04, "asa": 1.07, "pa6-cf": 1.12, "tpu-95a": 1.21}
@@ -372,6 +372,41 @@ class Session:
         s = geo.soundness(cut)
         return {"body": o.Label, "kind": kind, "size": a.get("size", "M3"), "sizes": sizes, "printerFit": said, "removed": round(removed, 2), "sound": s["ok"], **({"problems": s["problems"]} if not s["ok"] else {}), "step": len(self.steps)}
 
+    def slice(self, a):
+        o = self.body(a.get("body"))
+        setup = store.setup_of(self.doc, o.Label, "print")
+        if not setup:
+            raise ToolError("invalid_state", f"{o.Label} is in no print setup: slicing prints it — setup add {{ type: \"print\", bodies: [\"{o.Label}\"] }} once the person says it is printed.")
+        settings = {**setup, **(a.get("settings") or {})}
+        settings["filament"] = (store.materials(self.doc).get(o.Label) or "pla").split("-")[0]
+        import Mesh  # noqa: F401
+        import MeshPart
+
+        base = os.path.join(self.out_dir, a.get("name") or o.Label.replace(" ", "_"))
+        stl, gcode = base + ".stl", base + ".gcode"
+        MeshPart.meshFromShape(Shape=o.Shape, LinearDeflection=0.01, AngularDeflection=0.0873, Relative=False).write(stl)
+        try:
+            exe = slicer.slice_stl(stl, gcode, settings)
+        except FileNotFoundError as e:
+            raise ToolError("unavailable", str(e))
+        except RuntimeError as e:
+            raise ToolError("failed", str(e))
+        read = slicer.read_gcode(gcode)
+        mags = (self.meta.get(o.Label) or {}).get("encased")
+        pauses = []
+        if mags:
+            pauses = slicer.insert_pauses(gcode, [{"z": mags["top"], "note": f"Insert {mags['count']} {mags['what']}"}], a.get("pauseCommand", "M601"))
+        return {
+            "body": o.Label,
+            "slicer": os.path.basename(exe),
+            "gcode": gcode,
+            "bytes": os.path.getsize(gcode),
+            **read,
+            "setup": f"{setup['name']} ({setup['id']})",
+            **({"pauses": pauses} if mags else {}),
+            "note": "Sliced with the slicer's own defaults for anything the setup leaves unset; the printer's profile in the slicer is the authority. Starting the print is the person's.",
+        }
+
     def export_file(self, a):
         o = self.body(a.get("body"))
         fmt = (a.get("format") or "step").lower()
@@ -490,6 +525,12 @@ def make_tools(session):
             obj({"body": body, "kind": {"type": "string", "enum": list(fits_hw.KINDS)}, "size": {"type": "string"}, "at": {"type": "array", "items": {"type": "number"}}, "dir": {}, "depth": {}, "fit": {"type": "string", "enum": ["close", "normal", "loose"]}}, ["kind", "at"]),
             s.hw_hole,
             changes=True,
+        ),
+        Tool(
+            "slice",
+            "Slice a body in a print setup with the slicer on this computer (PrusaSlicer's command line; AGENTLINK_SLICER names another binary): the setup's layers, nozzle, walls and infill, the part's material as the filament. Answers the G-code's path, print time, filament (g, mm) and layers; parts encased at a pause (magnets) get it written into the G-code before the first layer over them. Refused for a part in no print setup.",
+            obj({"body": body, "settings": {"type": "object"}, "name": {"type": "string"}, "pauseCommand": {"type": "string"}}),
+            s.slice,
         ),
         Tool(
             "export_file",

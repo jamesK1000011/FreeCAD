@@ -114,6 +114,21 @@ class Tools(unittest.TestCase):
         self.assertFalse(err, m)
         self.assertTrue(m["verify"]["closed"])
 
+    def test_45_slice_with_the_magnet_pause(self):
+        from agentlink import slicer
+
+        if not slicer.find_slicer():
+            self.skipTest("no slicer on this machine")
+        err, r = self.call("slice", {"body": "Bin"})
+        self.assertFalse(err, r)
+        print("\nslice:", json.dumps(r))
+        self.assertGreater(r["layers"], 100)
+        self.assertTrue(r["filamentG"] and 10 < r["filamentG"] < 60, r)
+        self.assertEqual(len(r["pauses"]), 1)
+        self.assertGreater(r["pauses"][0]["z"], 2.4)
+        self.assertLess(r["pauses"][0]["z"], 2.8)
+        self.assertIn("M601 ; Insert 8 6x2 magnets", open(r["gcode"]).read())
+
     def test_5_diff_and_refusals(self):
         err, d = self.call("history_diff", {"since": 0})
         self.assertTrue(d["changed"])
