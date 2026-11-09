@@ -83,7 +83,7 @@ def describe_edge(e, i):
         out["dir"] = geo.vec(line_dir(e))
     elif t in ("circle", "ellipse"):
         c = e.Curve
-        out.update(center=geo.vec(c.Center), axis=geo.vec(c.Axis))
+        out.update(center=geo.vec(c.Location), axis=geo.vec(c.Axis))
         if t == "circle":
             out["radius"] = r(c.Radius)
             out["closed"] = e.isClosed()
