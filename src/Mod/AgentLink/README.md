@@ -2,23 +2,28 @@
 # Agent Link for FreeCAD (spike)
 
 An agent drives FreeCAD over the Model Context Protocol, in ScanRuler's
-manner: few tools, one call per job, small answers in millimetres, and
-refusals that say what to do instead.
+manner: one call per job, small answers in millimetres and grams, and
+refusals that say what to do instead. There are 117 tools in 23 groups.
+The lean list (the default) shows the core and the make-check-verdict
+loop; `tool_groups` shows the rest. Any tool can be called by name
+whether it is listed or not. Every change is one FreeCAD undo step.
 
-| Tool | What it does |
+| Group | Tools |
 |---|---|
-| `session_state` | What the document holds: each body's volume, area, faces, solids and size |
-| `gen_make` | A Gridfinity bin made to size (`measure: true` sizes it without making it). Magnets come back as encased, with the height to pause at |
-| `body_check` | Valid, closed, one solid, no sliver faces or very short edges |
-| `setup` | How each part is made (print, cut, mill) and that process's settings, kept with the document |
-| `part_spec` | The limits parts must meet (least wall, mass) and what each is made of |
-| `dfm_check` | Printability with the part's print setup: thin walls, overhangs, bridges, small holes, bed contact, tall and thin, build volume. `waive` keeps a finding accepted on purpose |
-| `part_review` | One verdict: pass, fix or unknown. How the part is made decides which checks judge it |
-| `fit` | Hole and peg sizes for press, snug, slide and free fits; the printer's calibration; tolerance stacks |
-| `hw_hole` | Clearance, counterbore, countersink, nut-trap, heat-set insert and magnet holes at standard sizes |
-| `slice` | PrusaSlicer's command line with the setup's settings: time, filament and layers, with the magnet pause written into the G-code |
-| `export_file` | STEP or STL, read back to verify |
-| `history_diff` | What changed since a step, per body |
+| core | `session_state`, `tool_groups`, `guide_read`, `batch` (rolls back whole), `history_undo` / `_redo` / `_checkpoint` / `_restore` / `_diff`, `body_check`, `export_file` |
+| doc | documents, objects and their properties, recompute, import and export (STEP, IGES, BREP, STL, OBJ, 3MF, DXF), `view_render` (window only) |
+| model | Part primitives, booleans, transforms and arrays, fillet, chamfer, offset, shell, extrude, revolve, loft, sweep |
+| measure | `shape_query` (faces and edges picked by kind, normal, radius, place: the references other tools take), measure, section, `measure_mass`, clearance |
+| sketch, feature, param | PartDesign bodies, sketches and constraints with a ready-for-feature check; pad, pocket, revolve, groove, hole (ISO threads), fillet, chamfer, draft, shell, mirror, patterns, loft, pipe; spreadsheet parameters bound to features |
+| parts | Gridfinity bins (`gen_make`) and baseplates, project boxes and board enclosures (`gen_part`) |
+| make | setups (print, cut, mill), part spec and material, printability (`dfm_check`), `part_review`, `slice` |
+| fits, embed | fits, printer calibration, tolerance stacks, hardware holes; parts sealed in mid-print with their pauses |
+| material, mass, strength, thread | FreeCAD's material library and custom materials; mass as printed, centre of mass, ballast to a target; FEM strength with CalculiX (print-aware); thread tables, identification and cutting |
+| cut, mill | sheet-part checks with DXF/SVG nested on the sheet; milling checks with STEP and a setup sheet |
+| slice, printer | PrusaSlicer, OrcaSlicer and Bambu Studio command lines with pauses written in; OctoPrint, Moonraker and PrusaLink printers. Starting, pausing or stopping a print needs the person's typed confirmation |
+| drawing, electronics, share | TechDraw sheets, exploded assembly steps with a bill of materials, patent figures and a draft for an attorney's review; KiCad board import, board enclosures, PCB order packages, printed wiring channels; a library pack with licence, credits and private paths removed |
+
+Each group has a guide (`guide_read`).
 
 ## Two ways to run it
 
