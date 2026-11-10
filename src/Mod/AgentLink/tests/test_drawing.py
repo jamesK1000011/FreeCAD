@@ -134,6 +134,17 @@ class Drawing(unittest.TestCase):
             svg = f.read()
         for t in ("AL-001", "PETG", "ISO 2768-m", "30 ±0.1", "4× ⌀"):
             self.assertIn(t, svg)
+        # The same dims and callouts on the TechDraw page, measured by TechDraw.
+        print("page:", json.dumps(d.get("page")))
+        if d["techdrawPage"]:
+            on = d["page"].get("dimensions") or []
+            self.assertFalse(d["page"].get("notOnPage"), d["page"])
+            self.assertTrue(any(x["type"] == "DistanceY" and abs(x["measured"] - 30) < 0.01 for x in on), on)
+            self.assertTrue(any(x["type"] == "Diameter" for x in on), on)
+            for x in on:
+                self.assertNotIn("warning", x)
+            texts = [o.FormatSpec for o in self.session.doc.Objects if o.TypeId == "TechDraw::DrawViewDimension"]
+            self.assertTrue(any(t.startswith("4× ") for t in texts), texts)
         err, e = self.call("drawing_make", {"bodies": ["Box"], "dims": [{"view": "front", "kind": "diameter", "a": [0, 0, 0], "fit": "Q9"}]})
         self.assertTrue(err)
 

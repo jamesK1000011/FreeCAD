@@ -69,7 +69,7 @@ def _write(s, base, sheet, kinds):
     return paths
 
 
-def _techdraw_page(doc, objs, placed, scale, paper, label, dims):
+def _techdraw_page(doc, objs, placed, scale, paper, label, dims, specs=(), drawn=None):
     """A TechDraw page holding the same views, for the person to carry on
     with in the GUI: (page label, what was made) or (None, why not)."""
     try:
@@ -106,9 +106,185 @@ def _techdraw_page(doc, objs, placed, scale, paper, label, dims):
                         except Exception:  # an extent TechDraw cannot read headless: the files carry it
                             pass
             doc.recompute()
-        return page.Label, {"views": len(made), "extentDimensions": dimmed, "template": os.path.basename(path) if path else None}
+        out = {"views": len(made), "extentDimensions": dimmed, "template": os.path.basename(path) if path else None}
+        if specs:
+            done, missed = _page_dims(doc, page, made, drawn, specs)
+            out["dimensions"] = done
+            if missed:
+                out["notOnPage"] = missed
+        return page.Label, out
     except Exception as e:
         return None, f"the TechDraw page could not be made here ({e}); the files stand on their own"
+
+
+# ---- dimensions on the TechDraw page ---------------------------------------------------
+
+def _view_frame(v, box):
+    """How a view's own 2D geometry lies against views.project's: (scale,
+    sx, sy, tx, ty) with td = (s·sx·x + tx, s·sy·y + ty), fitted on the
+    visible extents and the sign of y checked against the vertices. Each
+    release centres, scales and flips its geometry its own way."""
+    import Part
+
+    edges = list(v.getVisibleEdges() or [])
+    if not edges:
+        return None
+    bb = Part.makeCompound(edges).BoundBox
+    w, h = box[2] - box[0], box[3] - box[1]
+    if max(w, h) < 1e-9:
+        return None
+    s = (bb.XLength / w) if w >= h else (bb.YLength / h)
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    best = None
+    pts = [(p.X, p.Y) for p in _vertices(v)]
+    for sx in (1, -1):
+        for sy in (1, -1):
+            fr = (s, sx, sy, bb.Center.x - s * sx * cx, bb.Center.y - s * sy * cy)
+            best = min(best or (math.inf, fr), (_fit_score(fr, pts, box), fr))
+    return best[1]
+
+
+def _fit_score(fr, pts, box):
+    # The box's corners mapped should land on the view's vertices for a
+    # part with corners; a round one ties, and any frame does.
+    s, sx, sy, tx, ty = fr
+    if not pts:
+        return 0.0
+    total = 0.0
+    for x, y in ((box[0], box[1]), (box[2], box[3]), (box[0], box[3]), (box[2], box[1])):
+        X, Y = s * sx * x + tx, s * sy * y + ty
+        total += min(math.hypot(X - px, Y - py) for px, py in pts)
+    return total
+
+
+def _vertices(v):
+    out, i = [], 0
+    while True:
+        try:
+            g = v.getVertexByIndex(i)
+        except Exception:
+            break
+        if g is None:
+            break
+        out.append(g.Point if hasattr(g, "Point") else g)
+        i += 1
+        if i > 20000:
+            break
+    return out
+
+
+def _edges(v):
+    out, i = [], 0
+    while True:
+        try:
+            g = v.getEdgeByIndex(i)
+        except Exception:
+            break
+        if g is None:
+            break
+        out.append(g)
+        i += 1
+        if i > 20000:
+            break
+    return out
+
+
+def _to_view(fr, p2):
+    s, sx, sy, tx, ty = fr
+    return (s * sx * p2[0] + tx, s * sy * p2[1] + ty)
+
+
+def _page_dims(doc, page, made, drawn, specs):
+    """The dimensions and hole callouts asked for, on the TechDraw page as
+    its own dimensions on the views' vertices and circles — measured by
+    TechDraw, so they follow the part — each read back against the value the
+    files carry. Returns (dims made, what could not be)."""
+    import Part
+
+    by_view = {v.Label.lower(): v for v in made}
+    frames, done, missed = {}, [], []
+    for sp in specs:
+        view = sp["view"]
+        v = by_view.get(view)
+        if v is None:
+            missed.append({**_brief(sp), "why": "the view is not on the page"})
+            continue
+        if view not in frames:
+            frames[view] = _view_frame(v, drawn[view]["box"])
+        fr = frames[view]
+        if fr is None:
+            missed.append({**_brief(sp), "why": "the view has no geometry headless"})
+            continue
+        tol = max(0.05, 0.002 * fr[0] * max(drawn[view]["box"][2] - drawn[view]["box"][0], drawn[view]["box"][3] - drawn[view]["box"][1]))
+        refs = []
+        if sp["type"] in ("Diameter", "Radius"):
+            c = _to_view(fr, sp["centre"])
+            r = sp["radius"] * fr[0]
+            for i, e in enumerate(_edges(v)):
+                cu = getattr(e, "Curve", None)
+                if isinstance(cu, (Part.Circle, Part.ArcOfCircle)) or hasattr(cu, "Radius"):
+                    try:
+                        if abs(cu.Radius - r) < tol and math.hypot(cu.Center.x - c[0], cu.Center.y - c[1]) < tol:
+                            refs = [(v, f"Edge{i}")]
+                            break
+                    except Exception:
+                        continue
+        else:
+            verts = _vertices(v)
+            for p2 in sp["points"]:
+                q = _to_view(fr, p2)
+                near = min(range(len(verts)), key=lambda k: math.hypot(verts[k].x - q[0], verts[k].y - q[1]), default=None)
+                if near is None or math.hypot(verts[near].x - q[0], verts[near].y - q[1]) > tol:
+                    refs = []
+                    break
+                refs.append((v, f"Vertex{near}"))
+        if not refs:
+            missed.append({**_brief(sp), "why": "no vertex or circle of the view there (a hidden line, or a point TechDraw does not draw)"})
+            continue
+        try:
+            dim = doc.addObject("TechDraw::DrawViewDimension", "Dimension")
+            dim.Type = sp["type"]
+            dim.MeasureType = "Projected"
+            dim.References2D = refs
+            page.addView(dim)
+            if sp.get("label"):
+                dim.Arbitrary = True
+                dim.FormatSpec = sp["label"]
+            else:
+                spec = dim.FormatSpec
+                if sp.get("fit"):
+                    spec = f"{spec} {sp['fit']}"
+                if sp.get("prefix"):
+                    spec = sp["prefix"] + spec
+                dim.FormatSpec = spec
+            if sp.get("over") is not None or sp.get("under") is not None:
+                dim.EqualTolerance = False
+                dim.OverTolerance = f"{sp.get('over') or 0} mm"
+                dim.UnderTolerance = f"{sp.get('under') or 0} mm"
+            doc.recompute()
+            raw = float(dim.getRawValue())
+        except Exception as e:
+            missed.append({**_brief(sp), "why": f"TechDraw refused it: {e}"})
+            continue
+        ok = abs(raw - sp["value"]) <= max(0.01, 0.002 * sp["value"])
+        done.append({**_brief(sp), "dimension": dim.Name, "measured": round(raw, 4), **({} if ok else {"warning": f"TechDraw measures {raw:.4g}, not {sp['value']:.4g}: check its references in the GUI"})})
+    return done, missed
+
+
+def _brief(sp):
+    return {"view": sp["view"], "type": sp["type"], "value": round(sp["value"], 4)}
+
+
+def _tolerance(nominal, d):
+    """(over, under) mm from a fit or plus/minus; (None, None) for neither."""
+    if d.get("fit"):
+        return iso286.limits(nominal, d["fit"])
+    if d.get("plus") is not None or d.get("minus") is not None:
+        p = float(d.get("plus") or 0)
+        m = d.get("minus")
+        m = -abs(float(m)) if m is not None else -p
+        return p, m
+    return None, None
 
 
 # ---- feature dimensions, hole callouts, the title block --------------------------------
@@ -289,7 +465,7 @@ def tools(session):
                     dims.append({"view": v, "axis": va, "mm": round(extent[va], 3)})
         # Feature dimensions asked for, each in its view: lengths between two
         # places, diameters and radii of round edges, with a tolerance or fit.
-        placed = []
+        placed, specs = [], []
         for i, d in enumerate(a.get("dims") or []):
             if not isinstance(d, dict) or d.get("view") not in drawn:
                 raise ToolError("invalid_input", f"dims.{i}: {{ view (one drawn: {', '.join(want)}), kind: length|diameter|radius, a, b, offset, fit | plus/minus }}.")
@@ -311,6 +487,9 @@ def tools(session):
                     value = math.hypot(b2[0] - a2[0], b2[1] - a2[1])
                 label = _callout(value, d)
                 sheet.dimension(pa, pb, float(d.get("offset", 8)), label)
+                over, under = _tolerance(value, d)
+                specs.append({"view": v, "type": {"h": "DistanceX", "v": "DistanceY"}.get(axis, "Distance"), "points": [a2, b2], "value": value,
+                              "fit": d.get("fit"), "over": over, "under": under, "label": d.get("label")})
             elif kind in ("diameter", "radius"):
                 import Part
 
@@ -321,6 +500,9 @@ def tools(session):
                 label = _callout(value, d, diameter=kind == "diameter")
                 if kind == "radius":
                     label = "R" + label
+                over, under = _tolerance(value, d)
+                specs.append({"view": v, "type": kind.capitalize(), "centre": views.point(pa3, v), "radius": rr, "value": value,
+                              "fit": d.get("fit"), "over": over, "under": under, "label": d.get("label")})
                 ang = math.radians(float(d.get("angle", 45)))
                 rp = rr * scale
                 tip = (pa[0] + rp * math.cos(ang), pa[1] - rp * math.sin(ang))
@@ -353,6 +535,9 @@ def tools(session):
                 sheet.arrow(tip, elbow)
                 sheet.text(tail[0] - 1, tail[1] - 1, 3.0, label, "end")
                 holes_out.append({"view": hv, "diameter": dia, "count": len(centres), "label": label})
+                over, under = _tolerance(dia, {"fit": fit}) if fit else (None, None)
+                specs.append({"view": hv, "type": "Diameter", "centre": views.point(c0, hv), "radius": dia / 2, "value": dia,
+                              "fit": fit, "over": over, "under": under, "prefix": f"{len(centres)}× " if len(centres) > 1 else ""})
         tb = dict(a.get("titleBlock") or {})
         tb.setdefault("title", name)
         tb.setdefault("scale", sheets.scale_text(scale))
@@ -367,7 +552,7 @@ def tools(session):
         paths = _write(s, _safe(a.get("file") or name), sheet, ("svg", "pdf", "dxf"))
         page, made = (None, "not asked for")
         if a.get("page", True):
-            page, made = _techdraw_page(s.doc, objs, [(v, L["centres"][v]) for v in want], scale, paper, f"{name} drawing", a.get("dimensions", True))
+            page, made = _techdraw_page(s.doc, objs, [(v, L["centres"][v]) for v in want], scale, paper, f"{name} drawing", a.get("dimensions", True), specs, drawn)
         s.snapshot("drawing_make")
         out = {
             "files": paths,
@@ -383,7 +568,7 @@ def tools(session):
         }
         out["page" if page else "pageNote"] = made
         if a.get("dimensions", True):
-            out["note"] = "Overall sizes once each, and the dims and hole callouts asked for. The PDF and DXF are written from the same lines as the SVG, with or without the GUI; the TechDraw page carries the views and overall sizes only."
+            out["note"] = "Overall sizes once each, and the dims and hole callouts asked for. The PDF and DXF are written from the same lines as the SVG, with or without the GUI; the TechDraw page carries them too, as TechDraw dimensions measured on its views (page.dimensions; any it could not place under page.notOnPage)."
         return out
 
     # ---- drawing_exploded ------------------------------------------------------------------
