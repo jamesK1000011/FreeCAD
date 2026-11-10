@@ -43,6 +43,8 @@ TYPES = {
             "up": "Which way of the part stands up on the bed: +z as modelled (only +z in this build).",
             "walls": "Walls (perimeters).",
             "infill": "Infill, percent.",
+            "topLayers": "Solid layers on top (5 to start).",
+            "bottomLayers": "Solid layers at the bottom (4 to start).",
         },
     },
     "cut": {"label": "Cut", "settings": {"machine": "laser, waterjet, plasma or router.", "thickness": "The sheet, mm.", "kerf": "The cut's width, mm.", "material": "The sheet's material, for the least feature.", "sheet": "The sheet's size, [width, height] mm."}},

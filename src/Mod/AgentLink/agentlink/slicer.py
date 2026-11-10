@@ -39,6 +39,11 @@ def slice_stl(stl, gcode, settings, timeout=900):
         "--nozzle-diameter", str(s.get("nozzle", 0.4)),
         "--perimeters", str(int(s.get("walls", 2))),
         "--fill-density", f"{int(s.get('infill', 15))}%",
+        # The skins as the setup says, layers only: the review's mass reads them so.
+        "--top-solid-layers", str(int(s.get("topLayers", 5))),
+        "--bottom-solid-layers", str(int(s.get("bottomLayers", 4))),
+        "--top-solid-min-thickness", "0",
+        "--bottom-solid-min-thickness", "0",
         "--filament-type", str(s.get("filament", "PLA")).upper(),
         # The slicer's own default density is 0, which reads as 0 g.
         "--filament-density", str(s.get("density", 1.24)),

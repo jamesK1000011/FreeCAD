@@ -63,6 +63,8 @@ def minimal_profiles(settings, folder):
         "type": "process", "name": "AgentLink process", "from": "User", "instantiation": "true",
         "layer_height": lh, "initial_layer_print_height": str(settings.get("firstLayer", lh)),
         "wall_loops": str(int(settings.get("walls", 2))), "sparse_infill_density": f"{int(settings.get('infill', 15))}%",
+        "top_shell_layers": str(int(settings.get("topLayers", 5))), "bottom_shell_layers": str(int(settings.get("bottomLayers", 4))),
+        "top_shell_thickness": "0", "bottom_shell_thickness": "0",
     }
     filament = {
         "type": "filament", "name": f"AgentLink {mat}", "from": "User", "instantiation": "true",

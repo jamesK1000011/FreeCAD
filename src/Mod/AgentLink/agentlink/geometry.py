@@ -206,16 +206,18 @@ def least_wall(shape, spacing=3.0, reach=12.0, cap=600):
         budget -= taken
     least = None
     readings = []
+    normals = []
     hits = _ray_hits(shape, [(p, nrm) for (p, nrm, _) in samples], reach)
     for (p, nrm, step), t in zip(samples, hits):
         if t is None:
             continue
         readings.append((t, vec(p), step))
+        normals.append((nrm.x, nrm.y, nrm.z))
         if least is None or t < least[0]:
             least = (t, p)
     if least is None:
         return {"least": None, "samples": len(samples), "read": 0}
-    return {"least": round(least[0], 3), "at": vec(least[1]), "samples": len(samples), "read": len(readings), "readings": readings, "spacing": spacing}
+    return {"least": round(least[0], 3), "at": vec(least[1]), "samples": len(samples), "read": len(readings), "readings": readings, "normals": normals, "spacing": spacing}
 
 
 def thin_runs(readings, limit, link):

@@ -380,16 +380,29 @@ class Session:
             # Each ray stands for its patch of surface, so summing over the
             # rays weighs by volume; each column is read from both of its
             # faces, which the ratio cancels.
-            shell2 = 2 * walls * LINE
-            reads = [r[0] for r in (geo.least_wall(shape).get("readings") or [])]
+            # A ray in from a side wall crosses the perimeters at each end; one
+            # in from a top or bottom face crosses the solid layers — the
+            # bottom skin at one end, the top skin at the other. A sloped face
+            # is between the two, by how far it faces up or down.
+            lh = float((setup or {}).get("layerHeight", 0.2))
+            tops = int((setup or {}).get("topLayers", 5))
+            bottoms = int((setup or {}).get("bottomLayers", 4))
+            side_shell = 2 * walls * LINE
+            skin_shell = (tops + bottoms) * lh
+            wl = geo.least_wall(shape)
+            reads = [r[0] for r in (wl.get("readings") or [])]
+            nz = [abs(n[2]) for n in (wl.get("normals") or [])] or [0.0] * len(reads)
             if reads:
-                solid = sum(min(t, shell2) for t in reads)
+                solid = 0.0
+                for t, z in zip(reads, nz):
+                    flat = min(1.0, max(0.0, (z - 0.5) / 0.4))  # under 30° off flat: skin
+                    solid += min(t, flat * skin_shell + (1 - flat) * side_shell)
                 total = sum(reads)
                 f = (solid + infill * (total - solid)) / total
             else:
                 f = 1.0
             body_g = vol * f * rho / 1000.0
-            as_ = f"printed: {walls} walls of {LINE} mm, {infill * 100:.0f}% infill — {f * 100:.0f}% of the solid, from the walls read (an estimate; the slicer's figure is the authority)"
+            as_ = f"printed: {walls} walls of {LINE} mm, {tops} top and {bottoms} bottom layers of {lh} mm, {infill * 100:.0f}% infill — {f * 100:.0f}% of the solid, from the walls read (an estimate; the slicer's figure is the authority)"
         else:
             body_g = vol * rho / 1000.0
             as_ = "solid"
@@ -674,7 +687,7 @@ def make_tools(session):
         Tool("body_check", "Whether a body is sound: valid, closed, one solid, no sliver faces (under 0.01 mm wide) or very short edges, with where each problem is.", obj({"body": body}), s.body_check),
         Tool(
             "setup",
-            "How each part is made, recorded: action list (the setups and the kinds), of { body }, add { type: print|cut|mill, bodies, settings, name }, set { id, bodies | add | remove, settings (null drops one), name }, remove { id }. Print settings: printer (generic, bed-slinger, corexy, h2d), nozzle, layerHeight, firstLayer, walls, infill. A body in no setup has no process: ask, then add. Kept with the document.",
+            "How each part is made, recorded: action list (the setups and the kinds), of { body }, add { type: print|cut|mill, bodies, settings, name }, set { id, bodies | add | remove, settings (null drops one), name }, remove { id }. Print settings: printer (generic, bed-slinger, corexy, h2d), nozzle, layerHeight, firstLayer, walls, infill, topLayers, bottomLayers. A body in no setup has no process: ask, then add. Kept with the document.",
             obj({"action": {"type": "string", "enum": ["list", "of", "add", "set", "remove"]}, "type": {"type": "string"}, "id": {"type": "string"}, "name": {"type": "string"}, "body": body, "bodies": {"type": "array", "items": {"type": "string"}}, "add": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "array", "items": {"type": "string"}}, "settings": {"type": "object"}}),
             s.setup,
             changes=True,
