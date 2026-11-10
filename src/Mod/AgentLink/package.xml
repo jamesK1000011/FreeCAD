@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no" ?>
 <package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
   <name>Agent Link</name>
-  <description>Drive FreeCAD from an agent over the Model Context Protocol: six tools to make, check, review and export parts, in the GUI or headless.</description>
-  <version>0.1.0</version>
-  <date>2026-11-09</date>
+  <description>Drive FreeCAD from an agent over the Model Context Protocol: 146 tools in 27 groups to make, check, review, simulate, draw and export parts, slice and texture them, in the GUI or headless.</description>
+  <version>0.2.0</version>
+  <date>2026-11-10</date>
   <maintainer email="jamesK1000011@users.noreply.github.com">jamesK1000011</maintainer>
   <license file="LICENSE">LGPL-2.1-or-later</license>
+  <url type="repository" branch="agent-link">https://github.com/jamesK1000011/FreeCAD</url>
   <freecadmin>1.0.0</freecadmin>
+  <tag>MCP</tag>
+  <tag>AI</tag>
+  <tag>automation</tag>
   <content>
     <workbench>
       <classname>AgentLinkWorkbench</classname>
