@@ -102,5 +102,31 @@ class Assembly(unittest.TestCase):
         self.assertEqual(c["verdict"], "clear", c)
 
 
+    def test_5_partdesign_bodies(self):
+        """Two parametric bodies (PartDesign), not plain shapes: a peg stood
+        on a plate's top."""
+        import FreeCAD
+
+        FreeCAD.newDocument("PdAsm")
+        self.session.switch(FreeCAD.ActiveDocument)
+        for name, size, h in (("Plate", [40, 30], 5), ("Peg", [10, 10], 20)):
+            err, r = self.call("pd_body_new", {"name": name})
+            self.assertFalse(err, r)
+            self.call("sketch_new", {"plane": "XY", "name": name + "Sketch"})
+            self.call("sketch_add", {"sketch": name + "Sketch", "items": [{"kind": "rectangle", "center": [0, 0], "size": size}]})
+            err, r = self.call("pd_pad", {"sketch": name + "Sketch", "length": h})
+            self.assertFalse(err, r)
+        err, n = self.call("asm_new", {"parts": ["Plate", "Peg"]})
+        self.assertFalse(err, n)
+        err, r = self.call("asm_joint", {"kind": "fixed", "a": {"part": "Plate", "element": {"kind": "face", "normal": [0, 0, 1]}}, "b": {"part": "Peg", "element": {"kind": "face", "normal": [0, 0, -1]}}})
+        print("\npd joint:", json.dumps(r))
+        self.assertFalse(err, r)
+        self.assertEqual(r["solve"], "solved")
+        self.assertNotIn("overlaps", r)
+        peg = next(o for o in self.session.doc.Objects if o.Label == "Peg").Shape.BoundBox
+        self.assertAlmostEqual(peg.ZMin, 5, delta=1e-3)
+        self.assertAlmostEqual(peg.ZMax, 25, delta=1e-3)
+
+
 if __name__ == "__main__":
     unittest.main()
