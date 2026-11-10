@@ -94,11 +94,11 @@ def _techdraw_page(doc, objs, placed, scale, paper, label, dims, specs=(), drawn
             v.Scale = scale
             v.X = x
             v.Y = H - y
-            made.append(v)
+            made.append((view, v))
         doc.recompute()
         if dims:
-            for v in made:
-                if v.Label.lower() in ("front", "top"):
+            for view, v in made:
+                if view in ("front", "top"):
                     for direction in (0, 1):
                         try:
                             if TechDraw.makeExtentDim(v, [], direction) is not None:
@@ -201,7 +201,8 @@ def _page_dims(doc, page, made, drawn, specs):
     files carry. Returns (dims made, what could not be)."""
     import Part
 
-    by_view = {v.Label.lower(): v for v in made}
+    # By the view's name: a second drawing's labels come out "Front001".
+    by_view = dict(made)
     frames, done, missed = {}, [], []
     for sp in specs:
         view = sp["view"]

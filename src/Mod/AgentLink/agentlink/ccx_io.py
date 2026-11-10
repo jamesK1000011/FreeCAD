@@ -165,3 +165,107 @@ def normal_stress(s, n):
     sxx, syy, szz, sxy, syz, szx = s[:6]
     x, y, z = n
     return sxx * x * x + syy * y * y + szz * z * z + 2 * (sxy * x * y + syz * y * z + szx * z * x)
+
+
+# ---- natural frequencies ---------------------------------------------------------------
+
+def deck_modes(mesh_text, material, fixed, count):
+    """A frequency step: the lowest `count` modes, held at the fixed nodes
+    (none: free, the first six near zero being the rigid motions)."""
+    out = [mesh_text.rstrip(), "",
+           "** Agent Link: material, supports, natural frequencies",
+           "*MATERIAL, NAME=PART",
+           "*ELASTIC",
+           f"{material['E']:.6g}, {material['nu']:.6g}",
+           "*DENSITY",
+           f"{material['rho'] * 1e-9:.6g}",
+           "*SOLID SECTION, ELSET=Evolumes, MATERIAL=PART"]
+    if fixed:
+        out += ["*NSET, NSET=AGFIX", _rows(sorted(fixed))]
+    out += ["*STEP", "*FREQUENCY", f"{int(count)}"]
+    if fixed:
+        out += ["*BOUNDARY", "AGFIX, 1, 3, 0.0"]
+    out += ["*NODE FILE", "U", "*END STEP", ""]
+    return "\n".join(out)
+
+
+def read_frequencies(dat):
+    """[(mode, Hz)] from the .dat's eigenvalue table (units mm, N, tonne:
+    CalculiX's CYCLES/TIME column is in Hz)."""
+    out, on = [], False
+    for line in dat.splitlines():
+        u = line.upper()
+        if "E I G E N V A L U E   O U T P U T" in u:
+            on = True
+            continue
+        if not on:
+            continue
+        p = line.split()
+        if len(p) >= 4:
+            try:
+                out.append((int(p[0]), float(p[3])))
+                continue
+            except ValueError:
+                if out:
+                    break
+                continue
+        if out and not line.strip():
+            break
+    return out
+
+
+def read_frd_blocks(text, name):
+    """Every block of one result in an .frd, in order: [{node: values}] —
+    one DISP block per mode of a frequency step."""
+    blocks, block = [], None
+    for line in text.splitlines():
+        if line.startswith(" -4"):
+            block = {} if line[5:13].strip() == name else None
+            if block is not None:
+                blocks.append(block)
+            continue
+        if line.startswith(" -3"):
+            block = None
+            continue
+        if block is not None and line[1:3] == "-1":
+            nid = int(line[3:13])
+            s = line.rstrip("\r\n")
+            block[nid] = tuple(float(s[p:p + 12]) for p in range(13, len(s), 12) if s[p:p + 12].strip())
+    return blocks
+
+
+# ---- steady heat -----------------------------------------------------------------------
+
+def deck_heat(mesh_text, k, temps, fluxes, films, start=20.0):
+    """A steady heat-transfer step on the same mesh, as DC3D10 elements.
+    Units mm, tonne, s: k in W/(m·K) is the same number in mW/(mm·K);
+    temps {node: °C}, fluxes [(element, face, mW/mm²)] into the part, films
+    [(element, face, h mW/(mm²·K), air °C)]."""
+    mesh = mesh_text.replace("TYPE=C3D10", "TYPE=DC3D10").replace("type=C3D10", "type=DC3D10")
+    nodes, _ = read_mesh(mesh_text)
+    out = [mesh.rstrip(), "",
+           "** Agent Link: steady heat",
+           "*NSET, NSET=AGALL", _rows(sorted(nodes)),
+           "*MATERIAL, NAME=PART",
+           "*CONDUCTIVITY",
+           f"{k:.6g}",
+           "*SOLID SECTION, ELSET=Evolumes, MATERIAL=PART",
+           "*INITIAL CONDITIONS, TYPE=TEMPERATURE",
+           f"AGALL, {start:.6g}",
+           "*STEP",
+           "*HEAT TRANSFER, STEADY STATE",
+           "1., 1."]
+    if temps:
+        out += ["*BOUNDARY"] + [f"{n}, 11, 11, {t:.6g}" for n, t in sorted(temps.items())]
+    if fluxes:
+        out += ["*DFLUX"] + [f"{e}, S{f}, {q:.9g}" for e, f, q in fluxes]
+    if films:
+        out += ["*FILM"] + [f"{e}, F{f}, {t:.6g}, {h:.9g}" for e, f, h, t in films]
+    out += ["*NODE FILE", "NT", "*END STEP", ""]
+    return "\n".join(out)
+
+
+def read_temperatures(frd):
+    """{node: °C} from the last NDTEMP block of an .frd."""
+    blocks = read_frd_blocks(frd, "NDTEMP")
+    return {n: v[0] for n, v in blocks[-1].items()} if blocks else {}

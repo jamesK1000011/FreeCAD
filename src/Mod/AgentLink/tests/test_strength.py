@@ -53,6 +53,32 @@ class Files(unittest.TestCase):
         for s in ("*BOUNDARY", "AGFIX, 1, 3", "*CLOAD", "1, P2, 0.5", "Evolumes, GRAV, 9810", "*EL FILE"):
             self.assertIn(s, text)
 
+    def test_modes_and_heat_decks(self):
+        deck = "*Node, NSET=Nall\n1, 0, 0, 0\n2, 2, 0, 0\n3, 0, 2, 0\n4, 0, 0, 2\n5, 1, 0, 0\n6, 1, 1, 0\n7, 0, 1, 0\n8, 0, 0, 1\n9, 1, 0, 1\n10, 0, 1, 1\n\n*Element, TYPE=C3D10, ELSET=Evolumes\n1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10\n"
+        m = ccx_io.deck_modes(deck, {"E": 3500, "nu": 0.36, "rho": 1.24}, {1, 2, 3}, 6)
+        for t in ("*FREQUENCY\n6", "AGFIX, 1, 3", "*DENSITY\n1.24e-09"):
+            self.assertIn(t, m)
+        self.assertNotIn("*BOUNDARY", ccx_io.deck_modes(deck, {"E": 1, "nu": 0.3, "rho": 1}, set(), 3))
+        h = ccx_io.deck_heat(deck, 0.13, {1: 100.0}, [(1, 2, 0.5)], [(1, 3, 0.01, 25.0)])
+        for t in ("TYPE=DC3D10", "*CONDUCTIVITY\n0.13", "*HEAT TRANSFER, STEADY STATE", "1, 11, 11, 100", "1, S2, 0.5", "1, F3, 25, 0.01", "NT"):
+            self.assertIn(t, h)
+        dat = """
+     E I G E N V A L U E   O U T P U T
+
+ MODE NO    EIGENVALUE                       FREQUENCY
+                                     REAL PART            IMAGINARY PART
+                           (RAD/TIME)      (CYCLES/TIME     (RAD/TIME)
+
+      1   0.2890581E+07   0.1700171E+04   0.2705918E+03   0.0000000E+00
+      2   0.2890600E+07   0.1700177E+04   0.2705927E+03   0.0000000E+00
+
+     P A R T I C I P A T I O N   F A C T O R S
+      1   0.1E+01   0.2E+01   0.3E+01   0.4E+01
+"""
+        self.assertEqual([round(f, 1) for _, f in ccx_io.read_frequencies(dat)], [270.6, 270.6])
+        frd = FRD.replace("DISP", "NDTEMP").replace(" 1.00000E-01-2.00000E-02 0.00000E+00", " 4.00000E+01").replace("-1.50000E+00 0.00000E+00 3.00000E-03", " 2.00000E+01")
+        self.assertEqual(ccx_io.read_temperatures(frd), {1: 40.0, 2: 20.0})
+
 
 @unittest.skipUnless(HAVE, "FreeCAD is not importable here")
 class Strength(unittest.TestCase):
@@ -125,6 +151,42 @@ class Strength(unittest.TestCase):
         self.assertLess(g["displacementMax"]["mm"], 0.05)
         err, c = self.call("fea_clear")
         self.assertTrue(c["cleared"])
+
+    def test_3_modes_and_heat(self):
+        if not (shutil.which("ccx") and shutil.which("gmsh")):
+            self.skipTest("ccx and gmsh are not on PATH")
+        self.call("fea_setup", {"body": "Beam", "mesh": 2.5, "reset": True})
+        self.call("fea_hold", {"faces": {"normal": [-1, 0, 0], "x": 0}})
+        err, m = self.call("fea_modes", {"count": 4})
+        print("\nmodes:", json.dumps(m))
+        self.assertFalse(err, m)
+        # Beam theory, first bending: (1.875²/2π)·√(EI/ρAL⁴) = 271 Hz, twice
+        # (it bends the same up and sideways); the tip swings most.
+        f1, f2 = m["modes"][0]["hz"], m["modes"][1]["hz"]
+        self.assertGreater(f1, 240)
+        self.assertLess(f1, 290)
+        self.assertAlmostEqual(f1, f2, delta=0.02 * f1)
+        self.assertGreater(m["modes"][0]["moves"]["at"][0], 95)
+        # Heat: one end at 100 °C, the other at 20, no air: the hottest at
+        # the hot end, the coolest at the cold one.
+        err, h = self.call("fea_heat", {"temperatures": [{"faces": {"normal": [-1, 0, 0], "x": 0}, "celsius": 100}, {"faces": {"normal": [1, 0, 0], "x": 100}, "celsius": 20}], "air": False})
+        print("heat:", json.dumps(h))
+        self.assertFalse(err, h)
+        self.assertAlmostEqual(h["hottest"]["celsius"], 100, delta=0.5)
+        self.assertAlmostEqual(h["coolest"]["celsius"], 20, delta=0.5)
+        self.assertLess(h["hottest"]["at"][0], 1)
+        err, pic = self.call("view_render", {"map": "heat", "views": "front", "inline": False})
+        self.assertFalse(err, pic)
+        self.assertAlmostEqual(pic["map"]["max"], 100, delta=1)
+        # A watt into the end of a PLA bar in still air: too hot for PLA.
+        err, w = self.call("fea_heat", {"heat": [{"faces": {"normal": [1, 0, 0], "x": 100}, "watts": 1}]})
+        print("watt:", json.dumps(w))
+        self.assertFalse(err, w)
+        self.assertGreater(w["hottest"]["celsius"], 55)
+        self.assertGreater(w["hottest"]["at"][0], 95)
+        self.assertTrue(any("softens" in x for x in w["warnings"]), w["warnings"])
+        err, r = self.call("fea_heat", {"heat": [{"faces": {"normal": [1, 0, 0], "x": 100}, "watts": 1}], "air": False})
+        self.assertTrue(err)
 
 
 if __name__ == "__main__":

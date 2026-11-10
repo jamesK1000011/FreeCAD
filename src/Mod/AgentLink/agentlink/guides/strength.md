@@ -7,6 +7,15 @@
 4. `fea_solve`: von Mises peak and where, displacement, safety factor against yield; for a printed part the tension across the layers against half the yield.
 5. `view_render { map: "stress", views: "all" }`: look at where it is hot — a peak at a held face is the hold's, not the part's.
 
+## Shaking: natural frequencies
+- `fea_modes { count }` on the same study: the lowest frequencies (Hz) with its holds, and where each mode swings most and which way. No holds: the part free, its six rigid motions left out.
+- Keep what shakes it (a motor's speed in rev/s, a fan, a vehicle) well away from the lowest — by a factor of two or more. To raise it: stiffen or shorten where it swings, or take weight off there.
+
+## Heat
+- `fea_heat { temperatures: [{ faces, celsius }], heat: [{ faces, watts }], air }`: steady temperature through the study's body. Hold faces at a temperature (a heated bed, a hot pipe), put watts in (an electronics board, a motor), and air takes it away: `{ h, celsius }`, 10 W/(m²·K) and 25 °C on the faces left over by default (`air: false` for none).
+- It warns when the hottest spot passes where the material softens (PLA about 55 °C, PETG 70, ABS and ASA 95). `view_render { map: "heat" }` shows it.
+- Conduction and convection only, steady: no radiation, no warm-up time. Still air is 5 to 25 W/(m²·K), a fan 25 to 100.
+
 ## Faces by query
 - `{ normal: [0,0,-1], z: 0 }`: flat faces facing down at z = 0.
 - `{ near: [x,y,z] }`: the nearest face; `radius` takes every face that close.

@@ -20,12 +20,13 @@ INFO = "Materials: search FreeCAD's library and the printing filaments, read a c
 # Typical figures for FDM-printed filament, along the layers (MPa, g/cm³).
 # Data sheets vary a good deal between brands; these are middling ones.
 FILAMENT = {
-    "pla": {"name": "PLA (printed)", "E": 3500, "nu": 0.36, "yield": 50, "uts": 55},
-    "petg": {"name": "PETG (printed)", "E": 2100, "nu": 0.38, "yield": 45, "uts": 50},
-    "abs": {"name": "ABS (printed)", "E": 2200, "nu": 0.35, "yield": 40, "uts": 42},
-    "asa": {"name": "ASA (printed)", "E": 2000, "nu": 0.35, "yield": 42, "uts": 45},
-    "pa6-cf": {"name": "PA6-CF (printed, dry)", "E": 6000, "nu": 0.35, "yield": 80, "uts": 90},
-    "tpu-95a": {"name": "TPU 95A (printed)", "E": 26, "nu": 0.48, "yield": None, "uts": 35},
+    # k: thermal conductivity W/(m·K); softens: heat deflection at 0.45 MPa, °C.
+    "pla": {"name": "PLA (printed)", "E": 3500, "nu": 0.36, "yield": 50, "uts": 55, "k": 0.13, "softens": 55},
+    "petg": {"name": "PETG (printed)", "E": 2100, "nu": 0.38, "yield": 45, "uts": 50, "k": 0.20, "softens": 70},
+    "abs": {"name": "ABS (printed)", "E": 2200, "nu": 0.35, "yield": 40, "uts": 42, "k": 0.17, "softens": 95},
+    "asa": {"name": "ASA (printed)", "E": 2000, "nu": 0.35, "yield": 42, "uts": 45, "k": 0.17, "softens": 95},
+    "pa6-cf": {"name": "PA6-CF (printed, dry)", "E": 6000, "nu": 0.35, "yield": 80, "uts": 90, "k": 0.30, "softens": 150},
+    "tpu-95a": {"name": "TPU 95A (printed)", "E": 26, "nu": 0.48, "yield": None, "uts": 35, "k": 0.20, "softens": None},
 }
 FILAMENT_SOURCE = "Agent Link's typical FDM filament figures, along the layers"
 TYPICAL = "Library and filament figures are typical: for a part that must not fail, use the supplier's data sheet (material_set custom)."
@@ -95,6 +96,7 @@ def _library():
                     "nu": _q(m, "PoissonRatio", ""),
                     "yield": _q(m, "YieldStrength", "MPa"),
                     "uts": _q(m, "UltimateTensileStrength", "MPa"),
+                    "k": _q(m, "ThermalConductivity", "W/m/K"),
                     "tags": list(getattr(m, "Tags", []) or []),
                     "about": (getattr(m, "Description", "") or "")[:160],
                     "source": "FreeCAD material library" + (f" ({getattr(m, 'URL', '')})" if getattr(m, "URL", "") else ""),
@@ -107,7 +109,8 @@ def _library():
 
 def filament_card(key):
     f = FILAMENT.get(key, {"name": key.upper(), "E": None, "nu": None, "yield": None, "uts": None})
-    return {"id": key, "name": f["name"], "category": "Printing filament", "density": DENSITY[key], "E": f["E"], "nu": f["nu"], "yield": f["yield"], "uts": f["uts"], "source": FILAMENT_SOURCE}
+    return {"id": key, "name": f["name"], "category": "Printing filament", "density": DENSITY[key], "E": f["E"], "nu": f["nu"], "yield": f["yield"], "uts": f["uts"],
+            "k": f.get("k"), "softens": f.get("softens"), "source": FILAMENT_SOURCE}
 
 
 def defs(doc):
@@ -188,11 +191,12 @@ def tools(session):
             rho = custom.get("density")
             if not isinstance(rho, (int, float)) or not 0.01 < rho < 25:
                 raise ToolError("invalid_input", "custom.density: g/cm³, 0.01 to 25.")
-            for k in ("youngsMPa", "yieldMPa", "poisson"):
+            for k in ("youngsMPa", "yieldMPa", "poisson", "conductivity", "softensC"):
                 if k in custom and not isinstance(custom[k], (int, float)):
                     raise ToolError("invalid_input", f"custom.{k}: a number.")
             mid = "custom:" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-            c = {"id": mid, "name": name, "category": "Custom", "density": float(rho), "E": custom.get("youngsMPa"), "nu": custom.get("poisson", 0.35 if custom.get("youngsMPa") else None), "yield": custom.get("yieldMPa"), "uts": custom.get("utsMPa"), "source": custom.get("source") or "given by the person"}
+            c = {"id": mid, "name": name, "category": "Custom", "density": float(rho), "E": custom.get("youngsMPa"), "nu": custom.get("poisson", 0.35 if custom.get("youngsMPa") else None), "yield": custom.get("yieldMPa"), "uts": custom.get("utsMPa"),
+                 "k": custom.get("conductivity"), "softens": custom.get("softensC"), "source": custom.get("source") or "given by the person"}
             d = defs(s.doc)
             d[mid] = c
             store.write(s.doc, "materialDefs", d)
@@ -254,7 +258,7 @@ def tools(session):
         ),
         Tool(
             "material_set",
-            "Say what bodies are made of: id from material_list, or custom { name, density g/cm³, youngsMPa, yieldMPa, poisson, source } for the supplier's figures. Kept with the document; a library card also goes on the object's ShapeMaterial. bodies: the one body when left out.",
+            "Say what bodies are made of: id from material_list, or custom { name, density g/cm³, youngsMPa, yieldMPa, poisson, conductivity W/(m·K), softensC, source } for the supplier's figures. Kept with the document; a library card also goes on the object's ShapeMaterial. bodies: the one body when left out.",
             obj({"bodies": {"type": "array", "items": {"type": "string"}}, "id": {"type": "string"}, "custom": {"type": "object"}}),
             material_set,
             changes=True,

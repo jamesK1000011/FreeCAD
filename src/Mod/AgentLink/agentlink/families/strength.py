@@ -195,12 +195,9 @@ def tools(session):
         out.update({"load": ld, "loads": len(st["loads"])})
         return out
 
-    def fea_solve(a):
-        st, o = _need_study(s)
-        if not st["holds"]:
-            raise ToolError("invalid_state", "Nothing holds the part: fea_hold the faces it is mounted by — a free body has no static answer.")
-        if not st["loads"]:
-            raise ToolError("invalid_state", "Nothing loads the part: fea_load a force, pressure or gravity.")
+    def _meshed(o, st, timeout, tag="fea"):
+        """(ccx binary, work folder, femmesh, mesh deck text, nodes, elements)
+        for a body: Gmsh's second-order tetrahedra read into FemMesh."""
         ccx = _binary("ccx", "Ccx", "ccxBinaryPath", "AGENTLINK_CCX")
         gmsh = _binary("gmsh", "Gmsh", "gmshBinaryPath", "AGENTLINK_GMSH")
         missing = [n for n, b in (("CalculiX (ccx)", ccx), ("Gmsh", gmsh)) if not b]
@@ -210,17 +207,12 @@ def tools(session):
             import Fem
         except ImportError:
             raise ToolError("unavailable", "FreeCAD's FEM module is not in this build: a FreeCAD with FEM is needed for the solve.")
-        c = matfam.card(s.doc, st["material"])
-        if c is None or not c.get("E"):
-            raise ToolError("invalid_state", f"The study's material {st['material']!r} is gone or has no Young's modulus: fea_setup {{ material }} again.")
         shape = o.Shape
-        t0 = time.time()
-        wd = os.path.join(s.out_dir, "fea_" + "".join(ch if ch.isalnum() else "_" for ch in o.Label))
+        wd = os.path.join(s.out_dir, tag + "_" + "".join(ch if ch.isalnum() else "_" for ch in o.Label))
         os.makedirs(wd, exist_ok=True)
         for n in os.listdir(wd):
             if n.startswith("job.") or n.startswith("part."):
                 os.remove(os.path.join(wd, n))
-        timeout = float(a.get("timeout", 300))
 
         # The mesh: Gmsh on the body as BREP, second order, nodes on the geometry.
         brep = os.path.join(wd, "part.brep")
@@ -263,7 +255,21 @@ def tools(session):
         nodes, elems = ccx_io.read_mesh(mesh_text)
         if not elems:
             raise ToolError("failed", "The mesh has no ten-node tetrahedra: this solve needs them.")
+        return ccx, wd, femmesh, mesh_text, nodes, elems
 
+    def fea_solve(a):
+        st, o = _need_study(s)
+        if not st["holds"]:
+            raise ToolError("invalid_state", "Nothing holds the part: fea_hold the faces it is mounted by — a free body has no static answer.")
+        if not st["loads"]:
+            raise ToolError("invalid_state", "Nothing loads the part: fea_load a force, pressure or gravity.")
+        c = matfam.card(s.doc, st["material"])
+        if c is None or not c.get("E"):
+            raise ToolError("invalid_state", f"The study's material {st['material']!r} is gone or has no Young's modulus: fea_setup {{ material }} again.")
+        shape = o.Shape
+        t0 = time.time()
+        timeout = float(a.get("timeout", 300))
+        ccx, wd, femmesh, mesh_text, nodes, elems = _meshed(o, st, timeout)
         faces = shape.Faces
 
         def resolve(q):
@@ -407,6 +413,160 @@ def tools(session):
         s.snapshot("fea_clear")
         return {"cleared": had}
 
+
+    def _where(nodes, shape, n):
+        p = nodes.get(n, (0, 0, 0))
+        vx = Part.Vertex(V(*p))
+        best = min(((vx.distToShape(f)[0], i) for i, f in enumerate(shape.Faces)), default=(0, 0))
+        return {"at": [round(p[0], 2), round(p[1], 2), round(p[2], 2)], "face": f"Face{best[1] + 1}"}
+
+    def _run(ccx, wd, timeout, what):
+        env = dict(os.environ)
+        env.setdefault("OMP_NUM_THREADS", str(max(1, min(4, os.cpu_count() or 1))))
+        try:
+            r = subprocess.run([ccx, "-i", "job"], cwd=wd, capture_output=True, text=True, timeout=timeout, env=env)
+        except subprocess.TimeoutExpired:
+            raise ToolError("failed", f"CalculiX took over {timeout:g} s: a coarser mesh or a longer timeout.")
+        log = (r.stdout or "") + (r.stderr or "")
+        if "*ERROR" in log or not os.path.isfile(os.path.join(wd, "job.frd")):
+            err = [l.strip() for l in log.splitlines() if "ERROR" in l][:2] or log.strip().splitlines()[-2:]
+            raise ToolError("failed", f"CalculiX refused the {what}: {' | '.join(err)}.")
+        with open(os.path.join(wd, "job.frd")) as f:
+            frd = f.read()
+        dat = ""
+        if os.path.isfile(os.path.join(wd, "job.dat")):
+            with open(os.path.join(wd, "job.dat")) as f:
+                dat = f.read()
+        return frd, dat
+
+    def fea_modes(a):
+        st, o = _need_study(s)
+        c = matfam.card(s.doc, st["material"])
+        if c is None or not c.get("E") or not c.get("density"):
+            raise ToolError("invalid_state", f"The study's material {st['material']!r} needs a Young's modulus and a density: fea_setup {{ material }} again.")
+        count = int(a.get("count", 6))
+        if not 1 <= count <= 30:
+            raise ToolError("invalid_input", "count: modes to find, 1 to 30.")
+        shape = o.Shape
+        t0 = time.time()
+        timeout = float(a.get("timeout", 300))
+        ccx, wd, femmesh, mesh_text, nodes, elems = _meshed(o, st, timeout, "modes")
+        fixed = set()
+        for h in st["holds"]:
+            for _, f in facepick.pick(shape, h["faces"], "faces"):
+                fixed.update(femmesh.getNodesByFace(f))
+        free = not fixed
+        # A free part's first six modes are its rigid motions, near 0 Hz.
+        ask = count + (6 if free else 0)
+        mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
+        with open(os.path.join(wd, "job.inp"), "w") as f:
+            f.write(ccx_io.deck_modes(mesh_text, mat, fixed, ask))
+        frd, dat = _run(ccx, wd, timeout, "frequency step")
+        freqs = ccx_io.read_frequencies(dat)
+        shapes = ccx_io.read_frd_blocks(frd, "DISP")
+        if not freqs:
+            raise ToolError("failed", "CalculiX wrote no frequencies: see job.dat in " + wd)
+        modes = []
+        for k, (no, hz) in enumerate(freqs):
+            if free and k < 6:
+                continue
+            m = {"mode": len(modes) + 1, "hz": round(hz, 2)}
+            if k < len(shapes) and shapes[k]:
+                mag = {n: math.sqrt(sum(x * x for x in u[:3])) for n, u in shapes[k].items() if n in nodes}
+                if mag:
+                    n_max = max(mag, key=mag.get)
+                    m["moves"] = _where(nodes, shape, n_max)
+                    # Which way that place swings, as a unit direction.
+                    u = shapes[k][n_max][:3]
+                    L = math.sqrt(sum(x * x for x in u)) or 1.0
+                    m["moves"]["along"] = [round(x / L, 3) for x in u]
+            modes.append(m)
+            if len(modes) >= count:
+                break
+        out = {"body": o.Label, "material": {"id": c["id"], "name": c["name"], "E": c["E"], "density": c["density"]},
+               "held": "free (no holds: the six rigid motions left out)" if free else f"{len(st['holds'])} hold(s) from the study",
+               "mesh": {"size": st["mesh"], "nodes": len(nodes), "elements": len(elems)}, "modes": modes,
+               "note": "Natural frequencies: keep what shakes the part (a motor, a fan, a vehicle) well away from the lowest, by a factor of two or more. moves is where each mode swings most, and which way.",
+               "warnings": ([] if free else ["Rigid holds make a part stiffer than a real mount: real frequencies read lower."]) + ([] if str(c["id"]).startswith("custom:") else [matfam.TYPICAL]),
+               "files": wd, "seconds": round(time.time() - t0, 1)}
+        return out
+
+    def fea_heat(a):
+        st, o = _need_study(s)
+        c = matfam.card(s.doc, st["material"])
+        k = a.get("conductivity") or (c or {}).get("k")
+        if not k:
+            raise ToolError("invalid_state", f"{(c or {}).get('name', st['material'])} has no thermal conductivity on its card: conductivity W/(m·K) here, or material_set custom with one.")
+        k = float(k)
+        temps_in = a.get("temperatures") or []
+        heat_in = a.get("heat") or []
+        if not temps_in and not heat_in:
+            raise ToolError("invalid_input", "temperatures [{ faces, celsius }] held, and/or heat [{ faces, watts }] going in: something must drive the heat.")
+        air = a.get("air", {"h": 10, "celsius": 25})
+        if air is True:
+            air = {"h": 10, "celsius": 25}
+        shape = o.Shape
+        t0 = time.time()
+        timeout = float(a.get("timeout", 300))
+        ccx, wd, femmesh, mesh_text, nodes, elems = _meshed(o, st, timeout, "heat")
+        used, temps, fluxes, films, said = set(), {}, [], [], []
+        for i, t in enumerate(temps_in):
+            if not isinstance(t, dict) or "celsius" not in t:
+                raise ToolError("invalid_input", f"temperatures.{i}: {{ faces, celsius }}.")
+            picked = facepick.pick(shape, t.get("faces"), f"temperatures.{i}.faces")
+            for name, f in picked:
+                used.add(name)
+                for n in femmesh.getNodesByFace(f):
+                    temps[n] = float(t["celsius"])
+            said.append({"held": [n for n, _ in picked], "celsius": float(t["celsius"])})
+        for i, h in enumerate(heat_in):
+            if not isinstance(h, dict) or "watts" not in h:
+                raise ToolError("invalid_input", f"heat.{i}: {{ faces, watts }} going in.")
+            picked = facepick.pick(shape, h.get("faces"), f"heat.{i}.faces")
+            vf = []
+            for name, f in picked:
+                used.add(name)
+                vf += [tuple(x) for x in femmesh.getccxVolumesByFace(f)]
+            area = sum(f.Area for _, f in picked)
+            if not vf or area <= 0:
+                raise ToolError("failed", f"heat.{i}: no element faces on {[n for n, _ in picked]} — another mesh size.")
+            q = float(h["watts"]) * 1000.0 / area  # mW/mm²
+            fluxes += [(e, fn, q) for e, fn in vf]
+            said.append({"heated": [n for n, _ in picked], "watts": float(h["watts"]), "mWperMm2": round(q, 5)})
+        if air:
+            hc = float(air.get("h", 10)) * 1e-3  # W/(m²·K) is 1e-3 mW/(mm²·K)
+            ta = float(air.get("celsius", 25))
+            on = [(n, f) for n, f in ((f"Face{i + 1}", f) for i, f in enumerate(shape.Faces)) if n not in used]
+            if air.get("faces") is not None:
+                on = facepick.pick(shape, air["faces"], "air.faces")
+            for _, f in on:
+                films += [(e, fn, hc, ta) for e, fn in (tuple(x) for x in femmesh.getccxVolumesByFace(f))]
+            said.append({"air": {"h": float(air.get("h", 10)), "celsius": ta, "faces": len(on)}})
+        if not temps and not films:
+            raise ToolError("invalid_input", "Heat goes in but nothing takes it away: hold a face at a temperature or leave air on.")
+        with open(os.path.join(wd, "job.inp"), "w") as f:
+            f.write(ccx_io.deck_heat(mesh_text, k, temps, fluxes, films, start=float((air or {}).get("celsius", 20)) if air else 20.0))
+        frd, _ = _run(ccx, wd, timeout, "heat step")
+        T = {n: t for n, t in ccx_io.read_temperatures(frd).items() if n in nodes}
+        if not T:
+            raise ToolError("failed", "CalculiX wrote no temperatures: see job.frd in " + wd)
+        hot, cold = max(T, key=T.get), min(T, key=T.get)
+        out = {"body": o.Label, "material": {"id": (c or {}).get("id"), "name": (c or {}).get("name"), "conductivity": k, "softensC": (c or {}).get("softens")},
+               "boundary": said, "hottest": {"celsius": round(T[hot], 2), **_where(nodes, shape, hot)}, "coolest": {"celsius": round(T[cold], 2), **_where(nodes, shape, cold)},
+               "mesh": {"size": st["mesh"], "nodes": len(nodes), "elements": len(elems)}, "files": wd, "seconds": round(time.time() - t0, 1)}
+        warnings = []
+        soft = (c or {}).get("softens")
+        if soft and T[hot] >= soft:
+            warnings.append(f"Hotter than {c['name']} takes ({T[hot]:.0f} °C against about {soft} °C where it softens under load): it will sag or creep there — a higher-temperature material, or more cooling.")
+        elif soft and T[hot] >= soft - 10:
+            warnings.append(f"Within 10 °C of where {c['name']} softens ({soft} °C): little margin.")
+        warnings.append("Steady state, conduction and still-air convection only (no radiation); film coefficients are rough — 5 to 25 W/(m²·K) for still air, more with a fan.")
+        out["warnings"] = warnings
+        # The field for view_render map heat.
+        ids = list(T)
+        s._agentlink_heat = {"body": o.Label, "stats": geo.stats(shape), "field": {"points": [nodes[n] for n in ids], "celsius": [T[n] for n in ids]}}
+        return out
+
     query = {"type": "object", "description": "Faces by query: { near: [x,y,z], radius }, { normal: [nx,ny,nz], x|y|z: plane, largest }, or { faces: [\"Face3\"] }"}
     return [
         Tool(
@@ -435,6 +595,18 @@ def tools(session):
             "Solve the study: Gmsh meshes the body (second-order tetrahedra), CalculiX solves it linear static. Answers the largest von Mises stress (MPa) and where, the largest displacement (mm) and where, the safety factor against yield, and for a printed part the tension across the layers against half the yield (a simplification), with warnings. " + TRAPS + " Needs ccx and gmsh installed (timeout s, 300).",
             obj({"timeout": {"type": "number"}}),
             fea_solve,
+        ),
+        Tool(
+            "fea_modes",
+            "Natural frequencies of the study's body: the lowest count (6) modes, held by the study's holds (none: free, its rigid motions left out). Answers each mode's Hz and where it swings most and which way. Keep what shakes the part well away from the lowest. Needs ccx and gmsh (timeout s, 300).",
+            obj({"count": {"type": "integer"}, "timeout": {"type": "number"}}),
+            fea_modes,
+        ),
+        Tool(
+            "fea_heat",
+            "Steady heat through the study's body: temperatures [{ faces, celsius }] held, heat [{ faces, watts }] going in, air { h W/(m²·K) (10, still air), celsius (25), faces (the rest) } taking it away — air: false for none. Answers the hottest and coolest place and warns when the part passes where its material softens (k from the card, or conductivity here). Conduction and convection only. view_render map heat shows it.",
+            obj({"temperatures": {"type": "array"}, "heat": {"type": "array"}, "air": {}, "conductivity": {"type": "number"}, "timeout": {"type": "number"}}),
+            fea_heat,
         ),
         Tool("fea_results", "The last solve's answer again, with stale: true when the body or the study changed since.", obj({}), fea_results),
         Tool("fea_clear", "Drop the strength study and its results.", obj({}), fea_clear, changes=True),

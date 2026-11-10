@@ -92,8 +92,29 @@ def _stress(s, a):
     return out
 
 
+def _heat(s, a):
+    r = getattr(s, "_agentlink_heat", None)
+    if not r:
+        raise ToolError("not_found", "No temperatures to show: fea_heat first (a solve in this session).")
+    o = s.body(r["body"])
+    from .. import geometry as geo
+
+    f = r["field"]
+    P, T = np.asarray(f["points"], dtype=float), np.asarray(f["celsius"], dtype=float)
+    L = render.body_layer(o, 0, tol=float(a.get("tolerance", 0.05)))
+    cap = int(a.get("detail", 30000))
+    V, F = render.subdivide(L["V"], L["F"], render.even_length(L["V"], L["F"], cap), cap=cap)
+    out = {"layers": [{"name": o.Label, "V": V, "F": F, "values": render.nearest_values(V, P, T), "creases": True}], "unit": "C", "cmap": "jet", "worst": "max", "label": "TEMPERATURE",
+           "note": "Steady temperature from the last fea_heat, at the nearest mesh node."}
+    if geo.stats(o.Shape) != r["stats"]:
+        out["note"] += " The body changed since: stale — fea_heat again."
+        out["stale"] = True
+    return out
+
+
 render.register_map("wall", _wall, "The wall thickness at each spot of the parts (red thin).")
 render.register_map("stress", _stress, "Von Mises stress of the last fea_solve.")
+render.register_map("heat", _heat, "Temperature of the last fea_heat (red hot).")
 
 
 def tools(session):
@@ -253,7 +274,7 @@ def tools(session):
         Tool(
             "view_render",
             "Draw the parts as a picture and look at it — works headless. views: one or several (\"all\": iso, top, front, right, each fitted). "
-            "map: wall (thickness, red thin), stress (the last fea_solve), or one an add-on adds (view_maps lists them) — with a legend, and the worst spot's at; range [lo, hi] fixes the colours. "
+            "map: wall (thickness, red thin), stress (the last fea_solve), heat (the last fea_heat), or one an add-on adds (view_maps lists them) — with a legend, and the worst spot's at; range [lo, hi] fixes the colours. "
             "section { axis x|y|z, offset mm, flip } cuts it open (solid cut faces hatched). zoom { at, size mm } frames a spot — a finding's at. "
             "objects: which bodies (all shown when left out); layers: which add-on layers (a scan …). The PNG comes back as an image (inline false: the file only) and is written to path.",
             obj({
