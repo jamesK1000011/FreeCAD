@@ -169,7 +169,7 @@ def draw(layers, view, width, height, frame=None, section=None, margin=14, botto
     scale = min(avail_w / sx, avail_h / sy)
     ox, oy = width / 2 - cx * scale, margin + avail_h / 2 + cy * scale
 
-    face_normals, face_crease, face_tint = [], [], []
+    face_normals, face_crease, face_tint, face_layer = [], [], [], []
     base = 0
     for layer in layers:
         V, F = np.asarray(layer["V"], dtype=float), np.asarray(layer["F"], dtype=np.int64)
@@ -187,6 +187,7 @@ def draw(layers, view, width, height, frame=None, section=None, margin=14, botto
         face_normals.append(n)
         face_crease.append(np.full(len(F), bool(layer.get("creases", True))))
         face_tint.append(behind)
+        face_layer.append(np.full(len(F), len(face_layer)))
         px = V @ right * scale + ox
         py = oy - V @ upv * scale
         pz = V @ back
@@ -260,6 +261,7 @@ def draw(layers, view, width, height, frame=None, section=None, margin=14, botto
     # 35°; a scan's own facets are not drawn).
     fn = np.concatenate(face_normals) if face_normals else np.zeros((0, 3))
     fc = np.concatenate(face_crease) if face_crease else np.zeros(0, bool)
+    fl = np.concatenate(face_layer) if face_layer else np.zeros(0, np.int64)
     diag = math.hypot(sx, sy)
     edge = np.zeros((height, width), bool)
     for dy, dx in ((0, 1), (1, 0)):
@@ -277,7 +279,8 @@ def draw(layers, view, width, height, frame=None, section=None, margin=14, botto
         if both.any():
             ia, ib = a[both], b[both]
             cosang = np.einsum("ij,ij->i", fn[ia], fn[ib])
-            crease[both] = (cosang < math.cos(math.radians(35))) & fc[ia] & fc[ib]
+            # Two parts touching (a lid on its box): their meeting line drawn.
+            crease[both] = ((cosang < math.cos(math.radians(35))) & fc[ia] & fc[ib]) | (fl[ia] != fl[ib])
         e = sil | jump | crease
         edge[: height - dy, : width - dx] |= e
     # Inside a solid, seen through a cut: hatched, so the cut reads as one.
