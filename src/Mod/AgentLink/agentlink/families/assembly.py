@@ -236,15 +236,16 @@ def tools(session):
         off = a.get("offset")
         rot = a.get("rotate")
 
-        def set_offset(flip):
-            p = FreeCAD.Placement(V(0, 0, picks.num(off or 0, "offset")), FreeCAD.Rotation(V(0, 0, 1), picks.num(rot or 0, "rotate")))
-            if flip:
-                # b turned over: its element faces the other way along the joint.
-                p = p.multiply(FreeCAD.Placement(V(), FreeCAD.Rotation(V(1, 0, 0), 180)))
-            j.Offset2 = p
+        if off is not None or rot is not None:
+            j.Offset2 = FreeCAD.Placement(V(0, 0, picks.num(off or 0, "offset")), FreeCAD.Rotation(V(0, 0, 1), picks.num(rot or 0, "rotate")))
 
-        if off is not None or rot is not None or a.get("reverse"):
-            set_offset(bool(a.get("reverse")))
+        def turn_over():
+            # As the task panel's Reverse button does: the part turned over on
+            # the joint, then solved; the solver keeps the nearer way round.
+            j.Proxy.flipOnePart(j)
+            doc().recompute()
+            return _status(asm)
+
         # 1.0 reads a reference from the assembly down (the part's name, then
         # the element); later releases from the part itself.
         if _release() < (1, 1):
@@ -264,7 +265,10 @@ def tools(session):
             pass
         doc().recompute()
         code, said = _status(asm)
-        flipped = bool(a.get("reverse"))
+        flipped = False
+        if code == 0 and a.get("reverse"):
+            code, said = turn_over()
+            flipped = True
         # FreeCAD lines the joint's frames up as the elements' geometry
         # runs, which can put a lid into its box instead of on it. Two parts
         # overlapping after the solve, and no reverse said: the other way is
@@ -273,14 +277,14 @@ def tools(session):
             first, _ = _overlaps(_parts(asm))
             if first:
                 vol0 = sum(h["volume"] for h in first)
-                set_offset(True)
-                doc().recompute()
-                code2, said2 = _status(asm)
+                kept = {o.Name: o.Placement.copy() for o in _parts(asm)}
+                code2, said2 = turn_over()
                 second, _ = _overlaps(_parts(asm))
                 if code2 == 0 and sum(h["volume"] for h in second) < vol0 - 1e-6:
                     code, said, flipped = code2, said2, True
                 else:
-                    set_offset(False)
+                    for o in _parts(asm):
+                        o.Placement = kept[o.Name]
                     doc().recompute()
                     code, said = _status(asm)
         if code != 0:
