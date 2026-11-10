@@ -8,6 +8,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# The Claude extension's own launcher, mended where it cannot load (see
+# agentlink/launcher_check.py): never in the way of serving.
+try:
+    from agentlink import launcher_check  # noqa: E402
+
+    launcher_check.mend()
+except Exception:
+    pass
+
 # Served through a supervisor that starts FreeCAD again if it dies under a
 # call — when run by a plain Python (FreeCADCmd takes its arguments its own
 # way) and not asked otherwise (AGENTLINK_SUPERVISE=0).

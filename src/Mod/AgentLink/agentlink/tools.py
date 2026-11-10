@@ -30,6 +30,15 @@ def obj(props, required=()):
     return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
 
 
+def _launcher():
+    try:
+        from . import launcher_check
+
+        return launcher_check.report()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 class Session:
     def __init__(self, doc=None, out_dir=None):
         """doc: the document to work in — the GUI's open one — or None for a
@@ -143,6 +152,7 @@ class Session:
             "bodies": [{"name": o.Label, **geo.stats(o.Shape), **({"encased": self.meta[o.Label]["encased"]["what"]} if self.meta.get(o.Label, {}).get("encased") else {})} for o in self.bodies()],
             "step": len(self.steps),
             "outDir": self.out_dir,
+            **({"launcher": _launcher()} if a.get("launcher") else {}),
         }
 
     def gen_make(self, a):
@@ -653,7 +663,7 @@ def make_tools(session):
     s = session
     body = {"type": "string", "description": "A body's name; may be left out when there is one."}
     return [
-        Tool("session_state", "What the document holds: each body's volume, area, faces, solids and size (mm), the step count and where files go. Changes nothing.", obj({}), s.session_state),
+        Tool("session_state", "What the document holds: each body's volume, area, faces, solids and size (mm), the step count and where files go. launcher: true adds the Claude extension's launcher as seen from here (the copy fetched from GitHub, whether it can load, its log's last lines). Changes nothing.", obj({"launcher": {"type": "boolean"}}), s.session_state),
         Tool(
             "gen_make",
             "Make a standard part to size as a body: gridfinity_bin (42 mm cells, 7 mm units, lip, magnets 6x2, screws, dividers, label ledge). measure: true builds it and gives size and volume without adding it. Magnets come back as encased, with the height to pause at.",
