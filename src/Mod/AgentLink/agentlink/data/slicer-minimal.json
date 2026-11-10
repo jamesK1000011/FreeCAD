@@ -1,0 +1,21 @@
+{
+ "_note": "The profiles Agent Link writes for OrcaSlicer and Bambu Studio when no presets are chosen: only what the print setup says, the slicer's defaults for the rest. {name} is the setup's value. Edit or replace this file to change them; slicer_presets chooses the person's own instead.",
+ "machine": {
+  "type": "machine", "name": "AgentLink machine", "from": "User", "instantiation": "true", "printer_technology": "FFF",
+  "gcode_flavor": "{flavor}", "nozzle_diameter": ["{nozzle}"],
+  "printable_area": ["0x0", "{volumeX}x0", "{volumeX}x{volumeY}", "0x{volumeY}"], "printable_height": "{volumeZ}"
+ },
+ "process": {
+  "type": "process", "name": "AgentLink process", "from": "User", "instantiation": "true",
+  "layer_height": "{layerHeight}", "initial_layer_print_height": "{firstLayer}",
+  "wall_loops": "{walls}", "sparse_infill_density": "{infill}%",
+  "top_shell_layers": "{topLayers}", "bottom_shell_layers": "{bottomLayers}",
+  "top_shell_thickness": "0", "bottom_shell_thickness": "0",
+  "compatible_printers": ["AgentLink machine"], "compatible_printers_condition": ""
+ },
+ "filament": {
+  "type": "filament", "name": "AgentLink {filament}", "from": "User", "instantiation": "true",
+  "filament_type": ["{filament}"], "filament_density": ["{density}"], "filament_diameter": ["{filamentDiameter}"],
+  "compatible_printers": ["AgentLink machine"], "compatible_printers_condition": ""
+ }
+}

@@ -45,6 +45,7 @@ TYPES = {
             "infill": "Infill, percent.",
             "topLayers": "Solid layers on top (5 to start).",
             "bottomLayers": "Solid layers at the bottom (4 to start).",
+            "slicerPresets": "The person's own slicer presets, set by slicer_presets use: { slicer, machine, process, filament } or { bundle }.",
         },
     },
     "cut": {"label": "Cut", "settings": {"machine": "laser, waterjet, plasma or router.", "thickness": "The sheet, mm.", "kerf": "The cut's width, mm.", "material": "The sheet's material, for the least feature.", "sheet": "The sheet's size, [width, height] mm."}},

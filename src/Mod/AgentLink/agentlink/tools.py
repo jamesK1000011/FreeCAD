@@ -522,6 +522,20 @@ class Session:
         setup = store.setup_of(self.doc, o.Label, "print")
         if not setup:
             raise ToolError("invalid_state", f"{o.Label} is in no print setup: slicing prints it — setup add {{ type: \"print\", bodies: [\"{o.Label}\"] }} once the person says it is printed.")
+        chosen = setup.get("slicerPresets")
+        if chosen and not a.get("settings"):
+            # The person's own presets chosen: their slicer slices it.
+            from . import slicer_presets
+            from .families import slicing
+
+            want = chosen.get("slicer")
+            if chosen.get("bundle"):
+                try:
+                    want = slicer_presets.load_saved(self.out_dir, chosen["bundle"])["slicer"]
+                except slicer_presets.PresetError as e:
+                    raise ToolError("invalid_state", f"The setup's presets cannot be read: {e}")
+            fn = {t.name: t.fn for t in slicing.tools(self)}["slice_with"]
+            return fn({k: v for k, v in {**a, "slicer": want}.items() if k in ("body", "slicer", "pauseCommand", "name")})
         settings = {**setup, **(a.get("settings") or {})}
         mat, rho, filament, name = self._card(o.Label)
         if filament is None:

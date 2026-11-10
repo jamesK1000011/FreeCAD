@@ -48,38 +48,14 @@ def _run(args, timeout):
     return run
 
 
-MACHINE = "AgentLink machine"
-
-
 def minimal_profiles(settings, folder):
     """Machine, process and filament JSON from the print setup, written to
-    folder: just the keys the setup says; the slicer's defaults do the rest."""
-    lh = str(settings.get("layerHeight", 0.2))
-    vol = settings.get("volume") or (220, 220, 250)
-    mat = str(settings.get("filament", "PLA")).upper()
-    machine = {
-        "type": "machine", "name": MACHINE, "from": "User", "instantiation": "true", "printer_technology": "FFF",
-        "gcode_flavor": settings.get("flavor", "marlin"), "nozzle_diameter": [str(settings.get("nozzle", 0.4))],
-        "printable_area": ["0x0", f"{vol[0]}x0", f"{vol[0]}x{vol[1]}", f"0x{vol[1]}"], "printable_height": str(vol[2]),
-    }
-    process = {
-        "type": "process", "name": "AgentLink process", "from": "User", "instantiation": "true",
-        "layer_height": lh, "initial_layer_print_height": str(settings.get("firstLayer", lh)),
-        "wall_loops": str(int(settings.get("walls", 2))), "sparse_infill_density": f"{int(settings.get('infill', 15))}%",
-        "top_shell_layers": str(int(settings.get("topLayers", 5))), "bottom_shell_layers": str(int(settings.get("bottomLayers", 4))),
-        "top_shell_thickness": "0", "bottom_shell_thickness": "0",
-        # Named, not empty: loading a new printer and a new process
-        # together, Bambu Studio's command line counts the process
-        # compatible only when its list names the printer.
-        "compatible_printers": [MACHINE], "compatible_printers_condition": "",
-    }
-    filament = {
-        "type": "filament", "name": f"AgentLink {mat}", "from": "User", "instantiation": "true",
-        "filament_type": [mat], "filament_density": [str(settings.get("density", 1.24))], "filament_diameter": [str(settings.get("filamentDiameter", 1.75))],
-        "compatible_printers": [MACHINE], "compatible_printers_condition": "",
-    }
+    folder: the minimal profiles of data/slicer-minimal.json, the setup's
+    values put in; the slicer's defaults do the rest."""
+    from . import slicer_presets
+
     out = {}
-    for k, v in (("machine", machine), ("process", process), ("filament", filament)):
+    for k, v in slicer_presets.minimal(settings).items():
         p = os.path.join(folder, f"agentlink-{k}.json")
         with open(p, "w", encoding="utf-8") as f:
             json.dump(v, f, indent=1)
