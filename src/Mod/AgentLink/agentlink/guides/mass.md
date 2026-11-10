@@ -1,7 +1,7 @@
 # Mass and ballast
 
 ## Reading it
-- `mass_properties`: mass, centre of mass and inertia per body. In a print setup the mass is as printed (walls and infill, an estimate, the skin's mass on the surface); otherwise solid. Magnets from gen_make and ballast cut here are counted.
+- `mass_properties`: mass, centre of mass and inertia per body. In a print setup the mass is as printed (perimeters, top and bottom layers and infill, the same estimate as part_review, the shells' mass on the surface); otherwise solid. Magnets from gen_make and ballast cut here are counted.
 - Weigh a test print when the mass matters: the slicer (`slice`) and the scale beat the estimate.
 
 ## Reaching a target

@@ -11,7 +11,7 @@ import FreeCAD
 import Part
 
 from .. import geometry as geo
-from .. import store
+from .. import printmass, store
 from ..protocol import Tool, ToolError
 from ..tools import LINE, NDFEB, obj
 from . import material as matfam
@@ -98,17 +98,22 @@ def body_mass(shape, rho, setup):
         return vol * rho_mm, c_v, _scale(I_v, rho_mm), "solid", vol
     walls = int(setup.get("walls", 2))
     infill = float(setup.get("infill", 15)) / 100.0
-    # The same estimate as part_review: the skin, walls × one line thick, and
-    # the rest at the infill's share. The skin's mass sits on the surface.
+    # The same estimate as part_review: the solid share from the wall
+    # readings (perimeters, top and bottom skins), the rest at the infill's
+    # share. The shells' mass sits on the surface.
     area, c_a, I_a = _surface_parts(shape)
-    shell = min(vol, area * walls * LINE)
+    reads, nz = printmass.readings(geo.least_wall(shape))
+    if reads:
+        shell = vol * printmass.solid_share(reads, nz, *printmass.shells(setup, walls))
+    else:
+        shell = min(vol, area * walls * LINE)
     core = vol - shell
     m_shell = shell * rho_mm
     m_core = core * infill * rho_mm
     k_core = m_core / vol if vol > 0 else 0.0
     parts = [(m_shell, c_a, _scale(I_a, m_shell / area if area else 0.0)), (m_core, c_v, _scale(I_v, k_core))]
     m, c, I = _combine(parts)
-    return m, c, I, f"printed: {walls} walls of {LINE} mm, {infill * 100:.0f}% infill (an estimate; the skin's mass on the surface)", vol
+    return m, c, I, f"printed: {walls} walls, {setup.get('topLayers', 5)} top and {setup.get('bottomLayers', 4)} bottom layers, {infill * 100:.0f}% infill (an estimate; the shells' mass on the surface)", vol
 
 
 def _disc_size(what):

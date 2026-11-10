@@ -18,6 +18,8 @@ import Part
 
 from . import geometry as geo
 from . import fits_hw, gridfinity, printability, slicer, store
+from . import printmass
+from .printmass import printed_fraction
 from .protocol import Tool, ToolError
 
 DENSITY = {"pla": 1.24, "petg": 1.27, "abs": 1.04, "asa": 1.07, "pa6-cf": 1.12, "tpu-95a": 1.21}
@@ -387,27 +389,14 @@ class Session:
             lh = float((setup or {}).get("layerHeight", 0.2))
             tops = int((setup or {}).get("topLayers", 5))
             bottoms = int((setup or {}).get("bottomLayers", 4))
-            # PrusaSlicer's perimeter for a 0.4 mm nozzle is 0.45 mm wide.
-            side_shell = 2 * walls * 0.45
-            skin_shell = (tops + bottoms) * lh
-            wl = geo.least_wall(shape)
-            reads = [r[0] for r in (wl.get("readings") or [])]
-            nz = [abs(n[2]) for n in (wl.get("normals") or [])] or [0.0] * len(reads)
+            side_shell, skin_shell = printmass.shells(setup, walls)
+            reads, nz = printmass.readings(geo.least_wall(shape))
             if reads:
-                solid = 0.0
-                for t, z in zip(reads, nz):
-                    flat = min(1.0, max(0.0, (z - 0.5) / 0.4))  # under 30° off flat: skin
-                    shell = flat * skin_shell + (1 - flat) * side_shell
-                    # What the shells leave narrower than about three lines
-                    # the slicer fills solid (gap fill, solid infill in small
-                    # areas), not with sparse infill.
-                    solid += t if t - shell < 1.4 else shell
-                total = sum(reads)
-                f = (solid + infill * (total - solid)) / total
+                f = printed_fraction(reads, nz, side_shell, skin_shell, infill)
             else:
                 f = 1.0
             body_g = vol * f * rho / 1000.0
-            as_ = f"printed: {walls} walls of {LINE} mm, {tops} top and {bottoms} bottom layers of {lh} mm, {infill * 100:.0f}% infill — {f * 100:.0f}% of the solid, from the walls read (an estimate; the slicer's figure is the authority)"
+            as_ = f"printed: {walls} walls, {tops} top and {bottoms} bottom layers of {lh} mm, {infill * 100:.0f}% infill — {f * 100:.0f}% of the solid, from the walls read (an estimate; the slicer's figure is the authority)"
         else:
             body_g = vol * rho / 1000.0
             as_ = "solid"
