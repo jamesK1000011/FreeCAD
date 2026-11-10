@@ -112,9 +112,10 @@ class Assembly(unittest.TestCase):
         for name, size, h in (("Plate", [40, 30], 5), ("Peg", [10, 10], 20)):
             err, r = self.call("pd_body_new", {"name": name})
             self.assertFalse(err, r)
-            self.call("sketch_new", {"plane": "XY", "name": name + "Sketch"})
+            err, r = self.call("sketch_new", {"body": name, "plane": "XY", "name": name + "Sketch"})
+            self.assertFalse(err, r)
             self.call("sketch_add", {"sketch": name + "Sketch", "items": [{"kind": "rectangle", "center": [0, 0], "size": size}]})
-            err, r = self.call("pd_pad", {"sketch": name + "Sketch", "length": h})
+            err, r = self.call("pd_pad", {"body": name, "sketch": name + "Sketch", "length": h})
             self.assertFalse(err, r)
         err, n = self.call("asm_new", {"parts": ["Plate", "Peg"]})
         self.assertFalse(err, n)
