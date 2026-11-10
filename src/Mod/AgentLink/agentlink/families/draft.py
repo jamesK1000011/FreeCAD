@@ -411,8 +411,11 @@ def tools(session):
         mode = a.get("mode", "include")
         if mode not in ("include", "exclude"):
             raise ToolError("invalid_input", "mode: include (texture only these faces) or exclude (texture all but these).")
-        picked = facepick.pick(shape, a.get("faces"), "faces")
-        want = {n for n, _ in picked}
+        q = a.get("faces")
+        want = set()
+        for k, item in enumerate(q if isinstance(q, list) else [q]):
+            item = {"faces": [item]} if isinstance(item, str) else item
+            want |= {n for n, _ in facepick.pick(shape, item, f"faces.{k}" if isinstance(q, list) else "faces")}
         tol = picks.num(a.get("tolerance", 0.02), "tolerance")
         shape.tessellate(tol)  # one mesh for the whole part: faces meet edge to edge
         tris, mask, per_face = [], [], {}
