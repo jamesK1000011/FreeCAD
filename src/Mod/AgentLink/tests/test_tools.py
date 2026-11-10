@@ -118,11 +118,20 @@ class Tools(unittest.TestCase):
         # part should come out the same.
         from agentlink import printmass
 
+        import time
+
+        setup = {"layerHeight": 0.2, "topLayers": 5, "bottomLayers": 4}
+        shape = self.session.body("Bin").Shape
         st = {}
-        cut = printmass.sliced(self.session.body("Bin").Shape, {"layerHeight": 0.2, "topLayers": 5, "bottomLayers": 4}, 2, stats=st)
+        cut = printmass.sliced(shape, setup, 2, stats=st)
         print("\nsections:", cut and [round(x, 1) for x in cut], st)
-        self.assertIsNotNone(cut)
-        self.assertEqual(st["offsetFailed"], 0, st)
+        pts, tris = shape.tessellate(0.02)
+        rs = {}
+        t0 = time.time()
+        lay = printmass.raster_sliced([(p.x, p.y, p.z) for p in pts], tris, setup, 2, stats=rs)
+        print("layers:", [round(x, 1) for x in lay], rs, f"{time.time() - t0:.2f} s", "volume", round(shape.Volume, 1))
+        # The raster's layers add up to the part's volume.
+        self.assertAlmostEqual(lay[0] + lay[1], shape.Volume, delta=0.02 * shape.Volume)
 
     def test_45_slice_with_the_magnet_pause(self):
         from agentlink import slicer

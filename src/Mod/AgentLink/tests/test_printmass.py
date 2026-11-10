@@ -43,6 +43,49 @@ if __name__ == "__main__":
     unittest.main()
 
 
+def box_mesh(x1, y1, z1):
+    V = [(x, y, z) for x in (0, x1) for y in (0, y1) for z in (0, z1)]
+    i = lambda a, b, c: a * 4 + b * 2 + c  # noqa: E731
+    F = []
+    for a, b, c, d in ((i(0, 0, 0), i(0, 1, 0), i(1, 1, 0), i(1, 0, 0)), (i(0, 0, 1), i(1, 0, 1), i(1, 1, 1), i(0, 1, 1)),
+                       (i(0, 0, 0), i(1, 0, 0), i(1, 0, 1), i(0, 0, 1)), (i(0, 1, 0), i(0, 1, 1), i(1, 1, 1), i(1, 1, 0)),
+                       (i(0, 0, 0), i(0, 0, 1), i(0, 1, 1), i(0, 1, 0)), (i(1, 0, 0), i(1, 1, 0), i(1, 1, 1), i(1, 0, 1))):
+        F += [(a, b, c), (a, c, d)]
+    return V, F
+
+
+class Raster(unittest.TestCase):
+    def test_box_layers(self):
+        # A 40 x 20 x 10 block: sparse inside the perimeter band (0.86 mm)
+        # and the skins (1.8 mm), the rest solid; the layers add up to it.
+        from agentlink.printmass import raster_sliced
+
+        V, F = box_mesh(40, 20, 10)
+        st = {}
+        solid, sparse = raster_sliced(V, F, {"layerHeight": 0.2, "topLayers": 5, "bottomLayers": 4}, 2, stats=st)
+        self.assertAlmostEqual(solid + sparse, 8000, delta=8000 * 0.01)
+        exact = (40 - 2 * 0.86) * (20 - 2 * 0.86) * (10 - 1.8)
+        self.assertAlmostEqual(sparse, exact, delta=exact * 0.02)
+        self.assertEqual(st["layers"], 50)
+
+    def test_thin_wall_is_solid(self):
+        from agentlink.printmass import raster_sliced
+
+        V, F = box_mesh(40, 1.2, 10)
+        solid, sparse = raster_sliced(V, F, {"layerHeight": 0.2}, 2)
+        self.assertEqual(sparse, 0.0)
+
+    def test_small_islands_are_solid(self):
+        # A 7 x 7 post: what the perimeters leave (about 28 mm²) is under
+        # 70 mm², so solid infill; a 12 x 12 one's is sparse.
+        from agentlink.printmass import raster_sliced
+
+        V, F = box_mesh(7, 7, 10)
+        self.assertEqual(raster_sliced(V, F, {"layerHeight": 0.2}, 2)[1], 0.0)
+        V, F = box_mesh(12, 12, 10)
+        self.assertGreater(raster_sliced(V, F, {"layerHeight": 0.2}, 2)[1], 0.0)
+
+
 try:
     import FreeCAD  # noqa: F401
     import Part
