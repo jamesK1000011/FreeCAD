@@ -249,7 +249,31 @@ def build(item):
             C.append(("Vertical", 2))
         D += [("r", ("Radius", 0, r)), ("length", ("Distance", 0, 3, 1, 3, d.Length))]
         return G, C, D
-    raise ToolError("invalid_input", "kind: line, polyline, arc, circle, rectangle, rounded_rectangle, polygon, slot or point.")
+    if k == "bspline":
+        pts = [pc.vec2(p, "points[]") for p in item.get("points") or []]
+        closed = bool(item.get("closed"))
+        if len(pts) < (3 if closed else 2):
+            raise ToolError("invalid_input", "bspline.points: [x, y] it passes through (interpolate, the default) or its control poles (interpolate: false) — 2 or more, 3 closed.")
+        bs = Part.BSplineCurve()
+        if item.get("interpolate", True):
+            if closed and (pts[0] - pts[-1]).Length < 1e-9:
+                pts = pts[:-1]
+            bs.interpolate(pts, PeriodicFlag=closed)
+        else:
+            deg = int(item.get("degree", 3))
+            if not 1 <= deg <= min(len(pts) - 1, 9):
+                raise ToolError("invalid_input", f"bspline.degree: 1 to {min(len(pts) - 1, 9)} for {len(pts)} poles.")
+            bs.buildFromPoles(pts, closed, deg)
+        return [bs], C, D
+    if k == "ellipse":
+        c = pc.vec2(item.get("center", [0, 0]), "center")
+        a_, b_ = float(item.get("major", 0)) / 2, float(item.get("minor", 0)) / 2
+        if a_ <= 0 or b_ <= 0 or b_ > a_:
+            raise ToolError("invalid_input", "ellipse: center, major and minor (its full width and height, mm, major the larger), rotation (deg).")
+        t = math.radians(float(item.get("rotation", 0)))
+        e = Part.Ellipse(c + V(math.cos(t), math.sin(t), 0) * a_, c + V(-math.sin(t), math.cos(t), 0) * b_, c)
+        return [e], C, D
+    raise ToolError("invalid_input", "kind: line, polyline, arc, circle, ellipse, bspline, rectangle, rounded_rectangle, polygon, slot or point.")
 
 
 def _remap(t, ids):
@@ -456,6 +480,103 @@ def tools(session):
         s.snapshot("sketch_add")
         return {"sketch": sk.Label, "added": out, "state": st, "step": len(s.steps)}
 
+    def _geo_of_edge(e):
+        """An edge as sketch geometry: a segment, an arc or circle, else a
+        B-spline through it."""
+        c = e.Curve
+        if isinstance(c, Part.Line):
+            return Part.LineSegment(e.Vertexes[0].Point, e.Vertexes[-1].Point)
+        if isinstance(c, Part.Circle):
+            if e.isClosed():
+                return Part.Circle(c.Center, V(0, 0, 1) if c.Axis.z >= 0 else V(0, 0, -1), c.Radius)
+            return Part.ArcOfCircle(c, e.FirstParameter, e.LastParameter)
+        return e.toNurbs().Edges[0].Curve
+
+    def sketch_offset(a):
+        sk = pc.sketch_of(doc(), a.get("sketch"))
+        d = pc.num(a.get("distance"), "distance") if a.get("distance") is not None else None
+        if d is None or abs(d) < 1e-9:
+            raise ToolError("invalid_input", "distance: mm, out from the profile (negative: in).")
+        doc().recompute()
+        geos = sk.Geometry
+        ids = a.get("geometry")
+        if ids is None:
+            ids = [i for i, g in enumerate(geos) if not sk.getConstruction(i)]
+        edges = []
+        for i in ids:
+            if not isinstance(i, int) or not 0 <= i < len(geos):
+                raise ToolError("invalid_input", f"geometry: ids 0 to {len(geos) - 1} (sketch_state lists them).")
+            edges.append(geos[i].toShape())
+        try:
+            wires = [Part.Wire(w) for w in Part.sortEdges(edges)]
+        except Exception as e:
+            raise ToolError("invalid_input", f"The geometry does not join into profiles ({e}): offset a closed profile or a chain.")
+        join = {"arc": 0, "tangent": 1, "intersection": 2}.get(a.get("join", "arc"))
+        if join is None:
+            raise ToolError("invalid_input", "join: arc (round corners, the default), tangent or intersection (sharp).")
+        added = []
+        for w in wires:
+            try:
+                off = w.makeOffset2D(d, join, False, not w.isClosed(), False)
+            except Exception as e:
+                raise ToolError("failed", f"The offset of {d:g} mm failed ({e}): a distance inward bigger than the profile allows, or a profile crossing itself.")
+            for e in off.Edges:
+                added.append(sk.addGeometry(_geo_of_edge(e), bool(a.get("construction"))))
+        # The new edges meet end to end: coincident where they touch.
+        pts = {}
+        for g in added:
+            geo_ = sk.Geometry[g]
+            if hasattr(geo_, "StartPoint") and not isinstance(geo_, Part.Circle):
+                for v, p in ((1, geo_.StartPoint), (2, geo_.EndPoint)):
+                    key = (round(p.x, 6), round(p.y, 6))
+                    if key in pts:
+                        sk.addConstraint(Sketcher.Constraint("Coincident", pts[key][0], pts[key][1], g, v))
+                    else:
+                        pts[key] = (g, v)
+        doc().recompute()
+        s.snapshot("sketch_offset")
+        return {"sketch": sk.Label, "from": ids, "distance": d, "added": added, "state": state_of(sk), "step": len(s.steps),
+                "note": "The offset is geometry, not tied to the profile: constrain it (sketch_constrain distance) if it must follow edits."}
+
+    def sketch_external(a):
+        sk = pc.sketch_of(doc(), a.get("sketch"))
+        body = pc.body_of(sk)
+        if body is None:
+            raise ToolError("invalid_state", f"{sk.Label} is in no body: outside geometry comes from the body's own features.")
+        tip = body.Tip
+        if tip is None or tip.Shape.isNull():
+            raise ToolError("invalid_state", f"{body.Label} has no solid yet to take edges from.")
+        from . import measure as M
+
+        qs = a.get("edges")
+        if not isinstance(qs, list) or not qs:
+            raise ToolError("invalid_input", "edges: [\"Edge7\" or a query { type, radius, axis, near, inside } on the body], the edges to bring in.")
+        names = []
+        for q in qs:
+            if isinstance(q, str):
+                names.append(q.split(".")[-1])
+                continue
+            query = {**q, "body": body.Label, "kind": q.get("kind", "edge")}
+            _, _, hits = M.query(s, query)
+            if not hits:
+                raise ToolError("not_found", f"edges: nothing on {body.Label} matches {q} — shape_query lists them.")
+            if q.get("near") is not None and len(hits) > 1:
+                pt = pc.vec3(q["near"], "near")
+                hits = sorted(hits, key=lambda h: h[1].distToShape(Part.Vertex(pt))[0])[:1]
+            names += [d["ref"] for _, _, d in hits]
+        before = len(sk.ExternalGeometry)
+        for n in names:
+            try:
+                sk.addExternal(tip.Name, n)
+            except Exception as e:
+                raise ToolError("failed", f"{tip.Label}.{n} could not be brought in: {e}")
+        doc().recompute()
+        got = len(sk.ExternalGeometry) - before
+        ext_ids = [-3 - k for k in range(before, before + got)]
+        s.snapshot("sketch_external")
+        return {"sketch": sk.Label, "from": f"{tip.Label}", "edges": names, "ids": ext_ids, "state": state_of(sk), "step": len(s.steps),
+                "note": "Outside geometry is referred to by these negative ids in sketch_constrain (-1 and -2 are the sketch's axes): a constraint to it follows the edge when the part changes."}
+
     def sketch_constrain(a):
         sk = pc.sketch_of(doc(), a.get("sketch"))
         cs = a.get("constraints")
@@ -581,9 +702,23 @@ def tools(session):
         ),
         Tool(
             "sketch_add",
-            "Add geometry to a sketch, in its own x/y (mm): items [{ kind, …, construction, dims, name }]. kinds: line {from, to}; polyline {points, closed}; arc {center, radius, start, end (deg, ccw)}; circle {center, radius|diameter}; rectangle {center|corner, size [w,h]}; rounded_rectangle {…, radius}; polygon {center, radius (to corners), sides, rotation}; slot {from, to (end centres), radius}; point {at}. Shapes come with their own coincident/horizontal/vertical/tangent/equal constraints; dims: true adds their sizes as constraints (named <name>_width … when named — what param_bind binds). Answers the geometry ids per item and the solver's state. Lines: vertex 1 start, 2 end; arcs and circles: 3 centre.",
+            "Add geometry to a sketch, in its own x/y (mm): items [{ kind, …, construction, dims, name }]. kinds: line {from, to}; polyline {points, closed}; arc {center, radius, start, end (deg, ccw)}; circle {center, radius|diameter}; ellipse {center, major, minor (full sizes), rotation}; bspline {points it passes through, closed — or interpolate: false, points its poles, degree}; rectangle {center|corner, size [w,h]}; rounded_rectangle {…, radius}; polygon {center, radius (to corners), sides, rotation}; slot {from, to (end centres), radius}; point {at}. Shapes come with their own coincident/horizontal/vertical/tangent/equal constraints; dims: true adds their sizes as constraints (named <name>_width … when named — what param_bind binds). Answers the geometry ids per item and the solver's state. Lines: vertex 1 start, 2 end; arcs and circles: 3 centre.",
             obj({"sketch": sketch, "items": {"type": "array", "items": {"type": "object"}}}, ["items"]),
             sketch_add,
+            changes=True,
+        ),
+        Tool(
+            "sketch_offset",
+            "Offset a sketch's profile by distance mm (out; negative in): its geometry ids (all but construction when left out), joined end to end; join arc (round corners, the default), tangent or intersection (sharp). Adds the offset as new geometry, joined, and answers its ids — a wall's inside from its outside, a gasket's band, a clearance round a part.",
+            obj({"sketch": sketch, "distance": {"type": "number"}, "geometry": {"type": "array", "items": {"type": "integer"}}, "join": {"type": "string", "enum": ["arc", "tangent", "intersection"]}, "construction": {"type": "boolean"}}, ["distance"]),
+            sketch_offset,
+            changes=True,
+        ),
+        Tool(
+            "sketch_external",
+            "Bring edges of the body's solid into a sketch as outside geometry, to constrain to: edges [\"Edge7\" or a query { type: circle|line, radius, axis, near, inside } as shape_query takes]. Answers their ids (negative, -3 down); a constraint to them follows the part when it changes — a hole lined up with a boss, a pocket kept off a wall.",
+            obj({"sketch": sketch, "edges": {"type": "array"}}, ["edges"]),
+            sketch_external,
             changes=True,
         ),
         Tool(

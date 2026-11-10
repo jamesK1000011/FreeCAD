@@ -13,3 +13,8 @@
 - Deleting geometry renumbers every later id. Read `sketch_state` again before you constrain more.
 - A sketch on a face follows that face. If an edit removes the face, the sketch breaks: `feature_list` shows it invalid.
 - Angles are in degrees, counter-clockwise from +x. Lengths are in mm.
+
+## Curves, offsets, outside edges
+- Free curves: `bspline { points }` passes through the points (`closed: true` for a loop); `interpolate: false` takes them as control poles with `degree`. `ellipse { center, major, minor, rotation }`.
+- `sketch_offset { distance }` — the profile moved out (negative: in) as new geometry: a wall's inside, a lid's lip, a clearance band. Round corners by default; `join: "intersection"` keeps them sharp. The offset does not follow later edits unless constrained.
+- `sketch_external { edges }` brings the body's own edges in (negative ids from -3) so a new profile is constrained to what is already there — a hole on a boss's axis, a rib off a wall — and follows when the part changes.

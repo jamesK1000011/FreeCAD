@@ -53,6 +53,29 @@ class SketchTools(Base):
         self.assertFalse(add["state"]["readyForFeature"])
         self.assertIn("openVertices", add["state"])
 
+    def test_6_curves_offset_and_outside_geometry(self):
+        self.ok("pd_body_new", {"name": "Tray"})
+        self.ok("sketch_new", {"body": "Tray", "plane": "XY", "name": "TrayOut"})
+        self.ok("sketch_add", {"sketch": "TrayOut", "items": [{"kind": "rectangle", "center": [0, 0], "size": [40, 30]}]})
+        off = self.ok("sketch_offset", {"sketch": "TrayOut", "distance": 3})
+        # Four sides and four round corners, joined into one more closed profile.
+        self.assertEqual(len(off["added"]), 8, off)
+        self.assertEqual(off["state"]["closedWires"], 2, off["state"])
+        self.ok("sketch_new", {"body": "Tray", "plane": "XZ", "name": "Curves"})
+        c = self.ok("sketch_add", {"sketch": "Curves", "items": [
+            {"kind": "bspline", "points": [[0, 0], [10, 8], [20, 0], [30, 8]]},
+            {"kind": "bspline", "points": [[0, 20], [10, 30], [20, 20], [10, 15]], "closed": True},
+            {"kind": "ellipse", "center": [50, 10], "major": 20, "minor": 10, "rotation": 30},
+        ]})
+        self.assertEqual(c["state"]["solver"], "solved", c["state"])
+        self.assertEqual(c["state"]["closedWires"], 2, c["state"])
+        # A pad of the two profiles is a 3 mm frame; a sketch on its top with an inside edge brought in.
+        self.ok("pd_pad", {"body": "Tray", "sketch": "TrayOut", "length": 5})
+        self.ok("sketch_new", {"body": "Tray", "face": {"at": [21.5, 0, 5], "normal": [0, 0, 1]}, "name": "OnTop"})
+        ext = self.ok("sketch_external", {"sketch": "OnTop", "edges": [{"type": "line", "near": [0, 15, 5]}]})
+        self.assertEqual(ext["ids"], [-3], ext)
+        self.refused("sketch_offset", {"sketch": "TrayOut", "distance": 0})
+
 
 if __name__ == "__main__":
     unittest.main()
