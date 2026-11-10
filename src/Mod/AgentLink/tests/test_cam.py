@@ -98,6 +98,14 @@ class Cam(unittest.TestCase):
         err, g = self.call("cam_post", {"post": "grbl"})
         self.assertFalse(err, g)
         self.assertIn("Drill", g["ops"])
+        drill = next(o for o in self.session.doc.Objects if o.Label == "Drill")
+        print("drill path:", [(c.Name, dict(c.Parameters)) for c in drill.Path.Commands][:14])
+        err, sim = self.call("cam_sim", {"inline": False})
+        print("drill sim:", json.dumps({k: sim.get(k) for k in ("ops", "crashes", "findings")}))
+        self.assertFalse(err, sim)
+        self.assertNotIn("crashes", sim)
+        drilled = next(o for o in sim["ops"] if o["op"] == "Drill")
+        self.assertGreater(drilled["removedMm3"], 3.14 * 1.5 ** 2 * 15)
 
 
 if __name__ == "__main__":
