@@ -270,6 +270,7 @@ def tools(session):
         t0 = time.time()
         timeout = float(a.get("timeout", 300))
         ccx, wd, femmesh, mesh_text, nodes, elems = _meshed(o, st, timeout)
+        mesh = float(st["mesh"])
         faces = shape.Faces
 
         def resolve(q):

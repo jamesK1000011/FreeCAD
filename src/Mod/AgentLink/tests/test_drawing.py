@@ -135,7 +135,7 @@ class Drawing(unittest.TestCase):
         for t in ("AL-001", "PETG", "ISO 2768-m", "30 ±0.1", "4× ⌀"):
             self.assertIn(t, svg)
         # The same dims and callouts on the TechDraw page, measured by TechDraw.
-        print("page:", json.dumps(d.get("page")))
+        print("page:", json.dumps(d.get("page")), json.dumps(d.get("pageNote")))
         if d["techdrawPage"]:
             on = d["page"].get("dimensions") or []
             self.assertFalse(d["page"].get("notOnPage"), d["page"])

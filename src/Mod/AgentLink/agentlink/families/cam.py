@@ -301,6 +301,91 @@ def tools(session):
         d.recompute()
         return {"job": job.Label, "removed": a.get("op"), "ops": [op.Label for op in job.Operations.Group]}
 
+
+    def cam_sim(a):
+        import numpy as np
+
+        from .. import millsim, render
+
+        job = _job(doc(), a.get("job"))
+        ops = [op for op in job.Operations.Group if getattr(op, "Active", True) and getattr(op, "Path", None) is not None]
+        if not ops:
+            raise ToolError("invalid_state", f"{job.Label} has no operations: cam_op first.")
+        sb = job.Stock.Shape.BoundBox
+        tools_of = []
+        for op in ops:
+            tc = getattr(op, "ToolController", None) or tc_of(job)
+            tool = tc.Tool
+            d = float(_q(tool.Diameter, "mm"))
+            shape = str(getattr(tool, "ShapeName", "") or getattr(tool, "ShapeType", "") or getattr(tool, "BitShape", "") or tool.Label).lower()
+            tools_of.append((op, d, "ball" in shape))
+        res = a.get("resolution")
+        if res is None:
+            res = max(min(d for _, d, _ in tools_of) / 6.0, math.sqrt(sb.XLength * sb.YLength / 250000.0), 0.05)
+        res = float(res)
+        if res <= 0:
+            raise ToolError("invalid_input", "resolution: mm per cell, over 0.")
+        pad = max(d for _, d, _ in tools_of)
+        grid = millsim.Grid(sb.XMin - pad, sb.YMin - pad, sb.XMax + pad, sb.YMax + pad, res)
+        sp, sf = job.Stock.Shape.tessellate(0.05)
+        H = millsim.top_of_mesh(grid, [(v.x, v.y, v.z) for v in sp], sf, floor=sb.ZMin)
+        H = np.maximum(H, sb.ZMin)
+        part = None
+        for m in job.Model.Group:
+            pp, pf = m.Shape.tessellate(0.02)
+            top = millsim.top_of_mesh(grid, [(v.x, v.y, v.z) for v in pp], pf)
+            part = top if part is None else np.maximum(part, top)
+        removed, crashes, per = 0.0, [], []
+        for op, d, ball in tools_of:
+            segs = millsim.moves([(c.Name, dict(c.Parameters)) for c in op.Path.Commands])
+            rem, cr = millsim.run(grid, H, segs, d / 2.0, ball)
+            removed += rem
+            per.append({"op": op.Label, "tool": d, **({"ballEnd": True} if ball else {}), "removedMm3": round(rem, 1), **({"crashes": len(cr)} if cr else {})})
+            crashes += [{"op": op.Label, "at": [round(x, 2) for x in c[0]], "intoStockMm": round(c[1], 2)} for c in cr]
+        out = {"job": job.Label, "resolution": round(res, 3), "ops": per, "removedMm3": round(removed, 1)}
+        cmp_, diff = millsim.compare(grid, H, part if part is not None else np.full_like(H, -np.inf), sb.ZMin, tol=max(0.02, res / 10))
+        out["part"] = cmp_
+        findings = []
+        if crashes:
+            out["crashes"] = crashes[:5]
+            findings.append(f"{len(crashes)} rapid move(s) go through stock — a crash on the machine: the first in {crashes[0]['op']} at {crashes[0]['at']}. Raise the clearance or safe height.")
+        if "gouge" in cmp_:
+            g = cmp_["gouge"]
+            findings.append(f"It cuts into the part: {g['deepest']} mm deep at {g['at'][:2]}, over {g['areaMm2']} mm². Check that operation's faces, side and depths.")
+        low = float(np.min(H))
+        if low < sb.ZMin - 0.05:
+            findings.append(f"It cuts {round(sb.ZMin - low, 2)} mm under the stock's bottom: into the spoilboard or vise — set finalDepth.")
+        if "left" in cmp_ and cmp_["left"]["share"] > 0.02:
+            l = cmp_["left"]
+            out["note"] = f"Material is left over the part on {round(100 * l['share'])}% of it, up to {l['most']} mm (at {l['at'][:2]}): a face op for a stock top, a finishing pass or a smaller tool for corners — or none, if that is meant."
+        out["verdict"] = "fix" if findings else "clear"
+        out["findings"] = findings
+        # The picture: from above, each spot of the part coloured by what is
+        # left on it (blue gouged, green right, red left over); off the part
+        # the cut stock in grey, lighter higher.
+        span = max(0.1, abs(cmp_.get("gouge", {}).get("deepest", 0.0)), cmp_.get("left", {}).get("most", 0.0))
+        t = (diff + span) / (2 * span)
+        img = render.jet(np.nan_to_num(t, nan=0.5))
+        hz = (H - sb.ZMin) / max(1e-6, sb.ZLength)
+        grey = 0.25 + 0.6 * np.clip(hz, 0, 1)
+        off = ~np.isfinite(diff)
+        img[off] = np.stack([grey[off]] * 3, axis=-1)
+        img = img[::-1]
+        k = max(1, int(round(760 / max(grid.nx, grid.ny))))
+        img = np.repeat(np.repeat(img, k, axis=0), k, axis=1)
+        h, w = img.shape[:2]
+        canvas = np.full((h + 70, max(w, 420), 3), 0.12)
+        canvas[:h, :w] = img
+        render.legend(canvas, -span, span, "mm", "jet", "LEFT ON THE PART", h + 40)
+        data = render.png(canvas)
+        path = a.get("path") or os.path.join(s.out_dir, f"{job.Label}_sim.png")
+        with open(path, "wb") as f:
+            f.write(data)
+        out["picture"] = path
+        if a.get("inline", True):
+            out["_png"] = data
+        return out
+
     def cam_post(a):
         d = doc()
         job = _job(d, a.get("job"))
@@ -375,6 +460,8 @@ def tools(session):
         Tool("cam_tool", "Change the job's end mill or feeds (diameter, feed, plunge, rpm, number); every operation is computed again.",
              obj({"job": jobref, "diameter": {"type": "number"}, "feed": {"type": "number"}, "plunge": {"type": "number"}, "rpm": {"type": "number"}, "number": {"type": "integer"}}), cam_tool, changes=True),
         Tool("cam_remove", "Remove an operation from the job.", obj({"job": jobref, "op": {"type": "string"}}, ["op"]), cam_remove, changes=True),
+        Tool("cam_sim", "Simulate the job's operations on the stock (3-axis, from above): what each removes, rapid moves that go through stock (a crash), cuts into the part (gouges) or under the stock, and what is left over the part — with a picture from above coloured by what is left on the part (blue gouged, green right, red left over). verdict fix or clear. resolution mm per cell (a sixth of the tool by default). Before cam_post.",
+             obj({"job": jobref, "resolution": {"type": "number"}, "inline": {"type": "boolean"}, "path": {"type": "string"}}), cam_sim),
         Tool("cam_post", "Write the job's G-code with FreeCAD's post-processor for the machine's controller (post grbl — the default —, linuxcnc, mach3_mach4, marlin, smoothie, centroid, generic) to path (the session's folder). Returns lines, cut length, minutes, and warnings for cuts below the stock or far outside it. Running it is the person's.",
              obj({"job": jobref, "post": {"type": "string", "enum": POSTS}, "path": {"type": "string"}}), cam_post),
     ]

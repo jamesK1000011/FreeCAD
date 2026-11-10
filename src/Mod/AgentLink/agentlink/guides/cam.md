@@ -11,9 +11,10 @@ FreeCAD's CAM workbench makes the paths; these tools set it up, read each path b
    - `adaptive` — clearing a lot of material steadily (inside a pocket, or outside round the part).
    - `pocket { faces }` — down to a pocket's floor: give the floor face.
    - `profile { side: "outside" }` — round the outline, last, to size.
-   - `drill` — every hole, or the faces given.
+   - `drill` — every hole, or the faces given. FreeCAD drills with the job's end mill unless given another tool; a hole the tool is not smaller than is refused.
 4. `cam_list` — every operation and the total time.
-5. `cam_post { post }` — the G-code file. Read its `warnings`.
+5. `cam_sim` — the operations run on the stock (3-axis, from above): rapids through stock (crashes), cuts into the part (gouges) or under the stock, and what is left over the part, with a picture from above (blue gouged, green right, red left over). Fix anything in `findings` before posting.
+6. `cam_post { post }` — the G-code file. Read its `warnings`.
 
 ## traps
 - Z is the part's: the stock's top is `stock.max[2]`. Zero the machine where the job does.

@@ -61,6 +61,19 @@ class Cam(unittest.TestCase):
         self.assertNotIn("warnings", g)
         err, x = self.call("cam_op", {"kind": "pocket", "faces": ["Face1"], "name": "Nothing"})
         self.assertTrue(err)
+        # Simulated on the stock: no crash, no gouge; the stock's top 1 mm
+        # is left over the part (no face op), the pocket is cleared.
+        err, sim = self.call("cam_sim", {"inline": False})
+        print("sim:", json.dumps(sim))
+        self.assertFalse(err, sim)
+        self.assertEqual(sim["verdict"], "clear", sim)
+        self.assertNotIn("crashes", sim)
+        self.assertNotIn("gouge", sim["part"])
+        self.assertGreater(sim["removedMm3"], 30 * 20 * 8 * 0.8)
+        self.assertAlmostEqual(sim["part"]["left"]["most"], 1.0, delta=0.15)
+        import os
+
+        self.assertGreater(os.path.getsize(sim["picture"]), 1000)
 
     def test_2_drill_finds_the_hole(self):
         # FreeCAD 1.0's Drilling.Create fails headless. An 8 mm tool is too

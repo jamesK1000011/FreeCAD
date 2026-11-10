@@ -108,16 +108,59 @@ def _techdraw_page(doc, objs, placed, scale, paper, label, dims, specs=(), drawn
             doc.recompute()
         out = {"views": len(made), "extentDimensions": dimmed, "template": os.path.basename(path) if path else None}
         if specs:
-            done, missed = _page_dims(doc, page, made, drawn, specs)
-            out["dimensions"] = done
-            if missed:
-                out["notOnPage"] = missed
+            try:
+                waited = _wait_views([v for _, v in made])
+                done, missed = _page_dims(doc, page, made, drawn, specs)
+                out["dimensions"] = done
+                if missed:
+                    out["notOnPage"] = missed
+                if waited is not None:
+                    out["viewsReadyIn"] = waited
+            except Exception as e:  # the page stands without them
+                out["notOnPage"] = [{"why": f"TechDraw could not take dimensions here: {e}"}]
         return page.Label, out
     except Exception as e:
         return None, f"the TechDraw page could not be made here ({e}); the files stand on their own"
 
 
 # ---- dimensions on the TechDraw page ---------------------------------------------------
+
+def _wait_views(views_, timeout=30.0):
+    """TechDraw works out a view's lines on another thread and takes them up
+    when Qt's event loop says it is done; with no window nothing runs that
+    loop, so it is run here until every view has its lines. Seconds waited,
+    or None when they were there at once."""
+    import time
+
+    def ready():
+        try:
+            return all(v.getVisibleEdges() for v in views_)
+        except Exception:
+            return False
+
+    if ready():
+        return None
+    try:
+        from PySide import QtCore
+    except ImportError:
+        try:
+            from PySide2 import QtCore
+        except ImportError:
+            return None
+    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        app.processEvents()
+        if ready():
+            break
+        time.sleep(0.02)
+    for v in views_:
+        try:
+            v.recompute()
+        except Exception:
+            pass
+    return round(time.time() - t0, 2)
+
 
 def _view_frame(v, box):
     """How a view's own 2D geometry lies against views.project's: (scale,
