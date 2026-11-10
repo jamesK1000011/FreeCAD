@@ -69,7 +69,7 @@ def _write(s, base, sheet, kinds):
     return paths
 
 
-def _techdraw_page(doc, objs, placed, scale, paper, label, dims, specs=(), drawn=None):
+def _techdraw_page(doc, objs, placed, scale, paper, label, dims, specs=(), drawn=None, section=None):
     """A TechDraw page holding the same views, for the person to carry on
     with in the GUI: (page label, what was made) or (None, why not)."""
     try:
@@ -96,6 +96,33 @@ def _techdraw_page(doc, objs, placed, scale, paper, label, dims, specs=(), drawn
             v.Y = H - y
             made.append((view, v))
         doc.recompute()
+        sec_note = {}
+        if section and section.get("cutLineIn"):
+            # The section view on the page: TechDraw's own, based on the view
+            # that shows the cutting plane edge on, where the plain view was.
+            try:
+                base = dict(made)[section["cutLineIn"]]
+                plain = dict(made)[section["view"]]
+                z, xd = views.VIEWS[section["view"]]
+                sv = doc.addObject("TechDraw::DrawViewSection", "Section")
+                page.addView(sv)
+                sv.BaseView = base
+                sv.Source = objs
+                sv.ScaleType = "Custom"
+                sv.Scale = scale
+                sv.SectionNormal = V(*z)
+                sv.Direction = V(*z)
+                sv.XDirection = V(*xd)
+                sv.SectionOrigin = section["origin"]
+                sv.SectionSymbol = section["label"].split("-")[0]
+                sv.X, sv.Y = plain.X, plain.Y
+                page.removeView(plain)
+                doc.removeObject(plain.Name)
+                made = [(n, v) for n, v in made if v is not plain] + [(section["view"], sv)]
+                doc.recompute()
+                sec_note = {"section": sv.Label}
+            except Exception as e:
+                sec_note = {"sectionNote": f"the section view could not go on the page here ({e}); the files have it"}
         if dims:
             for view, v in made:
                 if view in ("front", "top"):
@@ -106,7 +133,7 @@ def _techdraw_page(doc, objs, placed, scale, paper, label, dims, specs=(), drawn
                         except Exception:  # an extent TechDraw cannot read headless: the files carry it
                             pass
             doc.recompute()
-        out = {"views": len(made), "extentDimensions": dimmed, "template": os.path.basename(path) if path else None}
+        out = {"views": len(made), "extentDimensions": dimmed, "template": os.path.basename(path) if path else None, **sec_note}
         if specs:
             try:
                 waited = _wait_views([v for _, v in made])
@@ -462,7 +489,21 @@ def tools(session):
         if paper not in ("A4", "A3", "auto"):
             raise ToolError("invalid_input", "paper: A4, A3 or auto.")
         shapes = [o.Shape for o in objs]
-        drawn = {v: views.project(shapes, v, hidden=bool(a.get("hidden"))) for v in want}
+        sec_view = a.get("section")
+        if sec_view is not None and sec_view not in want:
+            raise ToolError("invalid_input", f"section: one of the views drawn ({', '.join(want)}) to show cut through.")
+        if sec_view == "iso":
+            raise ToolError("invalid_input", "section: a straight view (front, top, right …), not iso.")
+        sec_label = str(a.get("sectionLabel") or "A")[:2].upper()
+        drawn = {}
+        for v in want:
+            if v == sec_view:
+                try:
+                    drawn[v] = views.section(shapes, v, float(a.get("sectionAt", 0)), hidden=bool(a.get("hidden")))
+                except ValueError as e:
+                    raise ToolError("invalid_input", f"sectionAt: {e} — a smaller offset from the middle.")
+            else:
+                drawn[v] = views.project(shapes, v, hidden=bool(a.get("hidden")))
         sizes = {v: (d["box"][2] - d["box"][0], d["box"][3] - d["box"][1]) for v, d in drawn.items()}
         sc = a.get("scale")
         if sc is not None and (not isinstance(sc, (int, float)) or sc <= 0):
@@ -493,9 +534,13 @@ def tools(session):
         for v in want:
             d = drawn[v]
             cx, cy = L["centres"][v]
-            sheet.place(d["lines"], d["box"], (cx, cy), scale)
+            lines = d["lines"]
+            if v == sec_view:
+                # The cut faces hatched 2.5 mm apart on the paper.
+                lines = lines + [("thin", [p, q]) for p, q in views.hatch(d["cut"], 2.5 / scale)]
+            sheet.place(lines, d["box"], (cx, cy), scale)
             w, h = sizes[v][0] * scale, sizes[v][1] * scale
-            sheet.text(cx, cy - h / 2 - 4, 3.0, v.upper(), "middle")
+            sheet.text(cx, cy - h / 2 - 4, 3.0, f"SECTION {sec_label}-{sec_label}" if v == sec_view else v.upper(), "middle")
             if a.get("dimensions", True) and v in views.AXES:
                 ha, va = views.AXES[v]
                 left, right, top, bottom = cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2
@@ -507,6 +552,40 @@ def tools(session):
                     sheet.dimension((right, bottom), (right, top), 8, _num(extent[va]))
                     done.add(va)
                     dims.append({"view": v, "axis": va, "mm": round(extent[va], 3)})
+        section_out = None
+        if sec_view:
+            # The cutting plane seen edge on in another view: a chain line
+            # across it, past its ends, lettered at both.
+            Zs, _, _ = views.frame(sec_view)
+            d_plane = drawn[sec_view]["plane"]
+            shown = None
+            for v in want:
+                if v in (sec_view, "iso") or v not in views.VIEWS:
+                    continue
+                Zv, Xv, Yv = views.frame(v)
+                if abs(Zv.dot(Zs)) < 1e-6:
+                    shown = v
+                    break
+            section_out = {"view": sec_view, "label": f"{sec_label}-{sec_label}", "plane": round(d_plane, 3), "cutFaces": len(drawn[sec_view]["cut"])}
+            bbs = shapes[0].BoundBox
+            for sh in shapes[1:]:
+                bbs.add(sh.BoundBox)
+            sec_origin = bbs.Center + Zs * (d_plane - bbs.Center.dot(Zs))
+            if shown:
+                Zv, Xv, Yv = views.frame(shown)
+                box, centre = drawn[shown]["box"], L["centres"][shown]
+                along_x = abs(Zs.dot(Xv)) > 0.5
+                c = Zs * d_plane
+                q = views.point(c, shown)
+                if along_x:
+                    pa, pb = (q[0], box[1] - 4 / scale), (q[0], box[3] + 4 / scale)
+                else:
+                    pa, pb = (box[0] - 4 / scale, q[1]), (box[2] + 4 / scale, q[1])
+                ppa, ppb = _to_paper(pa, box, centre, scale), _to_paper(pb, box, centre, scale)
+                sheet.line([ppa, ppb], "trail")
+                for pp in (ppa, ppb):
+                    sheet.text(pp[0] + 1.5, pp[1] - 1.5, 3.5, sec_label)
+                section_out["cutLineIn"] = shown
         # Feature dimensions asked for, each in its view: lengths between two
         # places, diameters and radii of round edges, with a tolerance or fit.
         placed, specs = [], []
@@ -596,7 +675,8 @@ def tools(session):
         paths = _write(s, _safe(a.get("file") or name), sheet, ("svg", "pdf", "dxf"))
         page, made = (None, "not asked for")
         if a.get("page", True):
-            page, made = _techdraw_page(s.doc, objs, [(v, L["centres"][v]) for v in want], scale, paper, f"{name} drawing", a.get("dimensions", True), specs, drawn)
+            page, made = _techdraw_page(s.doc, objs, [(v, L["centres"][v]) for v in want], scale, paper, f"{name} drawing", a.get("dimensions", True), specs, drawn,
+                                         {**section_out, "origin": sec_origin} if section_out else None)
         s.snapshot("drawing_make")
         out = {
             "files": paths,
@@ -605,6 +685,7 @@ def tools(session):
             "projection": projection,
             "views": [{"view": v, "at": [round(c, 1) for c in L["centres"][v]], "size": [round(sizes[v][0] * scale, 1), round(sizes[v][1] * scale, 1)]} for v in want],
             "dimensions": dims + placed,
+            **({"section": section_out} if section_out else {}),
             **({"holes": holes_out} if a.get("holes") else {}),
             "titleBlock": tb,
             "techdrawPage": page,
@@ -942,10 +1023,14 @@ def tools(session):
             "at the largest standard scale that fits A4 or A3 (paper auto picks A3 only when it allows a bigger scale), overall sizes dimensioned once each "
             "(dimensions: false leaves them off), hidden: true dashes the hidden edges. Writes SVG, PDF and DXF to the output folder and adds a TechDraw page "
             "with the same views to the document (page: false leaves it out). dims adds feature dimensions with tolerances or ISO 286 fits (limits written in), "
-            "holes calls out every round hole by size, titleBlock fills a title block of labelled cells.",
+            "holes calls out every round hole by size, titleBlock fills a title block of labelled cells. section: a straight view drawn as a full section "
+            "(cut square to it through the middle, sectionAt mm towards the viewer; the cut faces hatched, the cutting line lettered sectionLabel, A, in a view that sees it edge on) — for bores, pockets and walls inside.",
             _obj({
                 "bodies": bodies,
                 "views": {"type": "array", "items": {"type": "string", "enum": list(views.VIEWS)}},
+                "section": {"type": "string", "enum": list(views.VIEWS)},
+                "sectionAt": {"type": "number"},
+                "sectionLabel": {"type": "string"},
                 "projection": {"type": "string", "enum": ["first", "third"]},
                 "paper": {"type": "string", "enum": ["A4", "A3", "auto"]},
                 "scale": {"type": "number", "description": "0.5 for 1:2, 2 for 2:1; left out, the largest standard one that fits."},

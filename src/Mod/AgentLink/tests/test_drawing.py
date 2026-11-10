@@ -148,6 +148,25 @@ class Drawing(unittest.TestCase):
         err, e = self.call("drawing_make", {"bodies": ["Box"], "dims": [{"view": "front", "kind": "diameter", "a": [0, 0, 0], "fit": "Q9"}]})
         self.assertTrue(err)
 
+    def test_1c_section(self):
+        # The project box cut through its middle, seen from the front: its
+        # walls and floor one U-shaped cut face, hatched; the cutting line
+        # in the top view; TechDraw's own section on the page.
+        err, d = self.call("drawing_make", {"bodies": ["Box"], "name": "Box section", "file": "Box_section", "views": ["front", "top", "right"], "section": "front"})
+        print("\nsection:", json.dumps({k: d.get(k) for k in ("section", "page", "pageNote")}))
+        self.assertFalse(err, d)
+        self.assertEqual(d["section"]["cutLineIn"], "top")
+        self.assertEqual(d["section"]["cutFaces"], 1)
+        with open(d["files"]["svg"], encoding="utf-8") as f:
+            svg = f.read()
+        self.assertIn("SECTION A-A", svg)
+        if d["techdrawPage"]:
+            self.assertIn("section", d["page"], d["page"])
+            sv = next(o for o in self.session.doc.Objects if o.TypeId == "TechDraw::DrawViewSection")
+            self.assertEqual(sv.BaseView.Label.lower()[:3], "top")
+        err, e = self.call("drawing_make", {"bodies": ["Box"], "views": ["front", "top"], "section": "iso"})
+        self.assertTrue(err)
+
     def test_2_exploded(self):
         steps = [{"title": "The box", "add": ["Box"]}, {"title": "The lid", "add": ["Box lid"], "note": "Four M3 screws."}]
         # As printed, the lid lies beside the box: said so.

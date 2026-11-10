@@ -4,6 +4,8 @@
 # polylines in the view's own millimetres (x right, y up). The directions
 # are TechDraw's: Z points from the part to the viewer.
 
+import math
+
 import FreeCAD
 import Part
 
@@ -137,3 +139,79 @@ def visible_point(shape, others, view, tries=8):
             if hit is None:
                 return p
     return None
+
+
+# ---- a full section --------------------------------------------------------------------
+
+def section(shapes, view, at=0.0, hidden=False, deflection=0.02):
+    """The view as a full section: the parts cut by a plane square to the
+    view, through their middle moved `at` mm towards the viewer, and the
+    material between the plane and the viewer taken away. As project, plus
+    cut: the cut faces as closed 2D polygons (to hatch), and plane: the
+    plane's depth along the view's Z."""
+    Z, X, Y = frame(view)
+    bb = shapes[0].BoundBox
+    for sh in shapes[1:]:
+        bb.add(sh.BoundBox)
+    d = bb.Center.dot(Z) + float(at)
+    L = 4 * bb.DiagonalLength + 10
+    # A block covering everything on the viewer's side of the plane.
+    m = FreeCAD.Matrix(X.x, Y.x, Z.x, 0, X.y, Y.y, Z.y, 0, X.z, Y.z, Z.z, 0, 0, 0, 0, 1)
+    block = Part.makeBox(2 * L, 2 * L, L, V(-L, -L, 0))
+    block.transformShape(m)
+    block.translate(Z * d + (bb.Center - Z * bb.Center.dot(Z)))
+    kept, cut = [], []
+    for sh in shapes:
+        try:
+            k = sh.cut(block)
+        except Exception:
+            k = sh
+        if not k.isNull() and k.Solids:
+            kept.append(k)
+        for w in sh.slice(Z, d):
+            if not w.isClosed():
+                continue
+            pts = [point(p, view) for p in w.discretize(Deflection=deflection)]
+            if len(pts) >= 3:
+                cut.append(pts)
+    if not kept:
+        raise ValueError("the plane misses the parts")
+    out = project(kept, view, hidden, deflection)
+    out["cut"] = cut
+    out["plane"] = d
+    return out
+
+
+def hatch(polys, spacing, angle=45.0):
+    """Hatch lines across closed polygons (even-odd, so holes stay clear):
+    [((x0, y0), (x1, y1))], `spacing` apart at `angle` degrees."""
+    if not polys or spacing <= 0:
+        return []
+    a = math.radians(angle)
+    ux, uy = math.cos(a), math.sin(a)      # along the lines
+    nx, ny = -uy, ux                        # across them
+    edges = []
+    for poly in polys:
+        n = len(poly)
+        for i in range(n):
+            p, q = poly[i], poly[(i + 1) % n]
+            edges.append((p, q))
+    s = [p[0] * nx + p[1] * ny for poly in polys for p in poly]
+    lo, hi = min(s), max(s)
+    out = []
+    k = math.floor(lo / spacing) + 1
+    while k * spacing < hi:
+        c = k * spacing
+        ts = []
+        for p, q in edges:
+            sp, sq = p[0] * nx + p[1] * ny - c, q[0] * nx + q[1] * ny - c
+            if (sp < 0) != (sq < 0):
+                t = sp / (sp - sq)
+                x, y = p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t
+                ts.append(x * ux + y * uy)
+        ts.sort()
+        for i in range(0, len(ts) - 1, 2):
+            t0, t1 = ts[i], ts[i + 1]
+            out.append(((c * nx + t0 * ux, c * ny + t0 * uy), (c * nx + t1 * ux, c * ny + t1 * uy)))
+        k += 1
+    return out

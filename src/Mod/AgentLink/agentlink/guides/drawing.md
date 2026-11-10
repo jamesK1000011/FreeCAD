@@ -13,3 +13,7 @@
 - `patent_figures` then `patent_draft`, so the draft uses the same numerals and figures.
 - The draft is a starting point for a registered patent attorney or agent. Never present it as ready to file, and never file, send or upload it: that is the person's and counsel's.
 - Formal drawing rules change, and an examiner may ask for changes. The figures follow the USPTO's margins and lettering size; say that is all they promise.
+
+## Sections
+- `drawing_make { section: "front" }` draws that view cut through the middle (`sectionAt` mm towards the viewer moves the plane): the material in front taken away, the cut faces hatched, titled SECTION A-A, and the cutting line drawn and lettered in a view that sees the plane edge on (top for a front section). The TechDraw page gets TechDraw's own section view.
+- Cut through what matters: a bore's axis, a pocket's middle, the thinnest wall. Feature `dims` on that view measure the cut.
