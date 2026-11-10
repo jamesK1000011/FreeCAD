@@ -146,5 +146,40 @@ class Draft(unittest.TestCase):
         self.assertTrue(err)
 
 
+    def test_7_texture_prepare(self):
+        """A block ready for BumpMesh: the top's triangles as the mask, the
+        STL closed and outward, the mask's count the STL's."""
+        import struct
+
+        import Part
+
+        from _fc import add_body
+
+        add_body(self.session, "Grip", Part.makeBox(30, 20, 10))
+        err, t = self.call("texture_prepare", {"body": "Grip", "faces": [{"normal": [0, 0, 1]}], "mode": "include"})
+        print("\ntexture:", json.dumps({k: t.get(k) for k in ("triangles", "maskTriangles", "faces", "mode")}))
+        self.assertFalse(err, t)
+        with open(t["mask"]) as f:
+            m = json.load(f)
+        self.assertEqual(m["stlTriangles"], t["triangles"])
+        with open(t["stl"], "rb") as f:
+            data = f.read()
+        n = struct.unpack("<I", data[80:84])[0]
+        self.assertEqual(n, t["triangles"])
+        up = 0
+        for k in m["triangles"]:
+            nx, ny, nz = struct.unpack("<3f", data[84 + 50 * k:96 + 50 * k])
+            up += nz > 0.99
+        self.assertEqual(up, len(m["triangles"]))
+        # Every triangle's normal points out of the block.
+        for k in range(n):
+            vals = struct.unpack("<12f", data[84 + 50 * k:132 + 50 * k])
+            c = [sum(vals[3 + i::3][:3]) / 3 for i in range(3)]
+            nrm = vals[:3]
+            out = sum((c[i] - (15, 10, 5)[i]) * nrm[i] for i in range(3))
+            self.assertGreater(out, 0, k)
+        self.assertEqual(t["next"]["tool"], "bumpmesh_texture_file")
+
+
 if __name__ == "__main__":
     unittest.main()

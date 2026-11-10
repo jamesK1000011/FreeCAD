@@ -22,3 +22,8 @@
 ## Copies of a part
 - `draft_array { body, kind: "grid", count: [3, 2] }` — copies side by side with a `gap` (2 mm) between, or `spacing [dx, dy, dz]`; `polar { count, center, axis, angle }` round a circle; `path { path, count, align }` along a curve.
 - Joined into the body by default (a wheel's spokes, a row of teeth); `separate: true` makes each copy its own body — a batch to lay out for printing. A feature repeated inside one parametric part is `pd_linear_pattern` / `pd_polar_pattern` instead: it stays editable.
+
+## A surface texture (BumpMesh)
+- Name the faces that must not change first — mating faces, press-fits, threads, a face another part slides on — and say them back to the person.
+- `texture_prepare { body, faces, mode }` writes the part as an STL and a mask of exactly those faces' triangles: `include` textures only them (a grip), `exclude` all but them. It answers the `bumpmesh_texture_file` call to make (BumpMesh's own engine, its library textures, depth `textureHeight`, tile `scaleU`).
+- Check what came back: `scan_open` the textured STL, the body as the reference (`deviation_open_reference`, `deviation_align`): the texture's depth on the textured faces, nothing on the rest. A textured part is a mesh: slice it as it is.

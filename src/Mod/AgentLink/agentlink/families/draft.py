@@ -16,6 +16,7 @@ from ..protocol import Tool, ToolError
 from ..tools import obj
 from . import measure as M
 from . import picks
+from .. import facepick
 
 GROUP = "draft"
 INFO = "Text and surfaces: lettering raised from or cut into a face from a TrueType font; surfaces filled across edges, lofted through curves or fitted to points, thickened into solids."
@@ -398,6 +399,64 @@ def tools(session):
         out.update({"body": done.Label, "solids": len(res.Solids), "volume": round(done.Shape.Volume, 2), "size": [round(bb.XLength, 2), round(bb.YLength, 2), round(bb.ZLength, 2)], "step": len(s.steps)})
         return out
 
+    def texture_prepare(a):
+        """The part for BumpMesh: an STL written face by face from one mesh of
+        the whole part (shared edges meet exactly), and the triangles of the
+        faces asked as a mask file the texture tool reads."""
+        import json
+        import struct
+
+        o = s.body(a.get("body"))
+        shape = o.Shape
+        mode = a.get("mode", "include")
+        if mode not in ("include", "exclude"):
+            raise ToolError("invalid_input", "mode: include (texture only these faces) or exclude (texture all but these).")
+        picked = facepick.pick(shape, a.get("faces"), "faces")
+        want = {n for n, _ in picked}
+        tol = picks.num(a.get("tolerance", 0.02), "tolerance")
+        shape.tessellate(tol)  # one mesh for the whole part: faces meet edge to edge
+        tris, mask, per_face = [], [], {}
+        for i, f in enumerate(shape.Faces):
+            name = f"Face{i + 1}"
+            pts, ft = f.tessellate(tol)
+            if not ft:
+                continue
+            P = [(p.x, p.y, p.z) for p in pts]
+            # Outwards, as the face is in the solid.
+            u0, u1, v0, v1 = f.ParameterRange
+            n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+            a0, b0, c0 = (V(*P[k]) for k in ft[0])
+            flip = (b0 - a0).cross(c0 - a0).dot(n) < 0 and abs((b0 - a0).cross(c0 - a0).Length) > 1e-12
+            start = len(tris)
+            for t in ft:
+                tri = [P[k] for k in t]
+                tris.append(tri[::-1] if flip else tri)
+            per_face[name] = [start, len(tris)]
+            if name in want:
+                mask += list(range(start, len(tris)))
+        stem = (a.get("name") or o.Label).replace(" ", "_")
+        stl = a.get("path") or os.path.join(s.out_dir, stem + "-for-texture.stl")
+        with open(stl, "wb") as fh:
+            fh.write(b"Agent Link texture_prepare".ljust(80, b" "))
+            fh.write(struct.pack("<I", len(tris)))
+            for t in tris:
+                p0, p1, p2 = (V(*q) for q in t)
+                nn = (p1 - p0).cross(p2 - p0)
+                if nn.Length > 0:
+                    nn.normalize()
+                fh.write(struct.pack("<12fH", nn.x, nn.y, nn.z, *t[0], *t[1], *t[2], 0))
+        mask_path = os.path.splitext(stl)[0] + "-mask.json"
+        with open(mask_path, "w", encoding="utf-8") as fh:
+            json.dump({"triangles": mask, "stlTriangles": len(tris), "mode": mode, "faces": sorted(want), "body": o.Label}, fh)
+        out_path = os.path.splitext(stl)[0].replace("-for-texture", "") + "-textured.stl"
+        bb = shape.BoundBox
+        return {
+            "body": o.Label, "stl": stl, "triangles": len(tris), "mask": mask_path, "maskTriangles": len(mask), "mode": mode, "faces": sorted(want),
+            "next": {"tool": "bumpmesh_texture_file", "arguments": {"path": stl, "output": out_path, "layers": [{"texture": "a library name (bumpmesh_list_textures)", "settings": {"textureHeight": 0.5, "scaleU": 5},
+                     "mask": {"mode": mode, "trianglesFile": mask_path}}], "settings": {"refineLength": round(max(0.05, min(5, bb.DiagonalLength / 250)), 2)}}},
+            "note": f"{'Only' if mode == 'include' else 'All but'} {', '.join(sorted(want))} get the texture; say the faces that must not change back to the person first. Then check it: scan_open the textured STL against {o.Label} as the reference (deviation_open_reference, deviation_align) — the texture's depth shows on the textured faces, and nothing on the rest.",
+        }
+
     def draft_fonts(a):
         have = fonts()
         q = (a.get("name") or "").lower()
@@ -576,6 +635,9 @@ def tools(session):
              obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": ["grid", "polar", "path"]}, "count": {}, "gap": {"type": "number"}, "spacing": {"type": "array", "items": {"type": "number"}},
                   "angle": {"type": "number"}, "center": {"type": "array", "items": {"type": "number"}}, "axis": {"type": "array", "items": {"type": "number"}}, "path": {}, "bodyOfPath": {"type": "string"},
                   "align": {"type": "boolean"}, "separate": {"type": "boolean"}, "name": {"type": "string"}}), draft_array, changes=True),
+        Tool("texture_prepare", "A body made ready for a surface texture by BumpMesh: an STL written face by face from one mesh of the whole part, and a mask file of the triangles of faces (names or queries) — mode include (texture only them: a grip) or exclude (all but them: keep a mating face plain). Answers the bumpmesh_texture_file call to make with it, then how to check the result against the body.",
+             obj({"body": {"type": "string"}, "faces": {}, "mode": {"type": "string", "enum": ["include", "exclude"]}, "tolerance": {"type": "number"}, "path": {"type": "string"}, "name": {"type": "string"}}, ["faces"]),
+             texture_prepare),
         Tool("draft_fonts", "The TrueType fonts on this computer (name filters), and the one draft_text takes by default.", obj({"name": {"type": "string"}}), draft_fonts),
         Tool("surface_loft", "A surface through curves in order — edges (\"Body.Edge3\"), sketches, or { points: [[x,y,z] …], closed } for a smooth curve through them: open curves make a sheet, closed ones a tube. ruled for straight lines between; thickness mm makes it a solid (side out, in or both). A curved panel, a duct, a shell for an organic shape.",
              obj({"curves": {"type": "array"}, "body": {"type": "string"}, "ruled": {"type": "boolean"}, "closed": {"type": "boolean"}, "thickness": {"type": "number"}, "side": {"type": "string", "enum": ["out", "in", "both"]}, "name": {"type": "string"}}, ["curves"]), surface_loft, changes=True),
