@@ -384,6 +384,7 @@ def tools(session):
         if not isinstance(changes, dict) or not changes:
             raise ToolError("invalid_input", f"set: {{ property: value }} — {f.Label}'s: {', '.join(k for k in KEYS if has(f, k))} (FreeCAD's property names).")
         before = pc.volume(b)
+        refs = pc.ref_snapshot(b)
         bound = {p.lstrip("."): e for p, e in getattr(f, "ExpressionEngine", [])}
         done = {}
         for k, v in changes.items():
@@ -404,8 +405,13 @@ def tools(session):
             except Exception as e:
                 raise ToolError("invalid_input", f"{k} = {v!r}: {e}")
             done[k] = pc.num(getattr(f, k))
+        doc().recompute()
+        repaired = pc.repair_refs(doc(), refs) if pc.broken(doc()) and refs else None
         out = pc.settle(s, b, f, "feature_edit", before)
         out["set"] = done
+        if repaired:
+            out["refsFound"] = repaired
+            out["note"] = "The change renamed edges or faces later features use: each was found again by what it is (kind, size, place, direction). Check them with view_render."
         return out
 
     def feature_remove(a):

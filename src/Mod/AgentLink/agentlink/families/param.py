@@ -71,8 +71,14 @@ def tools(session):
     s = session
     doc = lambda: s.doc  # noqa: E731
 
-    def check(doc_, what):
+    repaired = {}
+
+    def check(doc_, what, refs=None):
         doc_.recompute()
+        if refs and pc.broken(doc_):
+            found = pc.repair_refs(doc_, refs)
+            if found:
+                repaired.update(found)
         bad = pc.broken(doc_)
         if bad:
             raise ToolError("failed", f"{what} breaks {bad[0]['object']}: {bad[0]['error']}" + (f" (and {', '.join(b['object'] for b in bad[1:])})" if len(bad) > 1 else "") + " — nothing was kept. Choose a value the features can take.")
@@ -90,6 +96,8 @@ def tools(session):
             raise ToolError("invalid_input", "value: a number (with unit mm, deg or \"\"), or an expression string over other parameters, e.g. \"width / 2\".")
         content = f"={v} {unit}".rstrip() if isinstance(v, (int, float)) else "=" + v.lstrip("=")
         ss = sheet(doc(), make=True)
+        refs = [e for b in pc.pd_bodies(doc()) for e in pc.ref_snapshot(b)]
+        repaired.clear()
         found = next((r for r, n in rows(ss) if n == name), None)
         new = found is None
         if new:
@@ -103,12 +111,16 @@ def tools(session):
                 raise ToolError("invalid_input", f"name {name!r}: FreeCAD refuses it as an alias ({e}) — choose another.")
         if a.get("note") is not None:
             ss.set(f"C{found}", str(a["note"]))
-        check(doc(), f"{name} = {v}")
+        check(doc(), f"{name} = {v}", refs)
         val, u = value_of(ss, name)
         if val is None:
             raise ToolError("invalid_input", f"{name} = {v!r} does not evaluate: {u} — param_list gives the names to use.")
         s.snapshot("param_set")
-        return {"name": name, "value": val, "unit": u, "ref": f"{ss.Name}.{name}", "new": new, "usedBy": users(doc(), ss, name), "bodies": bodies_now(), "step": len(s.steps)}
+        out = {"name": name, "value": val, "unit": u, "ref": f"{ss.Name}.{name}", "new": new, "usedBy": users(doc(), ss, name), "bodies": bodies_now(), "step": len(s.steps)}
+        if repaired:
+            out["refsFound"] = dict(repaired)
+            out["note"] = "The change renamed edges or faces later features use: each was found again by what it is. Check them with view_render."
+        return out
 
     def param_list(a):
         ss = sheet(doc())

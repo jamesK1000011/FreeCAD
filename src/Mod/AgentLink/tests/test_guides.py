@@ -34,7 +34,10 @@ class Guides(unittest.TestCase):
         self.assertEqual(missing, {})
 
     def test_instructions_name_real_groups(self):
-        init = self.srv.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})["result"]
+        from agentlink.tools import build_server
+
+        lean = build_server(self.session, lean=True)
+        init = lean.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})["result"]
         text = init["instructions"]
         groups = {t.group for t in self.srv.tools.values()}
         named = re.search(r"\(([a-z, ]+) …\)", text)

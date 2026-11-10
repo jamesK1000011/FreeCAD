@@ -282,6 +282,13 @@ def settle(session, body, feat, tool, before=None, must_change=None, hint=""):
     if bad:
         mine = [b for b in bad if feat is not None and b["object"] == feat.Label]
         first = (mine or bad)[0]
+        if not hint and ("edge link" in first["error"].lower() or "face link" in first["error"].lower() or "invalid link" in first["error"].lower()):
+            # FreeCAD names a feature's edges and faces by the model before
+            # it; a change upstream can leave a later feature's references
+            # pointing at what is no longer there (worst in 1.0).
+            hint = (f"{first['object']} refers to edges or faces of the model as it was, which the change renamed or removed. "
+                    f"Make the change, then pick {first['object']}'s edges again (shape_query, then feature_edit {{ feature: \"{first['object']}\", edges }}), "
+                    "or remove it, change, and add it again.")
         raise ToolError("failed", f"{first['object']} ({first['type']}) failed: {first['error']}" + (f"; also broken: {[b['object'] for b in bad if b is not first]}" if len(bad) > 1 else "") + f" — nothing was kept.{(' ' + hint) if hint else ''}")
     out = {**({"feature": feat.Label, "type": short(feat)} if feat is not None else {}), "valid": True, **body_reading(body)}
     if before is not None and "volume" in out:
@@ -299,3 +306,107 @@ def settle(session, body, feat, tool, before=None, must_change=None, hint=""):
 def volume(body):
     s = body.Shape
     return s.Volume if s is not None and not s.isNull() and s.Solids else 0.0
+
+
+# ---- references that a change upstream renames ------------------------------------------
+# A dress-up feature (fillet, chamfer, draft, thickness) names the edges or
+# faces of the model before it as Edge8, Face3. Change a pad or a sketch
+# and those names can land on other edges or none at all (FreeCAD 1.0
+# especially). Before such a change each reference is read as what it is —
+# kind, curve or surface, size, middle, direction — and if the change breaks
+# the feature, every reference is found again by that, on the new model.
+
+DRESSUPS = ("PartDesign::Fillet", "PartDesign::Chamfer", "PartDesign::Draft", "PartDesign::Thickness")
+
+
+def _sig(shape, sub):
+    name = sub.split(".")[-1]
+    try:
+        el = shape.getElement(name)
+    except Exception:
+        return None
+    kind = "Edge" if name.startswith("Edge") else "Face" if name.startswith("Face") else None
+    if kind is None:
+        return None
+    c = el.CenterOfMass if hasattr(el, "CenterOfMass") else el.BoundBox.Center
+    if kind == "Edge":
+        t = type(el.Curve).__name__
+        d = None
+        if t == "Line":
+            v = el.Vertexes[-1].Point - el.Vertexes[0].Point
+            d = v.normalize() if v.Length > 1e-9 else None
+        elif hasattr(el.Curve, "Axis"):
+            d = FreeCAD.Vector(el.Curve.Axis)
+        return {"kind": kind, "type": t, "size": el.Length, "at": c, "dir": d}
+    t = type(el.Surface).__name__
+    try:
+        u0, u1, v0, v1 = el.ParameterRange
+        d = el.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+    except Exception:
+        d = None
+    return {"kind": kind, "type": t, "size": el.Area, "at": c, "dir": d}
+
+
+def ref_snapshot(body):
+    """Each dress-up feature of the body, with what each of its references
+    is, read on the model it is built on."""
+    snap = []
+    for f in getattr(body, "Group", []):
+        if f.TypeId not in DRESSUPS or not getattr(f, "Base", None):
+            continue
+        base, subs = f.Base
+        if base is None or base.Shape.isNull():
+            continue
+        sigs = [_sig(base.Shape, s) for s in subs]
+        if all(sigs):
+            snap.append({"feature": f, "base": base, "subs": list(subs), "sigs": sigs})
+    return snap
+
+
+def _match(shape, sig, taken, scale):
+    cands = shape.Edges if sig["kind"] == "Edge" else shape.Faces
+    best, best_score = None, None
+    for i, el in enumerate(cands):
+        name = f"{sig['kind']}{i + 1}"
+        if name in taken:
+            continue
+        s = _sig(shape, name)
+        if s is None or s["type"] != sig["type"]:
+            continue
+        if sig["dir"] is not None and s["dir"] is not None and abs(sig["dir"].dot(s["dir"])) < 0.995:
+            continue
+        score = (s["at"] - sig["at"]).Length + 0.25 * abs(s["size"] - sig["size"]) ** (0.5 if sig["kind"] == "Face" else 1)
+        if best_score is None or score < best_score:
+            best, best_score = name, score
+    if best is None or best_score > 0.25 * scale:
+        return None
+    return best
+
+
+def repair_refs(doc, snap):
+    """Find each snapshotted feature's references again on its base's new
+    model, where the old names broke. Returns what was moved, by feature:
+    { feature: [[old, new], …] }, or None when a reference could not be
+    found (nothing is changed then)."""
+    moved = {}
+    plans = []
+    for e in snap:
+        f, base = e["feature"], e["base"]
+        shape = base.Shape
+        if shape.isNull():
+            return None
+        scale = max(shape.BoundBox.DiagonalLength, 1e-6)
+        taken, new = set(), []
+        for old, sig in zip(e["subs"], e["sigs"]):
+            m = _match(shape, sig, taken, scale)
+            if m is None:
+                return None
+            taken.add(m)
+            new.append(m)
+        if [s.split(".")[-1] for s in e["subs"]] != new:
+            plans.append((f, base, new))
+            moved[f.Label] = [[o.split(".")[-1], n] for o, n in zip(e["subs"], new) if o.split(".")[-1] != n]
+    for f, base, new in plans:
+        f.Base = (base, new)
+    doc.recompute()
+    return moved

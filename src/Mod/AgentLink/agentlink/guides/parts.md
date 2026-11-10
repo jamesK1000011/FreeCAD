@@ -3,7 +3,7 @@
 ## Which generator
 - A Gridfinity bin: `gen_make`. Its baseplate: `gen_part { generator: "gridfinity_baseplate", params: { x, y, style } }`. `style: "magnets"` puts the pockets on a floor with 6x2 magnet holes where a bin's magnets land; the magnets press in from above, no pause needed.
 - A box with a lid: `project_box`. `bosses: true` adds corner screw bosses, pilot holes and lid holes for the screw named.
-- A box round a board: `board_box` by hand, or `board_enclosure` after `kicad_import`, which reads the holes, heights and edge connectors for you.
+- A box round a board: `gen_part { generator: "board_box" }` by hand, or `board_enclosure` after `kicad_import`, which reads the holes, heights and edge connectors for you.
 
 ## Traps
 - Sizes are outside sizes. `measure: true` first when the person gave an inside size, then adjust.

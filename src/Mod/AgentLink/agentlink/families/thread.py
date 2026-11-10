@@ -180,7 +180,19 @@ def tools(session):
             h.Profile = sk
             body.addObject(h)
             h.ThreadType = HOLE_TYPE[row["series"]]
-            h.ThreadSize = row["freecad"]
+            # The size as this release lists it: "M6x1.0" in later ones, the
+            # coarse "M6" in 1.0.
+            sizes = list(h.getEnumerationsOfProperty("ThreadSize"))
+            want = row["freecad"]
+            pick = want if want in sizes else None
+            if pick is None and row["series"].startswith("metric"):
+                bare = want.split("x")[0]
+                pitch = want.split("x")[1] if "x" in want else None
+                pick = next((z for z in sizes if z == bare), None) if row["series"] == "metric" else None
+                pick = pick or next((z for z in sizes if pitch and z.startswith(bare + "x") and float(z.split("x")[1]) == float(pitch)), None)
+            if pick is None:
+                raise ToolError("unavailable", f"FreeCAD {'.'.join(FreeCAD.Version()[:3])} lists no hole thread {want} ({', '.join(sizes[:8])} …): cut it cosmetic, or with a size it lists.")
+            h.ThreadSize = pick
             h.Threaded = True
             h.ModelThread = mode == "modelled"
             h.HoleCutType = "None"

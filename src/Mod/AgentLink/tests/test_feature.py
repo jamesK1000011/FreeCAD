@@ -53,6 +53,9 @@ class FeatureTools(Base):
     def test_6_edit_suppress_remove(self):
         e = self.ok("feature_edit", {"feature": "Pad", "set": {"Length": 12}})
         self.assertEqual(e["box"][2], 12)
+        # Where the release renamed the fillet's edges, they were found again.
+        if "refsFound" in e:
+            print("\nrefs found again:", e["refsFound"])
         self.refused("feature_edit", {"feature": "Pad", "set": {"Nonsense": 1}})
         listing = self.ok("feature_list")
         pad = next(f for f in listing["features"] if f["name"] == "Pad")
