@@ -494,8 +494,8 @@ def tools(session):
 
     def sketch_offset(a):
         sk = pc.sketch_of(doc(), a.get("sketch"))
-        d = pc.num(a.get("distance"), "distance") if a.get("distance") is not None else None
-        if d is None or abs(d) < 1e-9:
+        d = a.get("distance")
+        if not isinstance(d, (int, float)) or isinstance(d, bool) or abs(d) < 1e-9:
             raise ToolError("invalid_input", "distance: mm, out from the profile (negative: in).")
         doc().recompute()
         geos = sk.Geometry
@@ -511,6 +511,7 @@ def tools(session):
             wires = [Part.Wire(w) for w in Part.sortEdges(edges)]
         except Exception as e:
             raise ToolError("invalid_input", f"The geometry does not join into profiles ({e}): offset a closed profile or a chain.")
+        d = float(d)
         join = {"arc": 0, "tangent": 1, "intersection": 2}.get(a.get("join", "arc"))
         if join is None:
             raise ToolError("invalid_input", "join: arc (round corners, the default), tangent or intersection (sharp).")
