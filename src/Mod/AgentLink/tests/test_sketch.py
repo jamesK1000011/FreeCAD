@@ -61,9 +61,6 @@ class SketchTools(Base):
         # Four sides and four round corners, joined into one more closed profile.
         self.assertEqual(len(off["added"]), 8, off)
         self.assertEqual(off["state"]["closedWires"], 2, off["state"])
-        import json
-
-        print("\noffset geometry:", json.dumps(self.ok("sketch_state", {"sketch": "TrayOut"})["geometry"][4:]))
         self.ok("sketch_new", {"body": "Tray", "plane": "XZ", "name": "Curves"})
         c = self.ok("sketch_add", {"sketch": "Curves", "items": [
             {"kind": "bspline", "points": [[0, 0], [10, 8], [20, 0], [30, 8]]},

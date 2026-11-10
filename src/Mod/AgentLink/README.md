@@ -3,7 +3,7 @@
 
 An agent drives FreeCAD over the Model Context Protocol, in ScanRuler's
 manner: one call per job, small answers in millimetres and grams, and
-refusals that say what to do instead. There are 132 tools in 26 groups.
+refusals that say what to do instead. There are 138 tools in 27 groups.
 The lean list (the default) shows the core and the make-check-verdict
 loop; `tool_groups` shows the rest. Any tool can be called by name
 whether it is listed or not. Every change is one FreeCAD undo step.
@@ -20,6 +20,7 @@ whether it is listed or not. Every change is one FreeCAD undo step.
 | make | setups (print, cut, mill), part spec and material, printability (`dfm_check`), `part_review`, `slice` |
 | fits, embed | fits, printer calibration, tolerance stacks, hardware holes; parts sealed in mid-print with their pauses |
 | material, mass, strength, thread | FreeCAD's material library and custom materials; mass as printed, centre of mass, ballast to a target; FEM strength with CalculiX (print-aware); thread tables, identification and cutting |
+| draft | `draft_text` (lettering raised or cut into a flat face from a TrueType font), `draft_fonts`, `surface_fill` (a smooth surface across a boundary, thickened into a solid) |
 | assembly | FreeCAD's Assembly workbench: `asm_new` (parts, one grounded), `asm_joint` (fixed, revolute, cylindrical, slider, ball, distance, parallel, perpendicular, angle between faces and edges picked by query, solved), `asm_check` (overlaps, clearances, parts left floating), `asm_list`, `asm_ground`, `asm_add`, `asm_joint_remove` |
 | cam | FreeCAD's CAM workbench: `cam_job` (stock and end mill), `cam_op` (profile, pocket, adaptive, facing, drilling — each computed and read back), `cam_post` (G-code by FreeCAD's post-processors, checked against the stock), `cam_list`, `cam_tool`, `cam_remove` |
 | cut, mill | sheet-part checks with DXF/SVG nested on the sheet; milling checks with STEP and a setup sheet |
