@@ -327,12 +327,42 @@ def tools(session):
         code, said = _status(asm)
         return {"assembly": asm.Label, "parts": [{"part": o.Label, "placement": _placement(o), "grounded": o in _grounded(asm)} for o in _parts(asm)], "joints": joints, "solve": said}
 
-    def _switch(j, on):
-        # 1.0 calls it Activated; later releases Suppressed, the other way.
-        if hasattr(j, "Suppressed"):
-            j.Suppressed = not on
-        elif hasattr(j, "Activated"):
-            j.Activated = on
+    def _ref_element(r):
+        """A joint reference's part and element shape, either form: [asm,
+        ["Part.Face6", …]] (1.0) or [part, ["Face6", …]]."""
+        if not r:
+            return None, None
+        o, subs = r[0], (r[1] if len(r) > 1 else [])
+        sub = subs[0] if subs else ""
+        path = sub.split(".")
+        part = o
+        if o.TypeId == "Assembly::AssemblyObject" and len(path) > 1:
+            part = doc().getObject(path[0])
+        el = path[-1]
+        try:
+            return part, part.Shape.getElement(el)
+        except Exception:
+            return part, None
+
+    def _axis(el):
+        """Where a joint on this element turns and slides, as asm_joint puts
+        it: a flat face's middle and normal; a round edge's or face's axis."""
+        import Part
+
+        if isinstance(el, Part.Face):
+            srf = el.Surface
+            if isinstance(srf, Part.Plane):
+                u0, u1, v0, v1 = el.ParameterRange
+                n = el.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+                return el.CenterOfMass, n
+            if hasattr(srf, "Axis") and hasattr(srf, "Center"):
+                return srf.Center, srf.Axis
+        if isinstance(el, Part.Edge) and hasattr(el.Curve, "Axis"):
+            return el.Curve.Center, el.Curve.Axis
+        if isinstance(el, Part.Edge):
+            p0 = el.valueAt(el.FirstParameter)
+            return p0, el.valueAt(el.LastParameter) - p0
+        return None
 
     def asm_sweep(a):
         asm = _assembly(doc(), a.get("assembly"))
@@ -350,60 +380,69 @@ def tools(session):
         if not 1 <= steps <= 72:
             raise ToolError("invalid_input", "steps: 1 to 72.")
         clearance = float(a.get("clearance", 0))
-        parts = _parts(asm)
-        kept = {o.Name: o.Placement.copy() for o in parts}
-        base_off = j.Offset2.copy()
-        t = _joints(asm).newObject("App::FeaturePython", "SweepHold")
-        JointObject.Joint(t, JointObject.JointTypes.index("Fixed"))
+        p1, e1 = _ref_element(j.Reference1)
+        p2, e2 = _ref_element(j.Reference2)
+        grounded = _grounded(asm)
+        # The part that moves: the second, unless it is the grounded one.
+        fixed_side, moving, el = (p1, p2, e1) if p2 not in grounded else (p2, p1, e2)
+        ax = _axis(el) if el is not None else None
+        if ax is None or moving is None:
+            raise ToolError("failed", f"The axis of {j.Label} could not be read from its elements.")
+        centre, axis = ax
+        axis = V(axis)
+        axis.normalize()
+        # What moves with it: parts joined to it by other joints, short of
+        # grounded parts and the part it turns on.
+        group, todo = {moving.Name: moving}, [moving]
+        others = [x for x in _joints(asm).Group if x is not j and getattr(x, "ObjectToGround", None) is None]
+        while todo:
+            cur = todo.pop()
+            for x in others:
+                q1, _ = _ref_element(getattr(x, "Reference1", None))
+                q2, _ = _ref_element(getattr(x, "Reference2", None))
+                for here, there in ((q1, q2), (q2, q1)):
+                    if here is not None and there is not None and here.Name == cur.Name and there.Name not in group and there not in grounded and there is not fixed_side:
+                        group[there.Name] = there
+                        todo.append(there)
+        kept = {o.Name: o.Placement.copy() for o in _parts(asm)}
         out_steps = []
         try:
-            t.Reference1 = j.Reference1
-            t.Reference2 = j.Reference2
-            t.Offset1 = j.Offset1
-            _switch(j, False)
             for k in range(steps + 1):
                 v = lo + (hi - lo) * k / steps
-                move = FreeCAD.Placement(V(0, 0, 0), FreeCAD.Rotation(V(0, 0, 1), v)) if turning else FreeCAD.Placement(V(0, 0, v), FreeCAD.Rotation())
-                t.Offset2 = base_off.multiply(move)
-                try:
-                    t.Proxy.updateJCSPlacements(t)
-                except Exception:
-                    pass
+                if turning:
+                    r = FreeCAD.Rotation(axis, v)
+                    move = FreeCAD.Placement(centre - r.multVec(centre), r)
+                else:
+                    move = FreeCAD.Placement(axis * v, FreeCAD.Rotation())
+                for o in group.values():
+                    o.Placement = move.multiply(kept[o.Name])
                 doc().recompute()
-                code, said = _status(asm)
-                row = {"at": round(v, 3), "solve": said}
-                if code == 0:
-                    hits, near = _overlaps(_parts(asm), clearance)
-                    if hits:
-                        row["overlaps"] = [{"parts": h["parts"], "volume": h["volume"]} for h in hits]
-                    if clearance > 0 and near:
-                        row["closer"] = near
+                row = {"at": round(v, 3)}
+                hits, near = _overlaps(_parts(asm), clearance)
+                if hits:
+                    row["overlaps"] = [{"parts": h["parts"], "volume": h["volume"]} for h in hits]
+                if clearance > 0 and near:
+                    row["closer"] = near
                 out_steps.append(row)
         finally:
             for o in _parts(asm):
                 if o.Name in kept:
                     o.Placement = kept[o.Name]
-            doc().removeObject(t.Name)
-            _switch(j, True)
             doc().recompute()
             _status(asm)
         unit = "degrees" if turning else "mm"
-        solved = SOLVE.get(0)
-        unsolved = [r["at"] for r in out_steps if r["solve"] != solved]
         bad = [r["at"] for r in out_steps if r.get("overlaps")]
         clear_run = []
         for r in out_steps:
-            if r.get("overlaps") or r["solve"] != solved:
+            if r.get("overlaps"):
                 break
             clear_run.append(r["at"])
-        verdict = "collides" if bad else ("unknown" if unsolved else "clear")
-        out = {"joint": j.Label, "kind": kind, "unit": unit, "from": lo, "to": hi, "steps": out_steps, "verdict": verdict,
-               "note": f"The joint turned back where it was; every part put back. Steps are {abs(hi - lo) / steps:g} {unit} apart: a collision between two steps is not seen — more steps to look closer."}
+        out = {"joint": j.Label, "kind": kind, "unit": unit, "from": lo, "to": hi, "moves": sorted(o.Label for o in group.values()),
+               "axis": {"through": [round(c, 3) for c in centre], "along": [round(c, 4) for c in axis]}, "steps": out_steps,
+               "verdict": "collides" if bad else "clear",
+               "note": f"{' and '.join(sorted(o.Label for o in group.values()))} turned (or slid) about the joint's axis and put back after. Steps are {abs(hi - lo) / steps:g} {unit} apart: a collision between two steps is not seen — more steps to look closer. A chain of moving joints beyond this one is carried along rigidly, not solved."}
         if bad:
             out["collidesAt"] = bad
-        if unsolved:
-            out["unsolvedAt"] = unsolved
-        if bad or unsolved:
             out["clearFromStart"] = [clear_run[0], clear_run[-1]] if clear_run else None
         return out
 
