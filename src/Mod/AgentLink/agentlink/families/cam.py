@@ -296,7 +296,19 @@ def tools(session):
                 last_tc = tc
             postables.append(op)
         try:
-            gcode = post.export(postables, "-", "--no-show-editor")
+            if hasattr(post, "export"):
+                gcode = post.export(postables, "-", "--no-show-editor")
+            else:
+                # Later releases: post-processors are classes, made for the job.
+                from Path.Post.Processor import PostProcessorFactory
+
+                if hasattr(job, "PostProcessorArgs"):
+                    job.PostProcessorArgs = "--no-show-editor"
+                pp = PostProcessorFactory.get_post_processor(job, name)
+                sections = pp.export() or []
+                gcode = "\n".join(g for _, g in sections if isinstance(g, str))
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError("failed", f"The {name} post-processor stopped: {e}")
         if not isinstance(gcode, str) or not gcode.strip():
