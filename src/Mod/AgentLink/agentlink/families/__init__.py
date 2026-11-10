@@ -30,6 +30,7 @@ NAMES = [
     "electronics",
     "share",
     "view",
+    "assembly",
 ]
 
 

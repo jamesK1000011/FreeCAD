@@ -70,7 +70,7 @@ class Session:
         PartDesign Body, not its features; a boolean's result, not its
         inputs) and that are shown. A folder or a spreadsheet using one
         does not count."""
-        passive = ("App::DocumentObjectGroup", "Spreadsheet::Sheet", "App::Part")
+        passive = ("App::DocumentObjectGroup", "Spreadsheet::Sheet", "App::Part", "Assembly::AssemblyObject", "Assembly::JointGroup")
         out = []
         for o in self.doc.Objects:
             if not self._solid(o):
