@@ -378,6 +378,16 @@ def nearest_values(points, src_points, src_values, chunk=2048):
     return out
 
 
+def even_length(V, F, cap, floor=None):
+    """The longest edge that lets the whole surface be split evenly within
+    cap triangles: so no face is left whole when the budget runs out on
+    the others."""
+    T = np.asarray(V, dtype=float)[np.asarray(F, dtype=np.int64)]
+    area = float(np.linalg.norm(np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]), axis=1).sum() / 2)
+    L = math.sqrt(area / (0.433 * 0.5 * cap)) if area > 0 else 1.0
+    return max(L, floor or 0.0, 0.2)
+
+
 def subdivide(V, F, maxlen, cap=60000):
     """Split triangles until no edge is over maxlen (or the count reaches
     cap): so a map has points to show on a big flat face. Unshared
@@ -405,46 +415,66 @@ def subdivide(V, F, maxlen, cap=60000):
     return T.reshape(-1, 3), np.arange(3 * n, dtype=np.int64).reshape(n, 3)
 
 
-def cast(origins, dirs, V, F, reach, chunk_cells=6_000_000):
+def cast(origins, dirs, V, F, reach, group=48, chunk_cells=4_000_000):
     """For each ray, the distance to the nearest triangle it meets past
-    2 µm and within reach, else nan (Möller–Trumbore, in chunks)."""
+    2 µm and within reach, else nan (Möller–Trumbore). Rays go in groups of
+    neighbours, each against only the triangles within reach of the group:
+    a wall map's rays look a few millimetres in, not across the part."""
     V = np.asarray(V, dtype=float)
     F = np.asarray(F, dtype=np.int64)
-    v0, v1, v2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
-    e1, e2 = v1 - v0, v2 - v0
+    T = V[F]
+    tlo, thi = T.min(1), T.max(1)
     O = np.asarray(origins, dtype=float)
     D = np.asarray(dirs, dtype=float)
     out = np.full(len(O), np.nan)
-    step = max(1, chunk_cells // max(1, len(F)))
-    for i in range(0, len(O), step):
-        o, d = O[i:i + step, None, :], D[i:i + step, None, :]
-        h = np.cross(d, e2[None])
-        a = (e1[None] * h).sum(-1)
-        ok = np.abs(a) > 1e-12
-        f = np.where(ok, 1.0 / np.where(ok, a, 1.0), 0.0)
-        s_ = o - v0[None]
-        u = f * (s_ * h).sum(-1)
-        q = np.cross(s_, e1[None])
-        v = f * (q * d).sum(-1)
-        t = f * (e2[None] * q).sum(-1)
-        m = ok & (u >= -1e-9) & (v >= -1e-9) & (u + v <= 1 + 1e-9) & (t > 2e-3) & (t <= reach)
-        t = np.where(m, t, np.inf)
-        best = t.min(1)
-        out[i:i + step] = np.where(np.isfinite(best), best, np.nan)
+    if not len(O) or not len(F):
+        return out
+    finite = np.isfinite(reach) and reach < 1e8
+    # Neighbours together: sorted along a coarse grid.
+    cell = max((float(reach) / 3) if finite else np.ptp(O, axis=0).max(), 1e-6)
+    key = np.floor((O - O.min(0)) / cell).astype(np.int64)
+    order = np.lexsort((key[:, 2], key[:, 1], key[:, 0]))
+    for i in range(0, len(O), group):
+        idx = order[i:i + group]
+        if finite:
+            # The box the group's ray segments sweep, not a ball round them.
+            ends = O[idx] + D[idx] * reach
+            lo = np.minimum(O[idx].min(0), ends.min(0)) - 1e-6
+            hi = np.maximum(O[idx].max(0), ends.max(0)) + 1e-6
+            near = np.nonzero(np.all((thi >= lo) & (tlo <= hi), axis=1))[0]
+        else:
+            near = np.arange(len(F))
+        if not len(near):
+            continue
+        v0, e1, e2 = T[near, 0], T[near, 1] - T[near, 0], T[near, 2] - T[near, 0]
+        step = max(1, chunk_cells // len(near))
+        for j in range(0, len(idx), step):
+            r = idx[j:j + step]
+            o, d = O[r, None, :], D[r, None, :]
+            h = np.cross(d, e2[None])
+            a = (e1[None] * h).sum(-1)
+            ok = np.abs(a) > 1e-12
+            f = np.where(ok, 1.0 / np.where(ok, a, 1.0), 0.0)
+            s_ = o - v0[None]
+            u = f * (s_ * h).sum(-1)
+            q = np.cross(s_, e1[None])
+            v = f * (q * d).sum(-1)
+            t = f * (e2[None] * q).sum(-1)
+            m = ok & (u >= -1e-9) & (v >= -1e-9) & (u + v <= 1 + 1e-9) & (t > 2e-3) & (t <= reach)
+            best = np.where(m, t, np.inf).min(1)
+            out[r] = np.where(np.isfinite(best), best, np.nan)
     return out
 
 
-def wall_map(V, F, reach=12.0, maxlen=None, cap=30000):
+def wall_map(V, F, reach=12.0, maxlen=None, cap=16000, closed=True):
     """The wall at each spot of a solid's surface: straight in from each
     small triangle's middle to where the ray leaves the material. A
-    triangle the ray leaves past reach reads reach (thick); one that finds
-    no way out (a mesh not closed) reads nan. (V, F, values per vertex)."""
+    triangle the ray leaves past reach reads reach (thick). A solid's
+    tessellation is closed; for a mesh that may not be (closed=False) a ray
+    that finds no way out at all reads nan. (V, F, values per vertex)."""
     V = np.asarray(V, dtype=float)
     F = np.asarray(F, dtype=np.int64)
-    if maxlen is None:
-        span = np.ptp(V, axis=0).max() if len(V) else 1.0
-        maxlen = max(span / 40.0, 0.5)
-    SV, SF = subdivide(V, F, maxlen, cap=cap)
+    SV, SF = subdivide(V, F, even_length(V, F, cap, maxlen), cap=cap)
     T = SV[SF]
     c = T.mean(1)
     n = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
@@ -455,7 +485,9 @@ def wall_map(V, F, reach=12.0, maxlen=None, cap=30000):
     # No hit within reach: thick if the ray had room to go (inside the
     # bounding box for reach), else the mesh is open there.
     far = np.isnan(d)
-    if far.any():
+    if closed:
+        d[far] = reach
+    elif far.any():
         d2 = cast(c[far] - n[far] * 1e-3, -n[far], V, F, 1e9)
         d[np.nonzero(far)[0][np.isfinite(d2)]] = reach
     vals = np.repeat(d, 3)

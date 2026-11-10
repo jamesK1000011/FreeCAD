@@ -59,7 +59,7 @@ def _wall(s, a):
     layers = []
     for i, o in enumerate(_bodies(s, a)):
         L = render.body_layer(o, i, tol=float(a.get("tolerance", 0.05)))
-        V, F, vals = render.wall_map(L["V"], L["F"], reach=reach, cap=int(a.get("detail", 40000)))
+        V, F, vals = render.wall_map(L["V"], L["F"], reach=reach, cap=int(a.get("detail", 16000)))
         layers.append({"name": o.Label, "V": V, "F": F, "values": vals, "creases": True})
     # Colours spent on the thin end: up to twice the typical wall.
     allv = np.concatenate([l["values"] for l in layers]) if layers else np.zeros(0)
@@ -80,7 +80,8 @@ def _stress(s, a):
     f = r["field"]
     P, vm = np.asarray(f["points"], dtype=float), np.asarray(f["vonMises"], dtype=float)
     L = render.body_layer(o, 0, tol=float(a.get("tolerance", 0.05)))
-    V, F = render.subdivide(L["V"], L["F"], max(np.ptp(L["V"], axis=0).max() / 60.0, 0.3), cap=int(a.get("detail", 40000)))
+    cap = int(a.get("detail", 30000))
+    V, F = render.subdivide(L["V"], L["F"], render.even_length(L["V"], L["F"], cap), cap=cap)
     vals = render.nearest_values(V, P, vm)
     y = (r["result"].get("material") or {}).get("yield")
     out = {"layers": [{"name": o.Label, "V": V, "F": F, "values": vals, "creases": True}], "unit": "MPa", "cmap": "jet", "worst": "max", "label": "VON MISES",
@@ -260,7 +261,7 @@ def tools(session):
                 "map": {"type": "string"}, "range": {"type": "array", "items": {"type": "number"}},
                 "section": {"type": "object"}, "zoom": {"type": "object"},
                 "objects": {}, "layers": {"type": "array", "items": {"type": "string"}},
-                "reach": {"type": "number"}, "tolerance": {"type": "number"}, "detail": {"type": "integer"},
+                "reach": {"type": "number"}, "tolerance": {"type": "number"}, "detail": {"type": "integer", "description": "How many small triangles a map is read on (wall 16000, stress 30000): more is finer and slower."},
                 "width": {"type": "integer"}, "height": {"type": "integer"}, "inline": {"type": "boolean"}, "path": {"type": "string"},
             }),
             view_render,
