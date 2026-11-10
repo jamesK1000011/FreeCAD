@@ -175,6 +175,49 @@ def place_on(o, face, flat, at, rotate, depth, mode):
     return solid, flat.BoundBox
 
 
+def face_triangles(shape, tol):
+    """One mesh of the whole part (faces meet edge to edge), face by face:
+    the triangles, each wound outward as its face is in the solid, and each
+    face's [start, end) among them. What texture_prepare writes and
+    texture_check reads back against."""
+    shape.tessellate(tol)
+    tris, per_face = [], {}
+    for i, f in enumerate(shape.Faces):
+        pts, ft = f.tessellate(tol)
+        if not ft:
+            continue
+        P = [(p.x, p.y, p.z) for p in pts]
+        u0, u1, v0, v1 = f.ParameterRange
+        n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+        a0, b0, c0 = (FreeCAD.Vector(*P[k]) for k in ft[0])
+        flip = (b0 - a0).cross(c0 - a0).dot(n) < 0 and abs((b0 - a0).cross(c0 - a0).Length) > 1e-12
+        start = len(tris)
+        for t in ft:
+            tri = [P[k] for k in t]
+            tris.append(tri[::-1] if flip else tri)
+        per_face[f"Face{i + 1}"] = [start, len(tris)]
+    return tris, per_face
+
+
+def read_stl(path):
+    """An STL's triangles as an (n, 3, 3) array, binary or ASCII."""
+    import numpy as np
+
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if len(data) >= 84:
+        n = int.from_bytes(data[80:84], "little")
+        if 84 + 50 * n == len(data):
+            rec = np.frombuffer(data, dtype=[("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")], count=n, offset=84)
+            return rec["v"].astype(float)
+    words = data.decode("ascii", "replace").split()
+    vals = []
+    for k, w in enumerate(words):
+        if w == "vertex":
+            vals += [float(words[k + 1]), float(words[k + 2]), float(words[k + 3])]
+    return np.array(vals, float).reshape(-1, 3, 3)
+
+
 def tools(session):
     s = session
 
@@ -417,26 +460,8 @@ def tools(session):
             item = {"faces": [item]} if isinstance(item, str) else item
             want |= {n for n, _ in facepick.pick(shape, item, f"faces.{k}" if isinstance(q, list) else "faces")}
         tol = picks.num(a.get("tolerance", 0.02), "tolerance")
-        shape.tessellate(tol)  # one mesh for the whole part: faces meet edge to edge
-        tris, mask, per_face = [], [], {}
-        for i, f in enumerate(shape.Faces):
-            name = f"Face{i + 1}"
-            pts, ft = f.tessellate(tol)
-            if not ft:
-                continue
-            P = [(p.x, p.y, p.z) for p in pts]
-            # Outwards, as the face is in the solid.
-            u0, u1, v0, v1 = f.ParameterRange
-            n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
-            a0, b0, c0 = (V(*P[k]) for k in ft[0])
-            flip = (b0 - a0).cross(c0 - a0).dot(n) < 0 and abs((b0 - a0).cross(c0 - a0).Length) > 1e-12
-            start = len(tris)
-            for t in ft:
-                tri = [P[k] for k in t]
-                tris.append(tri[::-1] if flip else tri)
-            per_face[name] = [start, len(tris)]
-            if name in want:
-                mask += list(range(start, len(tris)))
+        tris, per_face = face_triangles(shape, tol)
+        mask = [k for name in sorted(want) if name in per_face for k in range(*per_face[name])]
         stem = (a.get("name") or o.Label).replace(" ", "_")
         stl = a.get("path") or os.path.join(s.out_dir, stem + "-for-texture.stl")
         with open(stl, "wb") as fh:
@@ -457,8 +482,104 @@ def tools(session):
             "body": o.Label, "stl": stl, "triangles": len(tris), "mask": mask_path, "maskTriangles": len(mask), "mode": mode, "faces": sorted(want),
             "next": {"tool": "bumpmesh_texture_file", "arguments": {"path": stl, "output": out_path, "layers": [{"texture": "a library name (bumpmesh_list_textures)", "settings": {"textureHeight": 0.5, "scaleU": 5},
                      "mask": {"mode": mode, "trianglesFile": mask_path}}], "settings": {"refineLength": round(max(0.05, min(5, bb.DiagonalLength / 250)), 2)}}},
-            "note": f"{'Only' if mode == 'include' else 'All but'} {', '.join(sorted(want))} get the texture; say the faces that must not change back to the person first. Then check it: scan_open the textured STL against {o.Label} as the reference (deviation_open_reference, deviation_align) — the texture's depth shows on the textured faces, and nothing on the rest.",
+            "note": f"{'Only' if mode == 'include' else 'All but'} {', '.join(sorted(want))} get the texture; say the faces that must not change back to the person first. Then texture_check {{ body: \"{o.Label}\", path: <the output> }}: the depth on each textured face, any face it leaked onto, and whether the mesh is closed.",
         }
+
+    def texture_check(a):
+        """The textured STL measured against the body face by face: how deep
+        the texture stands on the faces it was for, whether it leaked onto
+        any other, and whether the mesh stayed closed."""
+        import json
+
+        import numpy as np
+
+        from .. import meshdist
+
+        o = s.body(a.get("body"))
+        path = a.get("path")
+        if not path or not os.path.isfile(path):
+            raise ToolError("not_found", f"path {path!r}: the textured STL bumpmesh_texture_file wrote.")
+        mask_path = a.get("mask") or os.path.splitext(path)[0].replace("-textured", "") + "-for-texture-mask.json"
+        if not os.path.isfile(mask_path):
+            raise ToolError("not_found", f"mask {mask_path!r}: the -mask.json texture_prepare wrote (give mask).")
+        with open(mask_path, encoding="utf-8") as fh:
+            m = json.load(fh)
+        tol = picks.num(a.get("tolerance", 0.02), "tolerance")
+        tris, per_face = face_triangles(o.Shape, tol)
+        if len(tris) != m.get("stlTriangles"):
+            raise ToolError("invalid_state", f"{o.Label} tessellates to {len(tris)} triangles, the mask was made from {m.get('stlTriangles')}: the body changed since texture_prepare, or a different tolerance — give the one texture_prepare used.")
+        T = np.array(tris, float)
+        Vb = T.reshape(-1, 3)
+        Fb = np.arange(len(Vb)).reshape(-1, 3)
+        face_of = np.empty(len(T), dtype=object)
+        names = sorted(per_face, key=lambda k: per_face[k][0])
+        for name in names:
+            face_of[per_face[name][0]:per_face[name][1]] = name
+        listed = set(m.get("faces") or [])
+        textured = listed if m.get("mode", "include") == "include" else set(names) - listed
+        is_tex = np.array([f in textured for f in face_of])
+        Tx = read_stl(path)
+        if not len(Tx):
+            raise ToolError("failed", f"{path}: no triangles.")
+        P, inv = np.unique(np.round(Tx.reshape(-1, 3), 5), axis=0, return_inverse=True)
+        inv = inv.reshape(-1)
+        Ft = inv.reshape(-1, 3)
+        bb = o.Shape.BoundBox
+        reach = float(a.get("reach") or max(2.0, 0.02 * bb.DiagonalLength))
+        best, dist, signed = meshdist.nearest(P, Vb, Fb, reach)
+        found = best >= 0
+        flat = picks.num(a.get("flat", 0.01), "flat")
+        near_tex = np.zeros(len(P), bool)
+        if is_tex.any():
+            onto = found & is_tex[np.maximum(best, 0)]
+            depth = float(np.percentile(np.abs(signed[onto]), 99)) if onto.any() else 0.0
+            # A displaced point by a corner can lie nearer the next face: it is
+            # the texture's while it is within its depth of a textured face.
+            sub = np.nonzero(is_tex)[0]
+            b2, d2, _s2 = meshdist.nearest(P, Vb, Fb[sub], depth + flat)
+            near_tex = b2 >= 0
+        else:
+            depth = 0.0
+        faces = {}
+        for name in names:
+            sel = found & (face_of[np.maximum(best, 0)] == name)
+            if not sel.any():
+                continue
+            d = signed[sel]
+            moved = np.abs(d) > flat
+            row = {"points": int(sel.sum()), "moved": round(float(moved.mean()), 3)}
+            if moved.any():
+                row.update(mean=round(float(d.mean()), 3), p95=round(float(np.percentile(np.abs(d), 95)), 3), out=round(float(d.max()), 3), into=round(float(d.min()), 3))
+            faces[name] = row
+        tex_rows = {k: v for k, v in faces.items() if k in textured}
+        leak = found & ~is_tex[np.maximum(best, 0)] & (np.abs(signed) > flat) & ~near_tex
+        leaked = sorted({face_of[b] for b in best[leak]})
+        # The mesh closed: every edge on two triangles.
+        e = np.sort(np.concatenate([Ft[:, [0, 1]], Ft[:, [1, 2]], Ft[:, [2, 0]]]), axis=1)
+        _u, counts = np.unique(e, axis=0, return_counts=True)
+        open_edges = int((counts == 1).sum())
+        bad_edges = int((counts > 2).sum())
+        bare = [k for k in textured if k in per_face and faces.get(k, {}).get("moved", 0) < 0.2]
+        ok = not leaked and not bare and not open_edges and not bad_edges and int((~found).sum()) == 0
+        out = {"body": o.Label, "file": path, "verdict": "ok" if ok else "check", "triangles": int(len(Tx)), "points": int(len(P)),
+               "texturedFaces": tex_rows, "depth": round(depth, 3)}
+        if leaked:
+            out["leaked"] = {"faces": leaked, "points": int(leak.sum()), "worst": round(float(np.abs(signed[leak]).max()), 3)}
+        if bare:
+            out["bare"] = sorted(bare)
+        if (~found).any():
+            out["far"] = {"points": int((~found).sum()), "reach": round(reach, 3), "note": "Farther than reach from the body: a texture deeper than reach (give reach), or the STL is not of this body."}
+        if open_edges or bad_edges:
+            out["mesh"] = {"openEdges": open_edges, "overSharedEdges": bad_edges, "note": "Not closed: a slicer may refuse it or fill it wrong — repair before printing."}
+        notes = []
+        if leaked:
+            notes.append(f"The texture reached {', '.join(leaked)}, which were to stay plain: check the mask (mode, faces) and run the texture again.")
+        if bare:
+            notes.append(f"{', '.join(sorted(bare))} were to be textured but under a fifth of their points moved: a texture too fine for refineLength, or a mask that missed them.")
+        if ok:
+            notes.append(f"Textured on {', '.join(sorted(tex_rows))} only, {depth:.3g} mm deep at most; the mesh is closed.")
+        out["note"] = " ".join(notes)
+        return out
 
     def draft_fonts(a):
         have = fonts()
@@ -641,6 +762,9 @@ def tools(session):
         Tool("texture_prepare", "A body made ready for a surface texture by BumpMesh: an STL written face by face from one mesh of the whole part, and a mask file of the triangles of faces (names or queries) — mode include (texture only them: a grip) or exclude (all but them: keep a mating face plain). Answers the bumpmesh_texture_file call to make with it, then how to check the result against the body.",
              obj({"body": {"type": "string"}, "faces": {}, "mode": {"type": "string", "enum": ["include", "exclude"]}, "tolerance": {"type": "number"}, "path": {"type": "string"}, "name": {"type": "string"}}, ["faces"]),
              texture_prepare),
+        Tool("texture_check", "Check a textured STL against the body it was made from, face by face: on each face the texture was for, the share of points moved and how deep (p95, out, into); leaked — faces meant to stay plain that moved (a mating face, a datum); bare — faces meant for texture that barely moved; and whether the mesh is closed. path: the textured STL; mask: texture_prepare's -mask.json (found beside it by name); tolerance as texture_prepare used. verdict ok or check. Changes nothing.",
+             obj({"body": {"type": "string"}, "path": {"type": "string"}, "mask": {"type": "string"}, "tolerance": {"type": "number"}, "flat": {"type": "number", "description": "mm a point may move and count as unmoved (0.01)."}, "reach": {"type": "number"}}, ["path"]),
+             texture_check),
         Tool("draft_fonts", "The TrueType fonts on this computer (name filters), and the one draft_text takes by default.", obj({"name": {"type": "string"}}), draft_fonts),
         Tool("surface_loft", "A surface through curves in order — edges (\"Body.Edge3\"), sketches, or { points: [[x,y,z] …], closed } for a smooth curve through them: open curves make a sheet, closed ones a tube. ruled for straight lines between; thickness mm makes it a solid (side out, in or both). A curved panel, a duct, a shell for an organic shape.",
              obj({"curves": {"type": "array"}, "body": {"type": "string"}, "ruled": {"type": "boolean"}, "closed": {"type": "boolean"}, "thickness": {"type": "number"}, "side": {"type": "string", "enum": ["out", "in", "both"]}, "name": {"type": "string"}}, ["curves"]), surface_loft, changes=True),
