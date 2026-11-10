@@ -387,7 +387,8 @@ class Session:
             lh = float((setup or {}).get("layerHeight", 0.2))
             tops = int((setup or {}).get("topLayers", 5))
             bottoms = int((setup or {}).get("bottomLayers", 4))
-            side_shell = 2 * walls * LINE
+            # PrusaSlicer's perimeter for a 0.4 mm nozzle is 0.45 mm wide.
+            side_shell = 2 * walls * 0.45
             skin_shell = (tops + bottoms) * lh
             wl = geo.least_wall(shape)
             reads = [r[0] for r in (wl.get("readings") or [])]
@@ -396,7 +397,11 @@ class Session:
                 solid = 0.0
                 for t, z in zip(reads, nz):
                     flat = min(1.0, max(0.0, (z - 0.5) / 0.4))  # under 30° off flat: skin
-                    solid += min(t, flat * skin_shell + (1 - flat) * side_shell)
+                    shell = flat * skin_shell + (1 - flat) * side_shell
+                    # What the shells leave narrower than about three lines
+                    # the slicer fills solid (gap fill, solid infill in small
+                    # areas), not with sparse infill.
+                    solid += t if t - shell < 1.4 else shell
                 total = sum(reads)
                 f = (solid + infill * (total - solid)) / total
             else:
