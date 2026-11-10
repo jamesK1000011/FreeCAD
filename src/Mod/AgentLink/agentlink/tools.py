@@ -532,7 +532,17 @@ class Session:
         try:
             exe = slicer.slice_stl(stl, gcode, settings)
         except FileNotFoundError as e:
-            raise ToolError("unavailable", str(e))
+            # No PrusaSlicer: the slicer the person has, by slice_with.
+            from . import slicers
+            from .families import slicing
+
+            other = next((n for n, here in slicers.present().items() if here and n != "prusaslicer"), None)
+            if not other:
+                raise ToolError("unavailable", f"{e} OrcaSlicer and Bambu Studio are not here either.")
+            fn = {t.name: t.fn for t in slicing.tools(self)}["slice_with"]
+            out = fn({k: v for k, v in {**a, "slicer": other}.items() if k in ("body", "slicer", "pauseCommand", "name", "profiles")})
+            out["note"] = f"PrusaSlicer is not on this computer: sliced with {other} (slice_with). " + out.get("note", "")
+            return out
         except RuntimeError as e:
             raise ToolError("failed", str(e))
         read = slicer.read_gcode(gcode)
@@ -600,12 +610,48 @@ class Session:
 
 MAGNET_T_MM = gridfinity.MAGNET_T
 
-INSTRUCTIONS = (
-    "FreeCAD through six tools, answers in millimetres. Make a part with gen_make (measure: true first to check "
-    "its size without making it), then part_review for one verdict: soundness, least wall, mass, the spec you give. "
-    "body_check reads soundness alone; history_diff says what a change did; export_file writes STEP or STL and "
-    "reads it back. A refusal says what to change."
+# What the server says it is, at initialize: how a session goes, in the
+# order an agent needs it. Built per server: headless or the FreeCAD window,
+# lean or every tool listed.
+ABOUT_WINDOW = (
+    "These tools drive FreeCAD in the window the person has open (Agent Link's Start link): they watch every step "
+    "in its 3D view and can undo it there."
 )
+ABOUT_HEADLESS = (
+    "These tools drive FreeCAD headless: FreeCAD runs inside this server with no window — nobody watches, so look "
+    "at the work yourself with view_render. To watch, the person opens FreeCAD, picks the Agent Link workbench and "
+    "presses Start link; a new chat then works in that window."
+)
+WORKING = (
+    "Start with session_state: the document, its bodies with their sizes, the step count and the folder files go to. "
+    "Before a task's first step read its guide: guide_read with no topic lists them (start, parts, model, sketch, "
+    "measure, strength, drawing, slice, view, and the scan guides when ScanRuler for FreeCAD is here); a guide's "
+    "## sections can be read one at a time. "
+    "Lengths are millimetres, angles degrees, masses grams. A body is named by its label; a face or edge by what it "
+    "is (shape_query: normal, radius, near a point) rather than by FreeCAD's Face12, which changes with the model. "
+    "Every tool that changes the document is one undo step: history_undo, history_redo, history_checkpoint and "
+    "history_restore; history_diff says what changed. batch runs calls in order and rolls back whole when one is "
+    "refused. A refusal is { error: { code, message } }: the code (invalid_input, invalid_state, not_found, "
+    "unavailable, failed) and a message saying what to change — correct the call and go on. "
+    "Look at the work after each change that matters: view_render draws the parts from any view, cut open, zoomed "
+    "to a spot, or with a map (wall, stress, a scan's deviation), and gives the worst place; part_review gives one "
+    "verdict, pass, fix or unknown. Ask the person what only they know — how a part is made, what it is made of, "
+    "what it must carry — and never start, pause or stop a print without their typed say-so."
+)
+LEAN_NOTE = (
+    "Only the tools every task uses are listed at the start: the session, guides, undo, the make-check-verdict loop "
+    "and the pictures. The rest come in groups (doc, model, sketch, feature, measure, strength, drawing, scan, align "
+    "…): tool_groups lists them and enable: [group] lists a group's tools from then on — enable what the task's "
+    "guide names, not all. A tool not listed still runs: call it by name, or through batch. AGENTLINK_TOOLS=full "
+    "lists every tool from the start."
+)
+
+
+def instructions(lean, window):
+    return " ".join([ABOUT_WINDOW if window else ABOUT_HEADLESS, LEAN_NOTE if lean else "Every tool is listed.", WORKING])
+
+
+INSTRUCTIONS = instructions(True, False)
 
 
 def make_tools(session):
@@ -705,6 +751,24 @@ GROUP_INFO = {
 # needs, and the pictures to check it by.
 LEAN = {"core", "parts", "make", "fits", "view"}
 GUIDES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guides")
+# Guides from other add-ons (register_guides): read alongside these, the
+# add-on's own taking no precedence over a guide of the same name here.
+GUIDE_DIRS = [GUIDES]
+
+
+def register_guides(folder):
+    if os.path.isdir(folder) and folder not in GUIDE_DIRS:
+        GUIDE_DIRS.append(folder)
+
+
+def _guide_files():
+    seen = {}
+    for d in GUIDE_DIRS:
+        if os.path.isdir(d):
+            for n in sorted(os.listdir(d)):
+                if n.endswith(".md") and n[:-3] not in seen:
+                    seen[n[:-3]] = os.path.join(d, n)
+    return dict(sorted(seen.items()))
 
 
 class Resources:
@@ -715,10 +779,8 @@ class Resources:
 
     def list(self):
         out = []
-        if os.path.isdir(GUIDES):
-            for n in sorted(os.listdir(GUIDES)):
-                if n.endswith(".md"):
-                    out.append({"uri": f"agentlink://guide/{n[:-3]}", "name": n[:-3], "mimeType": "text/markdown"})
+        for topic in _guide_files():
+            out.append({"uri": f"agentlink://guide/{topic}", "name": topic, "mimeType": "text/markdown"})
         if os.path.isdir(self.s.out_dir):
             for n in sorted(os.listdir(self.s.out_dir))[:200]:
                 p = os.path.join(self.s.out_dir, n)
@@ -730,7 +792,9 @@ class Resources:
         import base64
 
         if uri.startswith("agentlink://guide/"):
-            p = os.path.join(GUIDES, uri.rsplit("/", 1)[1] + ".md")
+            p = _guide_files().get(uri.rsplit("/", 1)[1])
+            if not p:
+                raise ValueError(f"{uri}: no such guide.")
         elif uri.startswith("file://"):
             p = uri[7:]
             if not os.path.abspath(p).startswith(os.path.abspath(self.s.out_dir)):
@@ -749,13 +813,12 @@ class Resources:
 
 def _guide_index():
     out = []
-    if os.path.isdir(GUIDES):
-        for n in sorted(os.listdir(GUIDES)):
-            if n.endswith(".md"):
-                with open(os.path.join(GUIDES, n), encoding="utf-8") as f:
-                    text = f.read()
-                first = next((l.lstrip("# ").strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("<!--")), n)
-                out.append({"topic": n[:-3], "title": first, "chars": len(text)})
+    for topic, p in _guide_files().items():
+        with open(p, encoding="utf-8") as f:
+            text = f.read()
+        first = next((l.lstrip("# ").strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("<!--")), topic)
+        sections = [l[3:].strip() for l in text.splitlines() if l.startswith("## ")]
+        out.append({"topic": topic, "title": first, "sections": sections, "chars": len(text)})
     return out
 
 
@@ -782,7 +845,11 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         if t.name in seen:
             raise RuntimeError(f"Agent Link: two tools are named {t.name} ({seen[t.name]} and {t.group}) — rename one.")
         seen[t.name] = t.group
-    server = Server(name, version, tools, INSTRUCTIONS, run=session.execute, groups=set(LEAN) if lean else None, resources=Resources(session))
+    try:
+        window = bool(FreeCAD.GuiUp)
+    except Exception:
+        window = False
+    server = Server(name, version, tools, instructions(lean, window), run=session.execute, groups=set(LEAN) if lean else None, resources=Resources(session))
     s = session
 
     def tool_groups(a):
@@ -801,8 +868,8 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         topic = a.get("topic")
         if not topic:
             return {"guides": _guide_index()}
-        p = os.path.join(GUIDES, f"{topic}.md")
-        if not os.path.isfile(p):
+        p = _guide_files().get(topic)
+        if not p:
             raise ToolError("not_found", f"{topic}: no such guide — they are: {', '.join(g['topic'] for g in _guide_index())}.")
         with open(p, encoding="utf-8") as f:
             text = f.read()
@@ -816,7 +883,41 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         return {"topic": topic, "text": text}
 
     def batch(a):
+        import json as _json
+
         calls = a.get("calls") or []
+        # Some clients send a large value as a string of its JSON: the list,
+        # a call, or a call's arguments.
+        if isinstance(calls, str):
+            try:
+                calls = _json.loads(calls)
+            except ValueError as e:
+                raise ToolError("invalid_input", f"calls came as a string that is not JSON ({e}) — give a list: [{{ tool, arguments }}].")
+            calls = calls.get("calls", calls) if isinstance(calls, dict) else calls
+        if not isinstance(calls, list):
+            raise ToolError("invalid_input", "calls: a list of { tool, arguments }.")
+        fixed = []
+        for i, c in enumerate(calls):
+            if isinstance(c, str):
+                try:
+                    c = _json.loads(c)
+                except ValueError:
+                    raise ToolError("invalid_input", f"calls.{i} came as a string that is not a call's JSON — each call is {{ tool, arguments }}. Nothing was run.")
+            if not isinstance(c, dict) or not isinstance(c.get("tool"), str):
+                raise ToolError("invalid_input", f"calls.{i}: {{ tool, arguments }} with tool a tool's name. Nothing was run.")
+            args = c.get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = _json.loads(args) if args.strip() else {}
+                except ValueError:
+                    raise ToolError("invalid_input", f"calls.{i}.arguments ({c['tool']}) came as a string that is not JSON — give an object, {{}} for none. Nothing was run.")
+            if not isinstance(args, dict):
+                raise ToolError("invalid_input", f"calls.{i}.arguments ({c['tool']}): an object. Nothing was run.")
+            fixed.append({"tool": c["tool"], "arguments": args})
+        calls = fixed
+        unknown = [c["tool"] for c in calls if c["tool"] not in server.tools]
+        if unknown:
+            raise ToolError("not_found", f"No tool named {', '.join(sorted(set(unknown)))} — nothing was run. tool_groups lists them all.")
         rollback = a.get("rollback", True)
         stop = a.get("stopOnError", True)
         mark = s.doc.UndoCount
@@ -824,8 +925,7 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         for i, c in enumerate(calls):
             if c.get("tool") == "batch":
                 raise ToolError("invalid_input", f"calls.{i}: a batch does not run another batch.")
-            r = server.call({"name": c.get("tool"), "arguments": c.get("arguments") or {}})
-            import json as _json
+            r = server.call({"name": c["tool"], "arguments": c["arguments"]})
 
             body = _json.loads(r["content"][0]["text"])
             ok = not r.get("isError")

@@ -14,3 +14,7 @@
 4. `part_review` after every change. **pass** means every check ran and nothing needs putting right. **fix** lists the errors worst first. **unknown** means something could not be judged. Look too: `view_render { views: "all" }`, and `{ map: "wall" }` or `{ zoom: { at } }` on a finding.
 5. Waive a finding only when the person says it is meant (a stacking lip, say): `part_review { waive }` or `dfm_check { waive }`.
 6. Write `export_file` for STEP or STL, or `slice` for G-code. Starting a print is the person's call.
+
+## Scans
+- With ScanRuler for FreeCAD installed, scans are measured, aligned, compared with a reference and cleaned up here too: read `measure-scan`, and `mesh-tools` for cleaning one up.
+- A scan lives in the session, not in the FreeCAD file; `section_to_sketch` turns a section of it into a sketch to model from.

@@ -69,6 +69,31 @@ class Protocol(unittest.TestCase):
         self.assertEqual(json.loads(out[1])["error"]["code"], -32700)
         self.assertTrue(all(o.endswith("\n") and o.count("\n") == 1 for o in out))
 
+    def test_types_checked_and_coerced(self):
+        got = {}
+
+        def fn(a):
+            got.update(a)
+            return {"ok": True}
+
+        schema = {"type": "object", "properties": {"n": {"type": "number"}, "k": {"type": "integer"}, "b": {"type": "boolean"}, "xs": {"type": "array"}, "o": {"type": "object"}, "m": {"type": "string", "enum": ["wall", "stress"]}}, "additionalProperties": False}
+        srv = Server("t", "0", [Tool("t", "t", schema, fn)])
+
+        def call(args):
+            r = srv.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "t", "arguments": args}})["result"]
+            return r.get("isError", False), json.loads(r["content"][0]["text"])
+
+        err, _ = call({"n": "2.5", "k": "3", "b": "true", "xs": "[1, 2]", "o": '{"a": 1}', "m": "Wall"})
+        self.assertFalse(err)
+        self.assertEqual(got, {"n": 2.5, "k": 3, "b": True, "xs": [1, 2], "o": {"a": 1}, "m": "wall"})
+        err, out = call({"n": "wide"})
+        self.assertTrue(err)
+        self.assertIn("input.n: a number", out["error"]["message"])
+        err, out = call({"m": "colour"})
+        self.assertIn("one of wall, stress", out["error"]["message"])
+        err, out = call({"k": 2.5})
+        self.assertIn("a whole number", out["error"]["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

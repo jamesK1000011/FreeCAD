@@ -52,6 +52,59 @@ def check_input(schema, args):
     for k in schema.get("required", []):
         if k not in args:
             raise ToolError("invalid_input", f"input.{k}: required.")
+    for k, v in list(args.items()):
+        spec = props.get(k)
+        if isinstance(spec, dict) and v is not None:
+            args[k] = _typed(f"input.{k}", spec, v)
+
+
+_PY = {"string": (str,), "number": (int, float), "integer": (int,), "boolean": (bool,), "array": (list,), "object": (dict,)}
+
+
+def _typed(where, spec, v):
+    """A value checked against its field's type and enum — and coerced where
+    a client sent the same thing in another dress: a number or a boolean as
+    a string, a list or an object as a string of its JSON."""
+    t = spec.get("type")
+    if isinstance(t, str) and t in _PY:
+        ok = isinstance(v, _PY[t]) and not (t in ("number", "integer") and isinstance(v, bool))
+        if not ok and isinstance(v, str):
+            text = v.strip()
+            try:
+                if t == "number":
+                    v, ok = float(text), True
+                elif t == "integer" and text.lstrip("-").isdigit():
+                    v, ok = int(text), True
+                elif t == "boolean" and text.lower() in ("true", "false"):
+                    v, ok = text.lower() == "true", True
+                elif t in ("array", "object"):
+                    parsed = json.loads(text)
+                    if isinstance(parsed, _PY[t]):
+                        v, ok = parsed, True
+            except ValueError:
+                pass
+        if not ok and t == "number" and isinstance(v, int) and not isinstance(v, bool):
+            ok = True
+        if not ok and t == "integer" and isinstance(v, float) and v.is_integer():
+            v, ok = int(v), True
+        if not ok:
+            raise ToolError("invalid_input", f"{where}: {_said(t)}, not {_kind(v)}.")
+    if "enum" in spec and v not in spec["enum"]:
+        lowered = {str(e).lower(): e for e in spec["enum"]}
+        if isinstance(v, str) and v.lower() in lowered:
+            return lowered[v.lower()]
+        raise ToolError("invalid_input", f"{where}: one of {', '.join(map(str, spec['enum']))} — not {v!r}.")
+    return v
+
+
+def _said(t):
+    return {"string": "text", "number": "a number", "integer": "a whole number", "boolean": "true or false", "array": "a list", "object": "an object"}[t]
+
+
+def _kind(v):
+    if isinstance(v, bool):
+        return "true/false"
+    return {str: "text", int: "a number", float: "a number", list: "a list", dict: "an object"}.get(type(v), type(v).__name__)
 
 
 def compact(obj):

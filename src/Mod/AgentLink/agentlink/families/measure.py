@@ -328,11 +328,16 @@ def tools(session):
             src = "given"
         else:
             mat = (a.get("material") or store.materials(s.doc).get(o.Label) or "").lower()
+            assumed = False
+            if not mat and store.setup_of(s.doc, o.Label, "print"):
+                # Printed and no material said: PLA, as the review and the
+                # strength study assume — and said so.
+                mat, assumed = "pla", True
             if not mat:
-                raise ToolError("invalid_input", f"material or density: what {o.Label} is made of — {', '.join(picks.MATERIALS)} — or density in g/cm³.")
+                raise ToolError("invalid_input", f"material or density: what {o.Label} is made of — {', '.join(picks.MATERIALS)} — or density in g/cm³ (material_set records it with the part).")
             if mat not in picks.MATERIALS:
                 raise ToolError("invalid_input", f"material {mat!r}: one of {', '.join(picks.MATERIALS)}, or give density in g/cm³.")
-            rho, src = picks.MATERIALS[mat], mat
+            rho, src = picks.MATERIALS[mat], (f"assumed {mat}: printed, and no material_set" if assumed else mat)
         if rho <= 0:
             raise ToolError("invalid_input", "density: above 0, g/cm³.")
         m, c, I = inertia(o.Shape, rho)
