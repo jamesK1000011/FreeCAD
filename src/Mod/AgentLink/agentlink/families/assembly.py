@@ -235,8 +235,16 @@ def tools(session):
             j.Angle = picks.num(a.get("angle", 90), "angle")
         off = a.get("offset")
         rot = a.get("rotate")
-        if off is not None or rot is not None:
-            j.Offset2 = FreeCAD.Placement(V(0, 0, picks.num(off or 0, "offset")), FreeCAD.Rotation(V(0, 0, 1), picks.num(rot or 0, "rotate")))
+
+        def set_offset(flip):
+            p = FreeCAD.Placement(V(0, 0, picks.num(off or 0, "offset")), FreeCAD.Rotation(V(0, 0, 1), picks.num(rot or 0, "rotate")))
+            if flip:
+                # b turned over: its element faces the other way along the joint.
+                p = p.multiply(FreeCAD.Placement(V(), FreeCAD.Rotation(V(1, 0, 0), 180)))
+            j.Offset2 = p
+
+        if off is not None or rot is not None or a.get("reverse"):
+            set_offset(bool(a.get("reverse")))
         # 1.0 reads a reference from the assembly down (the part's name, then
         # the element); later releases from the part itself.
         if _release() < (1, 1):
@@ -254,13 +262,27 @@ def tools(session):
             j.Proxy.updateJCSPlacements(j)
         except Exception:
             pass
-        if a.get("reverse"):
-            try:
-                j.Proxy.flipOnePart(j)
-            except Exception:
-                pass
         doc().recompute()
         code, said = _status(asm)
+        flipped = bool(a.get("reverse"))
+        # FreeCAD lines the joint's frames up as the elements' geometry
+        # runs, which can put a lid into its box instead of on it. Two parts
+        # overlapping after the solve, and no reverse said: the other way is
+        # tried, and kept when it overlaps less.
+        if code == 0 and a.get("reverse") is None:
+            first, _ = _overlaps(_parts(asm))
+            if first:
+                vol0 = sum(h["volume"] for h in first)
+                set_offset(True)
+                doc().recompute()
+                code2, said2 = _status(asm)
+                second, _ = _overlaps(_parts(asm))
+                if code2 == 0 and sum(h["volume"] for h in second) < vol0 - 1e-6:
+                    code, said, flipped = code2, said2, True
+                else:
+                    set_offset(False)
+                    doc().recompute()
+                    code, said = _status(asm)
         if code != 0:
             raise ToolError("failed", f"The {kind} joint leaves {asm.Label} unsolved: {said} — nothing was kept. A joint that repeats what another holds is redundant; asm_list shows the joints.")
         moved = {}
@@ -270,6 +292,8 @@ def tools(session):
                 moved[o.Label] = {"from": geo.vec(b.Base), "to": _placement(o), "by": round((o.Placement.Base - b.Base).Length, 4)}
         hits, _ = _overlaps(_parts(asm))
         out = {"joint": j.Label, "kind": kind, "a": f"{ends[0][0].Label}.{ends[0][1]}", "b": f"{ends[1][0].Label}.{ends[1][1]}", "solve": said, "moved": moved}
+        if flipped:
+            out["flipped"] = True if a.get("reverse") else "turned over to stop the parts overlapping (reverse: false keeps it as FreeCAD first put it)"
         if hits:
             out["overlaps"] = hits
             out["warning"] = "Parts overlap after the solve: a face picked the wrong way round, or the parts do not fit — reverse: true flips the second part, or check the sizes."
@@ -334,7 +358,7 @@ def tools(session):
         Tool("asm_add", "Put more bodies into an assembly.", obj({"assembly": asm_ref, "parts": {"type": "array", "items": {"type": "string"}}}, ["parts"]), asm_add, changes=True),
         Tool("asm_ground", "Hold a part fixed (grounded: true, the default) or let it move again (false). An assembly needs one grounded part to solve.", obj({"assembly": asm_ref, "part": {"type": "string"}, "grounded": {"type": "boolean"}}, ["part"]), asm_ground, changes=True),
         Tool("asm_joint",
-             "Join two parts and solve: kind fixed (no motion), revolute (turns about the elements' axis), cylindrical (turns and slides), slider (slides only), ball, distance (distance mm between them), parallel, perpendicular, angle (angle degrees). a and b each a part and a face or edge on it — for a flat face the joint sits at its middle with its normal; for a round edge or face, on its axis. offset mm along the joint's normal and rotate degrees about it; reverse: true flips b over (faces meeting the wrong way). Returns which parts moved where, and overlaps the solve left. Trap: the part of b moves; a grounded part never does.",
+             "Join two parts and solve: kind fixed (no motion), revolute (turns about the elements' axis), cylindrical (turns and slides), slider (slides only), ball, distance (distance mm between them), parallel, perpendicular, angle (angle degrees). a and b each a part and a face or edge on it — for a flat face the joint sits at its middle with its normal; for a round edge or face, on its axis. offset mm along the joint's normal and rotate degrees about it; reverse: true turns b over (false keeps FreeCAD's way; left out, b is turned over when that stops the parts overlapping). Returns which parts moved where, and overlaps the solve left. Trap: the part of b moves; a grounded part never does.",
              obj({"assembly": asm_ref, "kind": {"type": "string", "enum": OFFERED}, "a": part_end, "b": part_end, "offset": {"type": "number"}, "rotate": {"type": "number"}, "distance": {"type": "number"}, "angle": {"type": "number"}, "reverse": {"type": "boolean"}, "name": {"type": "string"}}, ["kind", "a", "b"]),
              asm_joint, changes=True),
         Tool("asm_list", "An assembly: its parts with their placements and which are grounded, its joints with what each joins, and whether it solves. Changes nothing.", obj({"assembly": asm_ref}), asm_list),

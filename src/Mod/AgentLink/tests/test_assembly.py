@@ -80,6 +80,27 @@ class Assembly(unittest.TestCase):
         self.assertEqual(sorted(c["overlaps"][0]["parts"]), ["Base", "Lid"])
         self.assertAlmostEqual(c["overlaps"][0]["volume"], 40 * 30 * 3, delta=1)
 
+    def test_4_lid_on_its_box(self):
+        """A project box's lid, printed top down beside it, joined face to
+        face on the rim: turned over so its lip goes into the box."""
+        import FreeCAD
+
+        FreeCAD.newDocument("LidOn")
+        self.session.switch(FreeCAD.ActiveDocument)
+        err, g = self.call("gen_part", {"generator": "project_box", "params": {"length": 80, "width": 60, "height": 30, "bosses": True}, "name": "Box"})
+        self.assertFalse(err, g)
+        self.call("asm_new", {"parts": ["Box", "Box lid"]})
+        err, r = self.call("asm_joint", {"kind": "fixed", "a": {"part": "Box", "element": {"kind": "face", "normal": [0, 0, 1], "near": [0, 29, 30]}}, "b": {"part": "Box lid", "element": {"kind": "face", "normal": [0, 0, 1], "near": [90, 29.5, 2]}}})
+        print("\nlid:", json.dumps(r))
+        self.assertFalse(err, r)
+        self.assertNotIn("overlaps", r)
+        self.assertIn("flipped", r)
+        lid = self.session.body("Box lid").Shape.BoundBox
+        self.assertAlmostEqual(lid.ZMax, 32, delta=0.01)
+        self.assertAlmostEqual(lid.ZMin, 27, delta=0.01)
+        err, c = self.call("asm_check", {})
+        self.assertEqual(c["verdict"], "clear", c)
+
 
 if __name__ == "__main__":
     unittest.main()
