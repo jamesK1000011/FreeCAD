@@ -519,6 +519,14 @@ def tools(session):
         for w in wires:
             try:
                 off = w.makeOffset2D(d, join, False, not w.isClosed(), False)
+                # Out is out whichever way the profile runs: a closed offset
+                # meant to grow that came back smaller is done the other way.
+                if w.isClosed() and off.Wires and off.Wires[0].isClosed():
+                    a0, a1 = Part.Face(w).Area, Part.Face(off.Wires[0]).Area
+                    if (a1 - a0) * d < 0:
+                        off = w.makeOffset2D(-d, join, False, False, False)
+            except ToolError:
+                raise
             except Exception as e:
                 raise ToolError("failed", f"The offset of {d:g} mm failed ({e}): a distance inward bigger than the profile allows, or a profile crossing itself.")
             for e in off.Edges:

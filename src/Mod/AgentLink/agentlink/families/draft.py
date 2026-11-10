@@ -45,9 +45,9 @@ def font_file(name):
         if hit is None:
             raise ToolError("not_found", f"font {name!r}: none by that name — e.g. {', '.join(os.path.basename(f) for f in have[:8])}.")
         return hit
-    pref = ("osifont", "DejaVuSans.ttf", "Arial.ttf", "Helvetica", "LiberationSans-Regular")
+    pref = ("DejaVuSans.ttf", "Arial.ttf", "Helvetica", "LiberationSans-Regular", "osifont-lgpl3fe", "osifont")
     for p in pref:
-        hit = next((f for f in have if p.lower() in os.path.basename(f).lower()), None)
+        hit = next((f for f in have if p.lower() in os.path.basename(f).lower() and "italic" not in os.path.basename(f).lower()), None)
         if hit:
             return hit
     return have[0]
