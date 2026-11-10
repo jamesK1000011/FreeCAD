@@ -336,8 +336,11 @@ def tools(session):
             top = millsim.top_of_mesh(grid, [(v.x, v.y, v.z) for v in pp], pf)
             part = top if part is None else np.maximum(part, top)
         removed, crashes, per = 0.0, [], []
+        here = None  # the tool's place at the end of the last op
         for op, d, ball in tools_of:
-            segs = millsim.moves([(c.Name, dict(c.Parameters)) for c in op.Path.Commands])
+            segs = millsim.moves([(c.Name, dict(c.Parameters)) for c in op.Path.Commands], here)
+            if segs:
+                here = segs[-1][2]
             rem, cr = millsim.run(grid, H, segs, d / 2.0, ball)
             removed += rem
             per.append({"op": op.Label, "tool": d, **({"ballEnd": True} if ball else {}), "removedMm3": round(rem, 1), **({"crashes": len(cr)} if cr else {})})

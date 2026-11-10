@@ -70,6 +70,15 @@ class Sim(unittest.TestCase):
         self.assertEqual(len(drill), 1)
         self.assertEqual(drill[0][2][:2], (3, 3))
 
+    def test_drilling_cycle_from_partial_positions(self):
+        # As FreeCAD writes a drill op: Z alone, then X Y, then the cycle.
+        H = np.full((self.g.ny, self.g.nx), 10.0)
+        cmds = [("G0", {"Z": 15}), ("G98", {}), ("G0", {"X": 20, "Y": 15}), ("G81", {"R": 12, "X": 20, "Y": 15, "Z": 2}), ("G80", {}), ("G0", {"Z": 15})]
+        removed, crashes = M.run(self.g, H, M.moves(cmds), 1.5)
+        self.assertFalse(crashes, crashes)
+        self.assertAlmostEqual(removed, 3.14159 * 1.5 ** 2 * 8, delta=3)
+        self.assertAlmostEqual(float(H[self.g.cell(20, 15)]), 2.0)
+
     def test_ball_end(self):
         z = M.tip_height(np.array([0.0, 1.0, 2.0, 3.0]), 2.0, 0.0, True)
         self.assertAlmostEqual(z[0], 0.0)

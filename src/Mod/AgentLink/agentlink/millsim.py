@@ -94,10 +94,21 @@ def moves(commands, start=None):
             continue
         if name not in CUTS + RAPIDS + CYCLES:
             continue
-        if pos is None:
-            if all(k in p for k in "XYZ"):
-                pos = [p["X"], p["Y"], p["Z"]]
-            continue
+        if pos is None or None in pos:
+            # Where the tool is comes axis by axis (Z, then X and Y …): till
+            # all three are known nothing is drawn, but a drilling cycle is
+            # never lost to it — it starts from its R plane.
+            pos = pos or [None, None, None]
+            if name in CYCLES:
+                pos = [pos[0] if pos[0] is not None else p.get("X"), pos[1] if pos[1] is not None else p.get("Y"),
+                       pos[2] if pos[2] is not None else p.get("R", p.get("Z"))]
+                if None in pos:
+                    continue
+            else:
+                for i, k in enumerate("XYZ"):
+                    if k in p:
+                        pos[i] = p[k]
+                continue
         if name in CYCLES:
             if "Z" not in p:
                 continue
@@ -160,7 +171,11 @@ def run(grid, H, segments, radius, ball=False, floor=None):
         if got is None:
             continue
         j0, i0, d, t = got
-        z = p0[2] + (p1[2] - p0[2]) * t
+        if math.hypot(p1[0] - p0[0], p1[1] - p0[1]) < 1e-9:
+            # Straight up or down: the tool reaches the lower end.
+            z = np.full_like(t, min(p0[2], p1[2]))
+        else:
+            z = p0[2] + (p1[2] - p0[2]) * t
         bottom = tip_height(d, radius, z, ball)
         sub = H[j0:j0 + d.shape[0], i0:i0 + d.shape[1]]
         if kind == "rapid":
