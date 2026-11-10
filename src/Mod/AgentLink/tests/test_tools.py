@@ -113,6 +113,17 @@ class Tools(unittest.TestCase):
         self.assertFalse(err, m)
         self.assertTrue(m["verify"]["closed"])
 
+    def test_44b_bin_sections(self):
+        # The printed-mass sections of the bin, on every release: the same
+        # part should come out the same.
+        from agentlink import printmass
+
+        st = {}
+        cut = printmass.sliced(self.session.body("Bin").Shape, {"layerHeight": 0.2, "topLayers": 5, "bottomLayers": 4}, 2, stats=st)
+        print("\nsections:", cut and [round(x, 1) for x in cut], st)
+        self.assertIsNotNone(cut)
+        self.assertEqual(st["offsetFailed"], 0, st)
+
     def test_45_slice_with_the_magnet_pause(self):
         from agentlink import slicer
 

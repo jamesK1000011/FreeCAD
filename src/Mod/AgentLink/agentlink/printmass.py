@@ -53,7 +53,7 @@ def readings(wall):
     return reads, nz
 
 
-def sliced(shape, setup, walls, levels=40, small=70.0):
+def sliced(shape, setup, walls, levels=40, small=70.0, stats=None):
     """(solid mm³, sparse mm³) of a part as a slicer lays it down, from
     sections at up to `levels` heights: on each, the perimeters a band
     `walls` lines in from the outline, the top and bottom skins where the
@@ -93,11 +93,16 @@ def sliced(shape, setup, walls, levels=40, small=70.0):
         return f
 
     solid = sparse = 0.0
+    st = stats if stats is not None else {}
+    for k in ("levels", "empty", "skin", "offsetFailed", "inner", "small"):
+        st[k] = 0
     try:
         for i in range(n):
             z = bb.ZMin + (i + 0.5) * dz
             f = section(z)
+            st["levels"] += 1
             if f is None:
+                st["empty"] += 1
                 continue
             # Inside the skins: part at every height checked within their
             # depth, above for the top skin and below for the bottom one.
@@ -117,10 +122,16 @@ def sliced(shape, setup, walls, levels=40, small=70.0):
                     inner = f.makeOffset2D(-band, 0, False, False, False)
                 except Exception:
                     inner = None  # nothing left inside the perimeters
+                    st["offsetFailed"] += 1
                 if inner is not None and inner.Area > 1e-9:
+                    st["inner"] += 1
                     for face in inner.common(core).Faces:
                         if face.Area >= small:
                             free += face.Area
+                        else:
+                            st["small"] += 1
+            else:
+                st["skin"] += 1
             solid += (f.Area - free) * dz
             sparse += free * dz
     except Exception:
