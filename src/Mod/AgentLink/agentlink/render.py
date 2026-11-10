@@ -274,7 +274,8 @@ def draw(layers, view, width, height, frame=None, section=None, margin=14, botto
         both = diff & (a >= 0) & (b >= 0)
         with np.errstate(invalid="ignore"):
             dz = np.where(np.isfinite(za) & np.isfinite(zb), za - zb, 0.0)
-        jump = both & (np.abs(dz) > 0.015 * diag)
+        # A step of a few tenths (engraved text seen head on) is a line too.
+        jump = both & (np.abs(dz) > 0.004 * diag)
         crease = np.zeros_like(both)
         if both.any():
             ia, ib = a[both], b[both]
