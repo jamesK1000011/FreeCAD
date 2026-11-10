@@ -18,7 +18,7 @@ from . import measure as M
 from . import picks
 
 GROUP = "draft"
-INFO = "Text and surfaces: lettering raised from or cut into a face from a TrueType font; a surface filled across edges and thickened into a solid."
+INFO = "Text and surfaces: lettering raised from or cut into a face from a TrueType font; surfaces filled across edges, lofted through curves or fitted to points, thickened into solids."
 
 V = FreeCAD.Vector
 
@@ -213,6 +213,125 @@ def tools(session):
             out["volume"] = round(shape.Volume, 2)
         return out
 
+
+    def _curve(r, what, body=None):
+        """An edge or wire from a reference ("Body.Edge3", a sketch) or
+        { points: [[x,y,z] …], closed } (a smooth curve through them)."""
+        if isinstance(r, dict) and "points" in r:
+            pts = [FreeCAD.Vector(*picks.vec3(p, f"{what}.points")) for p in r["points"]]
+            if len(pts) < 2:
+                raise ToolError("invalid_input", f"{what}.points: two or more [x, y, z].")
+            closed = bool(r.get("closed"))
+            if len(pts) == 2:
+                return Part.Wire([Part.LineSegment(pts[0], pts[1]).toShape()])
+            bs = Part.BSplineCurve()
+            bs.interpolate(pts, PeriodicFlag=closed)
+            return Part.Wire([bs.toShape()])
+        label, sub, el = picks.resolve(s, r, body)
+        edges = [el] if isinstance(el, Part.Edge) else list(getattr(el, "Edges", []) or [])
+        if not edges:
+            raise ToolError("invalid_input", f"{what}: an edge (\"Box.Edge3\"), a sketch or wire, or {{ points: [[x,y,z] …] }}.")
+        try:
+            return Part.Wire(Part.sortEdges(edges)[0])
+        except Exception:
+            raise ToolError("invalid_input", f"{what}: its edges do not join into one curve.")
+
+    def _thicken(shape, t, side, what="the surface"):
+        t = picks.num(t, "thickness")
+        if t <= 0:
+            raise ToolError("invalid_input", "thickness: mm, over 0 (side picks which way).")
+        side = side or "out"
+        if side not in ("out", "in", "both"):
+            raise ToolError("invalid_input", "side: out (along the surface's normal), in, or both (half each way).")
+        try:
+            if side == "both":
+                base = shape.makeOffsetShape(-t / 2.0, 1e-3)
+                solid = base.makeOffsetShape(t, 1e-3, fill=True)
+            else:
+                solid = shape.makeOffsetShape(t if side == "out" else -t, 1e-3, fill=True)
+        except Exception as e:
+            raise ToolError("failed", f"{what} could not be thickened {t:g} mm: {e} — thinner, or another side (it cannot be thicker than its tightest bend is round).")
+        if not solid.Solids:
+            try:
+                solid = Part.makeSolid(solid)
+            except Exception:
+                pass
+        return solid, t
+
+    def _finish(shape, a, tool, extra):
+        t = a.get("thickness")
+        warnings = []
+        surf = shape
+        if t is not None:
+            shape, t = _thicken(shape, t, a.get("side"))
+            if t < 0.8:
+                warnings.append(f"{t:g} mm is under two printed lines (0.8 mm with a 0.4 mm nozzle): it may print with gaps or not at all.")
+            if not shape.isValid():
+                warnings.append("The thickened solid is not valid: body_check it; a thinner thickness or a gentler surface usually mends it.")
+        o = s.doc.addObject("Part::Feature", (a.get("name") or "Surface").replace(" ", "_"))
+        o.Label = a.get("name") or "Surface"
+        o.Shape = shape
+        s.doc.recompute()
+        s.snapshot(tool)
+        out = {"object": o.Label, "area": round(surf.Area, 2), "solid": bool(shape.Solids), **extra, "step": len(s.steps)}
+        if shape.Solids:
+            out["volume"] = round(shape.Volume, 2)
+        bb = shape.BoundBox
+        out["size"] = [round(bb.XLength, 2), round(bb.YLength, 2), round(bb.ZLength, 2)]
+        if warnings:
+            out["warnings"] = warnings
+        if not shape.Solids:
+            out["next"] = "thickness: mm to make it a solid to print — or surface_thicken { surface } later."
+        return out
+
+    def surface_loft(a):
+        curves = a.get("curves") or []
+        if len(curves) < 2:
+            raise ToolError("invalid_input", "curves: two or more, in order — edges (\"Body.Edge3\"), sketches, or { points: [[x,y,z] …], closed }.")
+        wires = [_curve(r, f"curves.{i}", a.get("body")) for i, r in enumerate(curves)]
+        closed = [w.isClosed() for w in wires]
+        if len(set(closed)) > 1:
+            raise ToolError("invalid_input", f"curves: all open or all closed — curves {[i for i, c in enumerate(closed) if c]} are closed, the rest open.")
+        try:
+            shape = Part.makeLoft(wires, False, bool(a.get("ruled")), bool(a.get("closed")))
+        except Exception as e:
+            raise ToolError("failed", f"No surface goes through those curves: {e} — curves that run the same way, in order, with the same number of pieces each, loft best.")
+        return _finish(shape, a, "surface_loft", {"curves": len(wires), "through": "closed curves (a tube)" if closed[0] else "open curves (a sheet)"})
+
+    def surface_points(a):
+        rows = a.get("rows")
+        if not isinstance(rows, list) or len(rows) < 2 or not all(isinstance(r, list) for r in rows):
+            raise ToolError("invalid_input", "rows: a grid of points, row by row — [[[x,y,z] …], [[x,y,z] …] …], two or more rows of the same length.")
+        n = len(rows[0])
+        if n < 2 or any(len(r) != n for r in rows):
+            raise ToolError("invalid_input", f"rows: each row the same length ({n}), two or more points each.")
+        pts = [[FreeCAD.Vector(*picks.vec3(p, f"rows.{i}.{j}")) for j, p in enumerate(r)] for i, r in enumerate(rows)]
+        tol = float(a.get("tolerance", 0.0))
+        bs = Part.BSplineSurface()
+        deg = min(3, len(rows) - 1, n - 1)
+        try:
+            if tol > 0:
+                bs.approximate(Points=pts, DegMin=deg, DegMax=deg, Tolerance=tol)
+            else:
+                bs.interpolate(pts)
+        except Exception as e:
+            raise ToolError("failed", f"No surface fits those points: {e} — rows that run the same way, without points on top of each other.")
+        face = bs.toShape()
+        worst = max(face.distToShape(Part.Vertex(p))[0] for r in pts for p in r)
+        return _finish(face, a, "surface_points", {"grid": [len(rows), n], "fitted": "through every point" if tol <= 0 else f"within {tol:g} mm", "farthestPoint": round(worst, 4)})
+
+    def surface_thicken(a):
+        ref = a.get("surface")
+        if not ref:
+            raise ToolError("invalid_input", "surface: an object (\"Surface\") or a body's face (\"Body.Face3\").")
+        label, sub, el = picks.resolve(s, ref, a.get("body"))
+        shape = el if isinstance(el, (Part.Face, Part.Shell)) else getattr(el, "Shape", el)
+        if not getattr(shape, "Faces", None):
+            raise ToolError("invalid_input", f"surface: {ref} has no faces to thicken.")
+        if a.get("thickness") is None:
+            raise ToolError("invalid_input", "thickness: mm.")
+        return _finish(shape if isinstance(shape, Part.Face) or len(shape.Faces) == 1 else Part.Shell(shape.Faces), a, "surface_thicken", {"from": ref})
+
     face_q = {"description": "The face: \"Face6\", or a query { normal, near, area … } as shape_query takes (the largest match, or the nearest with near). Default: the largest face facing up."}
     return [
         Tool("draft_text", "Letter a flat face of a body: text from a TrueType font (font: a name or a .ttf path; draft_fonts lists them), size mm (letter height), depth mm, mode emboss (raised, default) or engrave (cut in), centred on the face or at [x,y,z] on it, rotate degrees. The body becomes the lettered solid (one undo step). Warns when the letters run off the face, and when their strokes are thinner than a printed line.",
@@ -220,6 +339,12 @@ def tools(session):
                   "mode": {"type": "string", "enum": ["emboss", "engrave"]}, "font": {"type": "string"}, "rotate": {"type": "number"}, "tracking": {"type": "number"}, "name": {"type": "string"}}, ["text"]),
              draft_text, changes=True),
         Tool("draft_fonts", "The TrueType fonts on this computer (name filters), and the one draft_text takes by default.", obj({"name": {"type": "string"}}), draft_fonts),
+        Tool("surface_loft", "A surface through curves in order — edges (\"Body.Edge3\"), sketches, or { points: [[x,y,z] …], closed } for a smooth curve through them: open curves make a sheet, closed ones a tube. ruled for straight lines between; thickness mm makes it a solid (side out, in or both). A curved panel, a duct, a shell for an organic shape.",
+             obj({"curves": {"type": "array"}, "body": {"type": "string"}, "ruled": {"type": "boolean"}, "closed": {"type": "boolean"}, "thickness": {"type": "number"}, "side": {"type": "string", "enum": ["out", "in", "both"]}, "name": {"type": "string"}}, ["curves"]), surface_loft, changes=True),
+        Tool("surface_points", "A smooth surface through a grid of points, row by row (rows: [[[x,y,z] …] …], every row the same length) — through every point, or within tolerance mm of them for a smoother one; answers how far the farthest point is. thickness makes it a solid. Points measured off a real thing, a shape from numbers.",
+             obj({"rows": {"type": "array"}, "tolerance": {"type": "number"}, "thickness": {"type": "number"}, "side": {"type": "string", "enum": ["out", "in", "both"]}, "name": {"type": "string"}}, ["rows"]), surface_points, changes=True),
+        Tool("surface_thicken", "Make a surface a solid: surface an object (\"Surface\") or a body's face (\"Body.Face3\"), thickness mm, side out (along its normal), in, or both. A new object; warns under two printed lines.",
+             obj({"surface": {"type": "string"}, "body": {"type": "string"}, "thickness": {"type": "number"}, "side": {"type": "string", "enum": ["out", "in", "both"]}, "name": {"type": "string"}}, ["surface", "thickness"]), surface_thicken, changes=True),
         Tool("surface_fill", "A surface filled across a closed boundary — edges (\"Body.Edge3\") or a sketch's outline — bent as smoothly as the edges allow; thickness mm makes it a solid (negative: the other side). A cover over an opening, a smooth transition, a shell between profiles.",
              obj({"edges": {"type": "array"}, "body": {"type": "string"}, "thickness": {"type": "number"}, "name": {"type": "string"}}, ["edges"]), surface_fill, changes=True),
     ]

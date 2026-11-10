@@ -62,7 +62,8 @@ class Cam(unittest.TestCase):
         err, x = self.call("cam_op", {"kind": "pocket", "faces": ["Face1"], "name": "Nothing"})
         self.assertTrue(err)
         # Simulated on the stock: no crash, no gouge; the stock's top 1 mm
-        # is left over the part (no face op), the pocket is cleared.
+        # is left over the part (no face op), and the 6 mm mill leaves the
+        # pocket's square corners 8 mm deep under it.
         err, sim = self.call("cam_sim", {"inline": False})
         print("sim:", json.dumps(sim))
         self.assertFalse(err, sim)
@@ -70,7 +71,11 @@ class Cam(unittest.TestCase):
         self.assertNotIn("crashes", sim)
         self.assertNotIn("gouge", sim["part"])
         self.assertGreater(sim["removedMm3"], 30 * 20 * 8 * 0.8)
-        self.assertAlmostEqual(sim["part"]["left"]["most"], 1.0, delta=0.15)
+        left = sim["part"]["left"]
+        self.assertAlmostEqual(left["most"], 9.0, delta=0.2)
+        at = left["at"]
+        self.assertTrue(min(abs(at[0] - 15), abs(at[0] - 45)) < 3 and min(abs(at[1] - 10), abs(at[1] - 30)) < 3, at)
+        self.assertGreater(left["share"], 0.6)
         import os
 
         self.assertGreater(os.path.getsize(sim["picture"]), 1000)

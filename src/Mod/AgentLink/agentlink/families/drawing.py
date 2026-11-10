@@ -179,7 +179,7 @@ def _view_frame(v, box):
     s = (bb.XLength / w) if w >= h else (bb.YLength / h)
     cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
     best = None
-    pts = [(p.X, p.Y) for p in _vertices(v)]
+    pts = [(p.x, p.y) for p in _vertices(v)]
     for sx in (1, -1):
         for sy in (1, -1):
             fr = (s, sx, sy, bb.Center.x - s * sx * cx, bb.Center.y - s * sy * cy)

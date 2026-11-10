@@ -55,6 +55,34 @@ class Draft(unittest.TestCase):
         self.assertTrue(f["solid"])
         self.assertGreater(f["area"], 400)
 
+    def test_4_surface_loft_points_thicken(self):
+        # A curved panel through three arcs of points: a sheet, then 2 mm thick.
+        def arc(y, sag):
+            return {"points": [[x, y, sag * (1 - ((x - 20) / 20) ** 2)] for x in (0, 10, 20, 30, 40)]}
+        err, p = self.call("surface_loft", {"curves": [arc(0, 4), arc(15, 6), arc(30, 4)], "thickness": 2, "side": "both", "name": "Panel"})
+        print("\nloft:", json.dumps(p))
+        self.assertFalse(err, p)
+        self.assertTrue(p["solid"])
+        self.assertAlmostEqual(p["volume"], p["area"] * 2, delta=p["area"] * 2 * 0.05)
+        self.assertNotIn("warnings", p)
+        # Open and closed curves together are refused.
+        err, x = self.call("surface_loft", {"curves": [arc(0, 4), {"points": [[0, 0, 0], [10, 0, 0], [10, 10, 0]], "closed": True}]})
+        self.assertTrue(err)
+        # Through a grid of points: every point on it; then thickened thin.
+        rows = [[[x, y, 0.02 * (x - 15) ** 2 - 0.01 * (y - 10) ** 2] for x in range(0, 31, 5)] for y in range(0, 21, 5)]
+        err, g = self.call("surface_points", {"rows": rows, "name": "Fitted"})
+        print("points:", json.dumps(g))
+        self.assertFalse(err, g)
+        self.assertLess(g["farthestPoint"], 0.01)
+        self.assertFalse(g["solid"])
+        err, t = self.call("surface_thicken", {"surface": "Fitted", "thickness": 0.6})
+        print("thicken:", json.dumps(t))
+        self.assertFalse(err, t)
+        self.assertTrue(t["solid"])
+        self.assertTrue(any("two printed lines" in w for w in t["warnings"]), t)
+        err, r = self.call("surface_points", {"rows": [[[0, 0, 0], [1, 0, 0]], [[0, 1, 0]]]})
+        self.assertTrue(err)
+
 
 if __name__ == "__main__":
     unittest.main()
