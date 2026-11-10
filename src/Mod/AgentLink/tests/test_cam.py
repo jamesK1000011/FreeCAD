@@ -62,6 +62,24 @@ class Cam(unittest.TestCase):
         err, x = self.call("cam_op", {"kind": "pocket", "faces": ["Face1"], "name": "Nothing"})
         self.assertTrue(err)
 
+    def test_2_drill_finds_the_hole(self):
+        # FreeCAD 1.0's Drilling.Create fails headless; the 6 mm tool is too
+        # big for the 6 mm hole, so first the refusal, then a 3 mm tool.
+        err, r = self.call("cam_op", {"kind": "drill"})
+        self.assertTrue(err)
+        self.assertIn("smaller tool", r["error"]["message"])
+        err, t = self.call("cam_tool", {"diameter": 3})
+        self.assertFalse(err, t)
+        err, d = self.call("cam_op", {"kind": "drill"})
+        print("\ndrill:", json.dumps(d))
+        self.assertFalse(err, d)
+        self.assertGreater(d["cutMm"], 19)
+        self.assertAlmostEqual(d["cutBox"]["min"][0], 7, delta=0.01)
+        self.assertAlmostEqual(d["cutBox"]["min"][1], 7, delta=0.01)
+        err, g = self.call("cam_post", {"post": "grbl"})
+        self.assertFalse(err, g)
+        self.assertIn("Drill", g["ops"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -63,6 +63,9 @@ def _q(v, unit):
             return None
 
 
+CYCLES = ("G73", "G81", "G82", "G83", "G85", "G86", "G89")
+
+
 def path_stats(commands, tc):
     """Lengths, depth and an estimated time of a path's moves: cutting at
     the tool controller's feeds, rapids at RAPID."""
@@ -72,9 +75,30 @@ def path_stats(commands, tc):
     cut = rapid = minutes = 0.0
     zmin, zmax = math.inf, -math.inf
     lo, hi = [math.inf] * 3, [-math.inf] * 3
+    retract_initial = True
     for c in commands:
         name = c.Name.upper()
         p = c.Parameters
+        if name in CYCLES and None not in (x, y, z) and "Z" in p:
+            # A drilling cycle: rapid over the hole, down to R, feed to Z, back up.
+            nx, ny, bottom = p.get("X", x), p.get("Y", y), p["Z"]
+            r = p.get("R", z)
+            top = max(z, r)
+            over = math.hypot(nx - x, ny - y) + (top - z) + (top - r)
+            depth = max(0.0, r - bottom)
+            rapid += over + depth
+            minutes += (over + depth) / RAPID + (depth / (vf or hf) if (vf or hf) else 0.0)
+            cut += depth
+            zmin, zmax = min(zmin, bottom), max(zmax, r)
+            for k, v in enumerate((nx, ny, bottom)):
+                lo[k], hi[k] = min(lo[k], v), max(hi[k], v)
+            for k, v in enumerate((nx, ny, r)):
+                lo[k], hi[k] = min(lo[k], v), max(hi[k], v)
+            x, y, z = nx, ny, (top if retract_initial else r)
+            continue
+        if name in ("G98", "G99"):
+            retract_initial = name == "G98"
+            continue
         if name not in ("G0", "G00", "G1", "G01", "G2", "G02", "G3", "G03"):
             continue
         nx, ny, nz = p.get("X", x), p.get("Y", y), p.get("Z", z)
@@ -205,7 +229,15 @@ def tools(session):
         model = job.Model.Group[0]
         base_body = s.body(a.get("body")) if a.get("body") else None
         src = base_body or model
-        op = mod.Create(a.get("name") or kind.capitalize(), None, job)
+        if kind == "drill":
+            # FreeCAD 1.0's Drilling.Create looks for holes before the op knows
+            # its model and fails; build it the way newer releases do.
+            op = d.addObject("Path::FeaturePython", a.get("name") or "Drill")
+            op.Proxy = mod.ObjectDrilling(op, a.get("name") or "Drill", job)
+            if getattr(op.Proxy, "model", None) is None:
+                op.Proxy.job, op.Proxy.model = job, job.Model.Group
+        else:
+            op = mod.Create(a.get("name") or kind.capitalize(), None, job)
         if a.get("name"):
             op.Label = a["name"]
         if a.get("faces") is not None:
@@ -216,10 +248,9 @@ def tools(session):
             op.Side = "Inside" if a.get("side", "inside") == "inside" else "Outside"
             op.OperationType = "Profile" if a.get("finish") else "Clearing"
         if kind == "drill" and a.get("faces") is None:
-            try:
-                op.Proxy.findAllHoles(op)
-            except Exception:
-                pass
+            op.Proxy.findAllHoles(op)
+            if not op.Base:
+                raise ToolError("failed", f"No holes the tool ({_q(job.Tools.Group[0].Tool.Diameter, 'mm')} mm) fits, upright, in {model.Label}: give faces, or a smaller tool (cam_tool). Nothing was kept.")
         if a.get("stepDown") is not None and hasattr(op, "StepDown"):
             op.StepDown = f"{picks.num(a['stepDown'], 'stepDown')} mm"
         if a.get("stepOver") is not None and hasattr(op, "StepOver"):
@@ -231,7 +262,7 @@ def tools(session):
             op.StockToLeave = f"{picks.num(a['stockToLeave'], 'stockToLeave')} mm"
         d.recompute()
         cmds = list(op.Path.Commands) if getattr(op, "Path", None) is not None else []
-        moves = [c for c in cmds if c.Name.upper() in ("G1", "G2", "G3", "G01", "G02", "G03")]
+        moves = [c for c in cmds if c.Name.upper() in ("G1", "G2", "G3", "G01", "G02", "G03") + CYCLES]
         if not moves:
             raise ToolError("failed", f"The {kind} made no cutting moves: {'the faces are not ones it can cut' if a.get('faces') is not None else 'nothing found to cut — give faces'}; or the tool ({_q(job.Tools.Group[0].Tool.Diameter, 'mm')} mm) is too big for them. Nothing was kept.")
         out = {"op": op.Label, "kind": kind, "job": job.Label, **path_stats(cmds, op.ToolController),
