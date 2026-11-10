@@ -172,7 +172,7 @@ class Sheet:
                 out += ["0", "LINE", "8", kind.upper(), "10", f"{x0:.4f}", "20", f"{H - y0:.4f}", "30", "0.0", "11", f"{x1:.4f}", "21", f"{H - y1:.4f}", "31", "0.0"]
         for x, y, size, text, anchor in self.texts:
             rot = 90 if anchor == "vertical" else 0
-            out += ["0", "TEXT", "8", "TEXT", "10", f"{x:.4f}", "20", f"{H - y:.4f}", "30", "0.0", "40", f"{size:g}", "1", text, "50", str(rot)]
+            out += ["0", "TEXT", "8", "TEXT", "10", f"{x:.4f}", "20", f"{H - y:.4f}", "30", "0.0", "40", f"{size:g}", "1", text.replace("\u2300", "%%c").replace("\u00b1", "%%p").replace("\u00d7", "x"), "50", str(rot)]
             if anchor in ("middle", "vertical", "end"):
                 out += ["72", "2" if anchor == "end" else "1", "11", f"{x:.4f}", "21", f"{H - y:.4f}", "31", "0.0"]
         out += ["0", "ENDSEC", "0", "EOF"]
@@ -251,7 +251,8 @@ def _esc(s):
 
 
 def _pdfstr(s):
-    s = str(s).replace("\u2014", "-").replace("\u2013", "-").replace("\u00d7", "x")
+    # WinAnsi has Ø, ± and × but no ⌀: the diameter sign is drawn as Ø.
+    s = str(s).replace("\u2014", "-").replace("\u2013", "-").replace("\u2300", "\u00d8")
     return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 

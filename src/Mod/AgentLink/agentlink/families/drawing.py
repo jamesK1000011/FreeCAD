@@ -16,7 +16,7 @@ import FreeCAD
 import TechDraw  # noqa: F401 — the family stands on TechDraw; left out without it
 
 from .. import geometry as geo
-from .. import sheets, store, views
+from .. import iso286, sheets, store, views
 from ..protocol import Tool, ToolError
 
 GROUP = "drawing"
@@ -111,6 +111,118 @@ def _techdraw_page(doc, objs, placed, scale, paper, label, dims):
         return None, f"the TechDraw page could not be made here ({e}); the files stand on their own"
 
 
+# ---- feature dimensions, hole callouts, the title block --------------------------------
+
+def _to_paper(p2, box, centre, scale):
+    bx, by = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    return (centre[0] + (p2[0] - bx) * scale, centre[1] - (p2[1] - by) * scale)
+
+
+def _ref_point(session, objs, r, what):
+    """A 3D place a dimension measures from: a point [x, y, z], or a face or
+    edge query on a body ({ body, kind, type, radius, near, normal … }) —
+    a circle's centre, an edge's middle, a face's centre. Returns (point,
+    the circle edge when it is one)."""
+    import Part
+    from . import measure as M
+    from . import picks
+
+    if isinstance(r, list):
+        return picks.vec3(r, what), None
+    if not isinstance(r, dict):
+        raise ToolError("invalid_input", f"{what}: a point [x, y, z] or a query {{ body, kind: edge|face, type, radius, near }}.")
+    q = dict(r)
+    q.setdefault("body", objs[0].Label)
+    q.setdefault("kind", "edge")
+    _, _, hits = M.query(session, q)
+    if not hits:
+        raise ToolError("not_found", f"{what}: nothing on {q['body']} matches {r} — shape_query lists them.")
+    if len(hits) > 1:
+        if q.get("near") is None:
+            raise ToolError("invalid_input", f"{what}: {len(hits)} match — add near: [x, y, z] to take the closest.")
+        pt = picks.vec3(q["near"] if isinstance(q["near"], list) else q["near"]["point"], "near")
+        hits = sorted(hits, key=lambda h: h[1].distToShape(Part.Vertex(pt))[0])
+    el = hits[0][1]
+    if hasattr(el, "Curve") and isinstance(el.Curve, (Part.Circle,)):
+        return FreeCAD.Vector(el.Curve.Center), el
+    if hasattr(el, "Curve"):
+        return el.valueAt((el.FirstParameter + el.LastParameter) / 2), el
+    return el.CenterOfMass, el
+
+
+def _callout(nominal, d, diameter=False):
+    try:
+        return d.get("label") or iso286.text(nominal, d.get("fit"), d.get("plus"), d.get("minus"), diameter)
+    except ValueError as e:
+        raise ToolError("invalid_input", f"fit: {e}")
+
+
+def _holes(objs, view):
+    """The round holes seen end on in a view, grouped by diameter: [(d,
+    [centres])]. A hole is a circle edge on a cylindrical face that goes
+    into the part, its axis along the view."""
+    import Part
+
+    Z, _, _ = views.frame(view)
+    seen = {}
+    for o in objs:
+        sh = o.Shape
+        for f in sh.Faces:
+            if not isinstance(f.Surface, Part.Cylinder):
+                continue
+            ax = f.Surface.Axis
+            if abs(abs(ax.dot(Z)) - 1) > 1e-6:
+                continue
+            # A hole's material is outside its cylinder: the face's normal points to the axis.
+            u0, u1, v0, v1 = f.ParameterRange
+            p = f.valueAt((u0 + u1) / 2, (v0 + v1) / 2)
+            n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+            c = f.Surface.Center
+            radial = p - c - ax * (p - c).dot(ax)
+            if radial.Length < 1e-9 or n.dot(radial) > 0:
+                continue
+            dia = round(2 * f.Surface.Radius, 3)
+            key = (round(c.dot(views.frame(view)[1]), 2), round(c.dot(views.frame(view)[2]), 2))
+            got = seen.setdefault(dia, {}).setdefault(key, [c, 0.0])
+            got[1] += abs(u1 - u0)
+    # A hole goes all the way round (in one face or two); a cavity's rounded
+    # inside corner is a quarter turn and is no hole.
+    out = []
+    for d, v in seen.items():
+        centres = [c for c, span in v.values() if span >= 0.95 * 2 * math.pi]
+        if centres:
+            out.append((d, centres))
+    return sorted(out, key=lambda x: -x[0])
+
+
+def title_block_grid(sheet, fields, margin=10.0, width=130.0):
+    """A title block of labelled cells in the bottom-right corner: the
+    title across the top, then pairs of fields."""
+    rows = [("TITLE", fields.get("title", ""))]
+    pairs = [k for k in ("partNumber", "revision", "material", "finish", "drawnBy", "date", "checkedBy", "company", "scale", "projection", "sheet", "generalTolerance") if fields.get(k)]
+    names = {"partNumber": "PART No.", "revision": "REV", "material": "MATERIAL", "finish": "FINISH", "drawnBy": "DRAWN", "date": "DATE", "checkedBy": "CHECKED",
+             "company": "COMPANY", "scale": "SCALE", "projection": "PROJECTION", "sheet": "SHEET", "generalTolerance": "GENERAL TOL."}
+    cell_h = 7.0
+    n_rows = 1 + (len(pairs) + 1) // 2
+    x1, y1 = sheet.w - margin, sheet.h - margin
+    x0, y0 = x1 - width, y1 - cell_h * n_rows
+    sheet.line([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "visible", closed=True)
+    half = width / 2
+    for r in range(1, n_rows):
+        y = y0 + r * cell_h
+        sheet.line([(x0, y), (x1, y)], "thin")
+    if n_rows > 1:
+        sheet.line([(x0 + half, y0 + cell_h), (x0 + half, y1)], "thin")
+    sheet.text(x0 + 1.5, y0 + 2.4, 1.6, "TITLE")
+    sheet.text(x0 + 1.5, y0 + cell_h - 1.4, 3.2, str(rows[0][1])[:44])
+    for i, k in enumerate(pairs):
+        r, c = 1 + i // 2, i % 2
+        cx, cy = x0 + c * half, y0 + r * cell_h
+        sheet.text(cx + 1.5, cy + 2.4, 1.6, names[k])
+        sheet.text(cx + 1.5, cy + cell_h - 1.4, 2.6, str(fields[k])[:30])
+    return (x0, y0, x1, y1)
+
+
 def tools(session):
     s = session
 
@@ -175,7 +287,83 @@ def tools(session):
                     sheet.dimension((right, bottom), (right, top), 8, _num(extent[va]))
                     done.add(va)
                     dims.append({"view": v, "axis": va, "mm": round(extent[va], 3)})
-        sheets.title_block(sheet, [name, f"Scale {sheets.scale_text(scale)}   {projection.capitalize()} angle projection   mm", f"{paper}   {', '.join(o.Label for o in objs)}"[:70]])
+        # Feature dimensions asked for, each in its view: lengths between two
+        # places, diameters and radii of round edges, with a tolerance or fit.
+        placed = []
+        for i, d in enumerate(a.get("dims") or []):
+            if not isinstance(d, dict) or d.get("view") not in drawn:
+                raise ToolError("invalid_input", f"dims.{i}: {{ view (one drawn: {', '.join(want)}), kind: length|diameter|radius, a, b, offset, fit | plus/minus }}.")
+            v = d["view"]
+            kind = d.get("kind", "length")
+            box, centre = drawn[v]["box"], L["centres"][v]
+            pa3, ea = _ref_point(s, objs, d.get("a"), f"dims.{i}.a")
+            pa = _to_paper(views.point(pa3, v), box, centre, scale)
+            if kind == "length":
+                pb3, _ = _ref_point(s, objs, d.get("b"), f"dims.{i}.b")
+                pb = _to_paper(views.point(pb3, v), box, centre, scale)
+                axis = d.get("along")
+                a2, b2 = views.point(pa3, v), views.point(pb3, v)
+                if axis == "h":
+                    value, pb = abs(b2[0] - a2[0]), (pb[0], pa[1])
+                elif axis == "v":
+                    value, pb = abs(b2[1] - a2[1]), (pa[0], pb[1])
+                else:
+                    value = math.hypot(b2[0] - a2[0], b2[1] - a2[1])
+                label = _callout(value, d)
+                sheet.dimension(pa, pb, float(d.get("offset", 8)), label)
+            elif kind in ("diameter", "radius"):
+                import Part
+
+                if ea is None or not isinstance(getattr(ea, "Curve", None), Part.Circle):
+                    raise ToolError("invalid_input", f"dims.{i}.a: a round edge ({{ kind: \"edge\", type: \"circle\", radius, near }}) for a {kind}.")
+                rr = ea.Curve.Radius
+                value = 2 * rr if kind == "diameter" else rr
+                label = _callout(value, d, diameter=kind == "diameter")
+                if kind == "radius":
+                    label = "R" + label
+                ang = math.radians(float(d.get("angle", 45)))
+                rp = rr * scale
+                tip = (pa[0] + rp * math.cos(ang), pa[1] - rp * math.sin(ang))
+                elbow = (tip[0] + 8 * math.cos(ang), tip[1] - 8 * math.sin(ang))
+                tail = (elbow[0] + (10 if math.cos(ang) >= 0 else -10), elbow[1])
+                sheet.line([tip, elbow, tail], "dim")
+                sheet.arrow(tip, elbow)
+                sheet.text(tail[0] + (1 if math.cos(ang) >= 0 else -1), tail[1] - 1, 3.0, label, "start" if math.cos(ang) >= 0 else "end")
+            else:
+                raise ToolError("invalid_input", f"dims.{i}.kind: length, diameter or radius.")
+            placed.append({"view": v, "kind": kind, "value": round(value, 4), "label": label})
+        # Every round hole seen end on, called out once per size: "4× ⌀3.4".
+        holes_out = []
+        if a.get("holes"):
+            hv = a["holes"] if isinstance(a["holes"], str) else next((v for v in ("top", "front", "right") if v in drawn), want[0])
+            if hv not in drawn:
+                raise ToolError("invalid_input", f"holes: a view drawn ({', '.join(want)}), or true for the top.")
+            box, centre = drawn[hv]["box"], L["centres"][hv]
+            for k, (dia, centres) in enumerate(_holes(objs, hv)):
+                c0 = min(centres, key=lambda c: (views.point(c, hv)[0], -views.point(c, hv)[1]))
+                pa = _to_paper(views.point(c0, hv), box, centre, scale)
+                fit = (a.get("holeFits") or {}).get(str(dia)) or (a.get("holeFits") or {}).get(f"{dia:g}")
+                label = (f"{len(centres)}× " if len(centres) > 1 else "") + _callout(dia, {"fit": fit}, diameter=True)
+                rp = dia / 2 * scale
+                ang = math.radians(135 + 20 * k)
+                tip = (pa[0] + rp * math.cos(ang), pa[1] - rp * math.sin(ang))
+                elbow = (tip[0] + 9 * math.cos(ang), tip[1] - 9 * math.sin(ang))
+                tail = (elbow[0] - 12, elbow[1])
+                sheet.line([tip, elbow, tail], "dim")
+                sheet.arrow(tip, elbow)
+                sheet.text(tail[0] - 1, tail[1] - 1, 3.0, label, "end")
+                holes_out.append({"view": hv, "diameter": dia, "count": len(centres), "label": label})
+        tb = dict(a.get("titleBlock") or {})
+        tb.setdefault("title", name)
+        tb.setdefault("scale", sheets.scale_text(scale))
+        tb.setdefault("projection", f"{projection} angle")
+        tb.setdefault("generalTolerance", "ISO 2768-m")
+        if not tb.get("material"):
+            mat = store.materials(s.doc).get(objs[0].Label) if len(objs) == 1 else None
+            if mat:
+                tb["material"] = str(mat).upper()
+        tb.setdefault("sheet", f"{paper}  mm")
+        title_block_grid(sheet, tb)
         paths = _write(s, _safe(a.get("file") or name), sheet, ("svg", "pdf", "dxf"))
         page, made = (None, "not asked for")
         if a.get("page", True):
@@ -187,13 +375,15 @@ def tools(session):
             "scale": sheets.scale_text(scale),
             "projection": projection,
             "views": [{"view": v, "at": [round(c, 1) for c in L["centres"][v]], "size": [round(sizes[v][0] * scale, 1), round(sizes[v][1] * scale, 1)]} for v in want],
-            "dimensions": dims,
+            "dimensions": dims + placed,
+            **({"holes": holes_out} if a.get("holes") else {}),
+            "titleBlock": tb,
             "techdrawPage": page,
             "step": len(s.steps),
         }
         out["page" if page else "pageNote"] = made
         if a.get("dimensions", True):
-            out["note"] = "Overall sizes only, each once. The PDF and DXF are written from the same lines as the SVG, with or without the GUI."
+            out["note"] = "Overall sizes once each, and the dims and hole callouts asked for. The PDF and DXF are written from the same lines as the SVG, with or without the GUI; the TechDraw page carries the views and overall sizes only."
         return out
 
     # ---- drawing_exploded ------------------------------------------------------------------
@@ -509,7 +699,7 @@ def tools(session):
             md.append(f"{i}. The {title.lower()} of claim 1, wherein the {name(o)} [a narrower feature: a size, a material, a shape].")
             md.append("")
         md += ["## Abstract", "", "[At most 150 words, written last.]", ""]
-        md.append(f"Reference numerals: " + "; ".join(f"{numerals[o.Label]} {name(o)}" for o in objs) + ".")
+        md.append("Reference numerals: " + "; ".join(f"{numerals[o.Label]} {name(o)}" for o in objs) + ".")
         p = os.path.join(s.out_dir, f"{_safe(a.get('name') or title)}_patent_draft.md")
         with open(p, "w", encoding="utf-8") as f:
             f.write("\n".join(md) + "\n")
@@ -522,8 +712,8 @@ def tools(session):
             "A drawing sheet of bodies: standard views (front, top, right, iso by default; back, bottom, left too), first-angle (ISO) or third-angle (ASME) projection, "
             "at the largest standard scale that fits A4 or A3 (paper auto picks A3 only when it allows a bigger scale), overall sizes dimensioned once each "
             "(dimensions: false leaves them off), hidden: true dashes the hidden edges. Writes SVG, PDF and DXF to the output folder and adds a TechDraw page "
-            "with the same views to the document (page: false leaves it out). The sizes are overall only: a part's holes and features want dimensioning in "
-            "TechDraw itself.",
+            "with the same views to the document (page: false leaves it out). dims adds feature dimensions with tolerances or ISO 286 fits (limits written in), "
+            "holes calls out every round hole by size, titleBlock fills a title block of labelled cells.",
             _obj({
                 "bodies": bodies,
                 "views": {"type": "array", "items": {"type": "string", "enum": list(views.VIEWS)}},
@@ -535,6 +725,10 @@ def tools(session):
                 "page": {"type": "boolean"},
                 "name": {"type": "string", "description": "The title on the sheet."},
                 "file": {"type": "string", "description": "The files' name, without extension."},
+                "dims": {"type": "array", "items": {"type": "object"}, "description": "Feature dimensions: [{ view, kind: length (a, b, along h|v, offset mm) | diameter | radius (a round edge), fit \"H7\" or plus/minus mm, label }]; a and b a point [x,y,z] or a query { body, kind, type, radius, near } (a circle's centre, an edge's middle)."},
+                "holes": {"description": "true: every round hole seen end on in the top view called out by size (\"4× ⌀3.4\"); or the view's name."},
+                "holeFits": {"type": "object", "description": "A fit per hole diameter for the callouts: { \"6\": \"H7\" }."},
+                "titleBlock": {"type": "object", "description": "{ title, partNumber, revision, material, finish, drawnBy, date, checkedBy, company, generalTolerance (ISO 2768-m to start) } — ask the person for theirs."},
             }),
             drawing_make,
             changes=True,

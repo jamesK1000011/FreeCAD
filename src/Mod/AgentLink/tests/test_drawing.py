@@ -116,6 +116,27 @@ class Drawing(unittest.TestCase):
         self.assertTrue(err)
         self.assertIn("scale", e["error"]["message"])
 
+    def test_1b_features_and_title(self):
+        err, d = self.call("drawing_make", {
+            "bodies": ["Box"], "name": "Box detail", "file": "Box_detail",
+            "dims": [
+                {"view": "front", "kind": "length", "a": [-40, -30, 0], "b": [-40, -30, 30], "along": "v", "plus": 0.1, "offset": -10},
+            ],
+            "holes": True, "holeFits": {},
+            "titleBlock": {"partNumber": "AL-001", "revision": "B", "drawnBy": "Agent Link", "material": "PETG"},
+        })
+        self.assertFalse(err, d)
+        print("\nfeatures:", json.dumps({k: d.get(k) for k in ("dimensions", "holes", "titleBlock")}))
+        self.assertTrue(any(x.get("label") == "30 ±0.1" for x in d["dimensions"]), d["dimensions"])
+        self.assertTrue(d["holes"], d)
+        self.assertTrue(any(h["count"] == 4 for h in d["holes"]), d["holes"])
+        with open(d["files"]["svg"], encoding="utf-8") as f:
+            svg = f.read()
+        for t in ("AL-001", "PETG", "ISO 2768-m", "30 ±0.1", "4× ⌀"):
+            self.assertIn(t, svg)
+        err, e = self.call("drawing_make", {"bodies": ["Box"], "dims": [{"view": "front", "kind": "diameter", "a": [0, 0, 0], "fit": "Q9"}]})
+        self.assertTrue(err)
+
     def test_2_exploded(self):
         steps = [{"title": "The box", "add": ["Box"]}, {"title": "The lid", "add": ["Box lid"], "note": "Four M3 screws."}]
         # As printed, the lid lies beside the box: said so.
