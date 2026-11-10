@@ -19,7 +19,10 @@ GROUP = "doc"
 INFO = "The document: new, open, save; objects listed, read, set, renamed, deleted; recompute; import and export files."
 
 SOLID_FORMATS = {"step": ("step", "stp"), "iges": ("iges", "igs"), "brep": ("brep", "brp")}
-MESH_FORMATS = {"stl": ("stl",), "obj": ("obj",), "3mf": ("3mf",), "ply": ("ply",), "off": ("off",), "amf": ("amf",)}
+MESH_FORMATS = {"stl": ("stl",), "obj": ("obj",), "3mf": ("3mf",), "ply": ("ply",), "off": ("off",), "amf": ("amf",),
+                # read by meshformats, not FreeCAD's Mesh module
+                "gltf": ("gltf", "glb"), "dae": ("dae",), "wrl": ("wrl", "vrml"), "3ds": ("3ds",)}
+MORE_MESH = ("gltf", "dae", "wrl", "3ds")
 EXPORTS = ("step", "iges", "brep", "stl", "obj", "3mf")
 SKIP_PROPS = {"Proxy", "ExpressionEngine", "_GroupTouched"}
 
@@ -297,6 +300,7 @@ def tools(session):
         before = {o.Name for o in d.Objects}
         base = a.get("name") or os.path.splitext(os.path.basename(p))[0]
         made = []
+        took = None
         if fmt in SOLID_FORMATS:
             sh = Part.Shape()
             try:
@@ -313,7 +317,14 @@ def tools(session):
             import Mesh
 
             try:
-                m = Mesh.Mesh(p)
+                if fmt in MORE_MESH:
+                    from .. import meshformats
+
+                    V, F, took = meshformats.read(p, a.get("units"), a.get("up"))
+                    m = Mesh.Mesh()
+                    m.addFacets([[tuple(V[i]) for i in t] for t in F.tolist()])
+                else:
+                    m = Mesh.Mesh(p)
             except Exception as e:
                 raise ToolError("failed", f"{os.path.basename(p)} could not be read as a mesh: {e}")
             if m.CountFacets == 0:
@@ -348,10 +359,10 @@ def tools(session):
             made = [o for o in d.Objects if o.Name not in before]
         elif fmt == "fcstd":
             raise ToolError("invalid_input", "A FreeCAD document: doc_open { path } opens it.")
-        elif fmt in ("svg", "pdf", "dwg", "dae", "ifc", "png", "jpg"):
+        elif fmt in ("svg", "pdf", "dwg", "ifc", "png", "jpg"):
             raise ToolError("unavailable", f"{fmt.upper()} comes in through the FreeCAD window's importers (Draft, BIM, image planes), not headless here: open it there.")
         else:
-            raise ToolError("invalid_input", f"{fmt or 'no extension'}: import_file reads STEP, IGES, BREP, STL, OBJ, 3MF, PLY, OFF, AMF and DXF.")
+            raise ToolError("invalid_input", f"{fmt or 'no extension'}: import_file reads STEP, IGES, BREP, STL, OBJ, 3MF, PLY, OFF, AMF, glTF/GLB, Collada, VRML, 3DS and DXF; FBX: export it as glTF from the program that made it.")
         d.recompute()
         s.snapshot("import_file")
         out = []
@@ -367,7 +378,7 @@ def tools(session):
                 e["mesh"] = {"triangles": o.Mesh.CountFacets, "closed": o.Mesh.isSolid()}
                 e["note"] = "A mesh, not a body: import_file { solid: true } makes a body of it."
             out.append(e)
-        return {"path": p, "format": fmt, "objects": out, "count": len(out), "step": len(s.steps)}
+        return {"path": p, "format": fmt, **({"read": took} if took else {}), "objects": out, "count": len(out), "step": len(s.steps)}
 
     def export(a):
         names = a.get("objects")
@@ -418,6 +429,6 @@ def tools(session):
         Tool("object_delete", "Delete objects (objects: names or labels). Refused while another object uses one (force: true deletes it anyway and the user breaks); recomputes and lists any error.", obj({"objects": {}, "force": {"type": "boolean"}}, ["objects"]), object_delete, changes=True),
         Tool("object_rename", "Give an object a new label (its internal name stays). Trap: setups, specs and waivers keep the old label.", obj({"object": objref, "label": {"type": "string"}}, ["object", "label"]), object_rename, changes=True),
         Tool("recompute", "Recompute the document (force: true recomputes everything) and list each object that failed, with FreeCAD's reason.", obj({"force": {"type": "boolean"}}), recompute, changes=True),
-        Tool("import_file", "Bring a file into the document: STEP, IGES, BREP as bodies (split: true makes a body of each solid); STL, OBJ, 3MF, PLY, OFF, AMF as a body made of its triangles when closed and up to 20000 triangles (solid: false keeps a mesh, solid: true forces a body up to 200000); DXF as Draft geometry. SVG, PDF, DWG, IFC need the FreeCAD window. .FCStd: doc_open.", obj({"path": {"type": "string"}, "name": {"type": "string"}, "split": {"type": "boolean"}, "solid": {"type": "boolean"}}, ["path"]), import_file, changes=True),
+        Tool("import_file", "Bring a file into the document: STEP, IGES, BREP as bodies (split: true makes a body of each solid); STL, OBJ, 3MF, PLY, OFF, AMF — and glTF/GLB, Collada, VRML 2, 3DS, every mesh node flattened into one in mm, Z up (units and up override what the format says; read says what was taken) — as a body made of its triangles when closed and up to 20000 triangles (solid: false keeps a mesh, solid: true forces a body up to 200000); DXF as Draft geometry. SVG, PDF, DWG, IFC need the FreeCAD window; FBX: export it as glTF. .FCStd: doc_open.", obj({"path": {"type": "string"}, "name": {"type": "string"}, "split": {"type": "boolean"}, "solid": {"type": "boolean"}, "units": {"type": "string", "enum": ["mm", "cm", "m", "in"]}, "up": {"type": "string", "enum": ["x", "y", "z"]}}, ["path"]), import_file, changes=True),
         Tool("export", "Write objects (the one body when left out; several go as one compound) as STEP, IGES, BREP, STL, OBJ or 3MF (format, or from path's extension), and read it back: verify gives the volume read against the bodies' (and triangles, closed for meshes). tolerance: a mesh's chord error, 0.01 mm.", obj({"objects": {}, "format": {"type": "string", "enum": list(EXPORTS)}, "path": {"type": "string"}, "tolerance": {"type": "number"}}), export),
     ]
