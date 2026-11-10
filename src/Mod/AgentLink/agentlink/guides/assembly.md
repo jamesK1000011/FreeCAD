@@ -25,6 +25,7 @@ FreeCAD's own Assembly workbench, its solver and its joints. Parts are bodies al
 - Faces that meet face to face (a lid's underside on a box's rim) have opposite normals: up on one part, down on the other. `offset` mm moves b off along the normal (a gap); `rotate` degrees turns it about it.
 
 ## traps
+- A joint between two flat faces puts their middles together: a post joined to a plate's top moves to the plate's middle. To keep a part where it stands, `asm_ground` it instead of joining it, or join it by an element that is where it should meet (a hole's edge, a pin's face).
 - Only `b`'s part moves. Make joints from the grounded part outwards.
 - A joint that holds what another already holds is **redundant** and the solve refuses it: nothing is kept. Fixed after a revolute on the same pair is the common one.
 - An assembly needs one grounded part: `asm_ground`.
