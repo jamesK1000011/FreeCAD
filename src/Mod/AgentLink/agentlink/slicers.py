@@ -65,10 +65,14 @@ def minimal_profiles(settings, folder):
         "wall_loops": str(int(settings.get("walls", 2))), "sparse_infill_density": f"{int(settings.get('infill', 15))}%",
         "top_shell_layers": str(int(settings.get("topLayers", 5))), "bottom_shell_layers": str(int(settings.get("bottomLayers", 4))),
         "top_shell_thickness": "0", "bottom_shell_thickness": "0",
+        # Empty: fits any printer. Without it Bambu Studio refuses the
+        # process as "not compatible with printer".
+        "compatible_printers": [], "compatible_printers_condition": "",
     }
     filament = {
         "type": "filament", "name": f"AgentLink {mat}", "from": "User", "instantiation": "true",
         "filament_type": [mat], "filament_density": [str(settings.get("density", 1.24))], "filament_diameter": [str(settings.get("filamentDiameter", 1.75))],
+        "compatible_printers": [], "compatible_printers_condition": "",
     }
     out = {}
     for k, v in (("machine", machine), ("process", process), ("filament", filament)):
