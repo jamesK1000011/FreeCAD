@@ -31,6 +31,7 @@ NAMES = [
     "share",
     "view",
     "assembly",
+    "cam",
 ]
 
 
