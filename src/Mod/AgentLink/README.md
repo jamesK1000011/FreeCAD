@@ -3,7 +3,7 @@
 
 An agent drives FreeCAD over the Model Context Protocol, in ScanRuler's
 manner: one call per job, small answers in millimetres and grams, and
-refusals that say what to do instead. There are 138 tools in 27 groups.
+refusals that say what to do instead. There are 137 tools in 27 groups.
 The lean list (the default) shows the core and the make-check-verdict
 loop; `tool_groups` shows the rest. Any tool can be called by name
 whether it is listed or not. Every change is one FreeCAD undo step.
