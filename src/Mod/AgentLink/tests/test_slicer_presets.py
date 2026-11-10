@@ -63,7 +63,14 @@ class Presets(unittest.TestCase):
             fil = json.load(f)
         self.assertIn("Bambu Lab H2D 0.4 nozzle", fil["compatible_printers"])
         with open(paths["process"]) as f:
-            self.assertEqual(json.load(f)["compatible_printers"].count("Bambu Lab H2D 0.4 nozzle"), 1)
+            proc = json.load(f)
+        self.assertEqual(proc["compatible_printers"].count("Bambu Lab H2D 0.4 nozzle"), 1)
+        # The person's process stands on its system one; the system printer is one.
+        self.assertEqual((proc["from"], proc["inherits"]), ("User", "0.20mm Standard @BBL H2D"))
+        with open(paths["machine"]) as f:
+            mach = json.load(f)
+        self.assertEqual(mach["from"], "system")
+        self.assertNotIn("_system", mach)
 
     def test_export_import_round_trip(self):
         b = SP.bundle("bambustudio", "Bambu Lab H2D 0.4 nozzle", "My fine PLA", "Bambu PLA Basic @BBL H2D", "H2D fine")

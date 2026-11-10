@@ -117,8 +117,13 @@ def resolve(index, kind, name, _seen=None):
     flat = {}
     if parent:
         flat = resolve(index, kind, parent, seen + [name])
+    up = flat.get("_system")
     flat.update({k: v for k, v in data.items() if k != "inherits"})
     flat["name"] = name
+    # The system preset this one stands on (itself when it is one): Bambu
+    # Studio's command line names a printer by it when it checks a
+    # process against it.
+    flat["_system"] = name if not entries[0]["user"] and entries[0]["listed"] else up
     return flat
 
 
@@ -189,16 +194,27 @@ def write_profiles(data, folder_):
     filament compatible only when it names the printer: the printer is added
     to their lists (the person chose them together)."""
     os.makedirs(folder_, exist_ok=True)
-    printer = data["machine"].get("name")
+    m = data["machine"]
+    printer = m.get("_system") or m.get("name")
     paths = {}
     for k in KINDS:
-        part = dict(data[k])
-        part["from"] = "User"
+        part = {key: v for key, v in data[k].items() if key != "_system"}
+        system = data[k].get("_system")
+        # Bambu Studio's command line takes a printer's name for the check
+        # from the file itself when it is a system preset, else from its
+        # inherits: a preset is written as the one, or on top of the other.
+        if system and system == part.get("name"):
+            part["from"] = "system"
+        else:
+            part["from"] = "User"
+            if system:
+                part["inherits"] = system
         part["instantiation"] = "true"
         if k != "machine" and printer:
             cp = list(part.get("compatible_printers") or [])
-            if printer not in cp:
-                cp.append(printer)
+            for want in (printer, m.get("name")):
+                if want and want not in cp:
+                    cp.append(want)
             part["compatible_printers"] = cp
             part["compatible_printers_condition"] = ""
         p = os.path.join(folder_, f"agentlink-{k}.json")

@@ -1,7 +1,7 @@
 {
- "_note": "The profiles Agent Link writes for OrcaSlicer and Bambu Studio when no presets are chosen: only what the print setup says, the slicer's defaults for the rest. {name} is the setup's value. Edit or replace this file to change them; slicer_presets chooses the person's own instead.",
+ "_note": "The machine is written as a system preset: Bambu Studio's command line then names the printer by it when it checks the process. The profiles Agent Link writes for OrcaSlicer and Bambu Studio when no presets are chosen: only what the print setup says, the slicer's defaults for the rest. {name} is the setup's value. Edit or replace this file to change them; slicer_presets chooses the person's own instead.",
  "machine": {
-  "type": "machine", "name": "AgentLink machine", "from": "User", "instantiation": "true", "printer_technology": "FFF",
+  "type": "machine", "name": "AgentLink machine", "from": "system", "instantiation": "true", "printer_technology": "FFF",
   "gcode_flavor": "{flavor}", "nozzle_diameter": ["{nozzle}"],
   "printable_area": ["0x0", "{volumeX}x0", "{volumeX}x{volumeY}", "0x{volumeY}"], "printable_height": "{volumeZ}"
  },
