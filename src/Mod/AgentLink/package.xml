@@ -16,5 +16,19 @@
       <classname>AgentLinkWorkbench</classname>
       <subdirectory>./</subdirectory>
     </workbench>
+    <preferencepack>
+      <name>Studio Light</name>
+      <type>Theme</type>
+      <description>A flat, quiet light theme: FreeCAD's own stylesheet with one surface per role, hairline borders and a single blue accent. Its colours are theme parameters, editable and exportable.</description>
+      <tag>light</tag>
+      <tag>flat</tag>
+    </preferencepack>
+    <preferencepack>
+      <name>Studio Dark</name>
+      <type>Theme</type>
+      <description>The dark counterpart of Studio Light: the same roles and accent on dark surfaces.</description>
+      <tag>dark</tag>
+      <tag>flat</tag>
+    </preferencepack>
   </content>
 </package>
