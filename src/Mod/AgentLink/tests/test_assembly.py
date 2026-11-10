@@ -147,7 +147,7 @@ class Assembly(unittest.TestCase):
         self.assertFalse(err, r)
         before = self.session.body("Arm").Placement.copy()
         err, sw = self.call("asm_sweep", {"joint": "Pivot", "from": 0, "to": 180, "steps": 12})
-        print("\nsweep:", json.dumps({k: sw.get(k) for k in ("verdict", "collidesAt", "clearFromStart")}))
+        print("\nsweep:", json.dumps({k: sw.get(k) for k in ("verdict", "collidesAt", "unsolvedAt", "clearFromStart")}), json.dumps(sw.get("steps", [])[:2] + sw.get("steps", [])[6:7]))
         self.assertFalse(err, sw)
         self.assertEqual(sw["verdict"], "collides")
         hit = set(sw["collidesAt"])

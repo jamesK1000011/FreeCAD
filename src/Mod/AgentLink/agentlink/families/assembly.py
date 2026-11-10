@@ -388,16 +388,22 @@ def tools(session):
             doc().recompute()
             _status(asm)
         unit = "degrees" if turning else "mm"
-        bad = [r["at"] for r in out_steps if r.get("overlaps") or r["solve"] != SOLVE.get(0)]
+        solved = SOLVE.get(0)
+        unsolved = [r["at"] for r in out_steps if r["solve"] != solved]
+        bad = [r["at"] for r in out_steps if r.get("overlaps")]
         clear_run = []
         for r in out_steps:
-            if r.get("overlaps") or r["solve"] != SOLVE.get(0):
+            if r.get("overlaps") or r["solve"] != solved:
                 break
             clear_run.append(r["at"])
-        out = {"joint": j.Label, "kind": kind, "unit": unit, "from": lo, "to": hi, "steps": out_steps,
-               "verdict": "clear" if not bad else "collides", "note": f"The joint turned back where it was; every part put back. Steps are {abs(hi - lo) / steps:g} {unit} apart: a collision between two steps is not seen — more steps to look closer."}
+        verdict = "collides" if bad else ("unknown" if unsolved else "clear")
+        out = {"joint": j.Label, "kind": kind, "unit": unit, "from": lo, "to": hi, "steps": out_steps, "verdict": verdict,
+               "note": f"The joint turned back where it was; every part put back. Steps are {abs(hi - lo) / steps:g} {unit} apart: a collision between two steps is not seen — more steps to look closer."}
         if bad:
             out["collidesAt"] = bad
+        if unsolved:
+            out["unsolvedAt"] = unsolved
+        if bad or unsolved:
             out["clearFromStart"] = [clear_run[0], clear_run[-1]] if clear_run else None
         return out
 
