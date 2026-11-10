@@ -41,3 +41,34 @@ class PrintedFraction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+try:
+    import FreeCAD  # noqa: F401
+    import Part
+
+    HAVE = True
+except Exception:
+    HAVE = False
+
+
+@unittest.skipUnless(HAVE, "FreeCAD is not importable here")
+class Sliced(unittest.TestCase):
+    def test_box_and_hollow(self):
+        import time
+
+        from agentlink.printmass import sliced
+
+        setup = {"layerHeight": 0.2, "topLayers": 5, "bottomLayers": 4}
+        t0 = time.time()
+        solid, sparse = sliced(Part.makeBox(40, 20, 10), setup, 2)
+        band = 0.45 + 0.41
+        inner = (40 - 2 * band) * (20 - 2 * band) * (10 - 1.8)
+        print(f"\nbox: solid {solid:.0f} sparse {sparse:.0f} exact sparse {inner:.0f} in {time.time() - t0:.2f} s")
+        self.assertAlmostEqual(solid + sparse, 8000, delta=8000 * 0.02)
+        self.assertAlmostEqual(sparse, inner, delta=inner * 0.05)
+        # A thin-walled tray: all perimeter and skin, nothing sparse.
+        tray = Part.makeBox(60, 40, 20).cut(Part.makeBox(58, 38, 19, FreeCAD.Vector(1, 1, 1)))
+        solid, sparse = sliced(tray, setup, 2)
+        print(f"tray: solid {solid:.0f} sparse {sparse:.0f} of {tray.Volume:.0f}")
+        self.assertLess(sparse, 0.02 * tray.Volume)

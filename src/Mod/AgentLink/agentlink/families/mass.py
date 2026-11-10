@@ -98,13 +98,12 @@ def body_mass(shape, rho, setup):
         return vol * rho_mm, c_v, _scale(I_v, rho_mm), "solid", vol
     walls = int(setup.get("walls", 2))
     infill = float(setup.get("infill", 15)) / 100.0
-    # The same estimate as part_review: the solid share from the wall
-    # readings (perimeters, top and bottom skins), the rest at the infill's
-    # share. The shells' mass sits on the surface.
+    # The same estimate as part_review: the solid share as a slicer lays it
+    # (perimeters, top and bottom skins), the rest at the infill's share. The shells' mass sits on the surface.
     area, c_a, I_a = _surface_parts(shape)
-    reads, nz = printmass.readings(geo.least_wall(shape, reach=shape.BoundBox.DiagonalLength + 1.0))
-    if reads:
-        shell = vol * printmass.solid_share(reads, nz, *printmass.shells(setup, walls))
+    share, _ = printmass.solid_of(shape, setup, walls)
+    if share is not None:
+        shell = vol * share
     else:
         shell = min(vol, area * walls * LINE)
     core = vol - shell

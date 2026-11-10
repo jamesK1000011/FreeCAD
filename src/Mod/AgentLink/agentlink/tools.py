@@ -19,7 +19,6 @@ import Part
 from . import geometry as geo
 from . import fits_hw, gridfinity, printability, slicer, store
 from . import printmass
-from .printmass import printed_fraction
 from .protocol import Tool, ToolError
 
 DENSITY = {"pla": 1.24, "petg": 1.27, "abs": 1.04, "asa": 1.07, "pa6-cf": 1.12, "tpu-95a": 1.21}
@@ -377,26 +376,15 @@ class Session:
         walls = int((setup or {}).get("walls", 2))
         infill = float((setup or {}).get("infill", 15)) / 100
         if printed:
-            # Through the part along each wall ray: solid where the walls
-            # from both faces fill the thickness, infill in what they leave.
-            # Each ray stands for its patch of surface, so summing over the
-            # rays weighs by volume; each column is read from both of its
-            # faces, which the ratio cancels.
-            # A ray in from a side wall crosses the perimeters at each end; one
-            # in from a top or bottom face crosses the solid layers — the
-            # bottom skin at one end, the top skin at the other. A sloped face
-            # is between the two, by how far it faces up or down.
+            # Sectioned as a slicer lays it down (printmass.sliced):
+            # perimeters, top and bottom skins and sparse infill per layer.
             lh = float((setup or {}).get("layerHeight", 0.2))
             tops = int((setup or {}).get("topLayers", 5))
             bottoms = int((setup or {}).get("bottomLayers", 4))
-            side_shell, skin_shell = printmass.shells(setup, walls)
-            reads, nz = printmass.readings(geo.least_wall(shape, reach=shape.BoundBox.DiagonalLength + 1.0))
-            if reads:
-                f = printed_fraction(reads, nz, side_shell, skin_shell, infill)
-            else:
-                f = 1.0
+            share, found = printmass.solid_of(shape, setup, walls)
+            f = 1.0 if share is None else share + infill * (1 - share)
             body_g = vol * f * rho / 1000.0
-            as_ = f"printed: {walls} walls, {tops} top and {bottoms} bottom layers of {lh} mm, {infill * 100:.0f}% infill — {f * 100:.0f}% of the solid, from the walls read (an estimate; the slicer's figure is the authority)"
+            as_ = f"printed: {walls} walls, {tops} top and {bottoms} bottom layers of {lh} mm, {infill * 100:.0f}% infill — {f * 100:.0f}% of the solid, from {found or 'nothing read: taken as solid'} (an estimate; the slicer's figure is the authority)"
         else:
             body_g = vol * rho / 1000.0
             as_ = "solid"
