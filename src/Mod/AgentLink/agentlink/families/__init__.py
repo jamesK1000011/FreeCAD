@@ -32,6 +32,7 @@ NAMES = [
     "view",
     "assembly",
     "cam",
+    "draft",
 ]
 
 
