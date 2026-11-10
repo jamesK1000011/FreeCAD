@@ -63,11 +63,12 @@ class Cam(unittest.TestCase):
         self.assertTrue(err)
 
     def test_2_drill_finds_the_hole(self):
-        # FreeCAD 1.0's Drilling.Create fails headless; the 6 mm tool is too
+        # FreeCAD 1.0's Drilling.Create fails headless. An 8 mm tool is too
         # big for the 6 mm hole, so first the refusal, then a 3 mm tool.
+        self.call("cam_tool", {"diameter": 8})
         err, r = self.call("cam_op", {"kind": "drill"})
         self.assertTrue(err)
-        self.assertIn("smaller tool", r["error"]["message"])
+        self.assertIn("smaller tool", r["error"]["message"], r)
         err, t = self.call("cam_tool", {"diameter": 3})
         self.assertFalse(err, t)
         err, d = self.call("cam_op", {"kind": "drill"})
