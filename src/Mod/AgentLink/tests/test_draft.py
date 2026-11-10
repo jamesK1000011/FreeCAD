@@ -115,5 +115,36 @@ class Draft(unittest.TestCase):
         self.assertTrue(err)
 
 
+    def test_6_arrays(self):
+        import FreeCAD
+        import Part
+
+        from _fc import add_body
+
+        add_body(self.session, "Coin", Part.makeCylinder(5, 2))
+        # A 3 x 2 grid 2 mm apart: separate solids, so a batch of bodies.
+        err, g = self.call("draft_array", {"body": "Coin", "kind": "grid", "count": [3, 2], "separate": True})
+        print("\ngrid:", json.dumps(g))
+        self.assertFalse(err, g)
+        self.assertEqual(len(g["bodies"]), 6)
+        last = next(o for o in self.session.doc.Objects if o.Label == g["bodies"][-1]).Shape.BoundBox
+        self.assertAlmostEqual(last.XMin, 2 * 12 - 5, delta=1e-6)
+        # Six spokes round the middle, joined into one wheel.
+        add_body(self.session, "Spoke", Part.makeBox(20, 2, 2, FreeCAD.Vector(0, -1, 0)))
+        err, w = self.call("draft_array", {"body": "Spoke", "kind": "polar", "count": 6})
+        print("polar:", json.dumps(w))
+        self.assertFalse(err, w)
+        self.assertEqual(w["solids"], 1)
+        self.assertAlmostEqual(w["size"][0], 40, delta=0.2)
+        # Along a path of points, turned with it.
+        add_body(self.session, "Bead", Part.makeSphere(1.5))
+        err, p = self.call("draft_array", {"body": "Bead", "kind": "path", "count": 5, "path": {"points": [[0, 0, 0], [20, 10, 0], [40, 0, 0]]}, "align": True})
+        self.assertFalse(err, p)
+        self.assertEqual(p["solids"], 5)
+        self.assertIn("note", p)
+        err, x = self.call("draft_array", {"body": "Bead", "kind": "spiral"})
+        self.assertTrue(err)
+
+
 if __name__ == "__main__":
     unittest.main()

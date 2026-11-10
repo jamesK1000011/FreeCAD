@@ -125,9 +125,11 @@ def outline_faces(path):
             if sh is not None and not sh.isNull():
                 edges += sh.Edges
     finally:
-        FreeCAD.closeDocument(tmp.Name)
-        if keep is not None and keep.Name != tmp.Name:
-            FreeCAD.setActiveDocument(keep.Name)
+        tmp_name = tmp.Name
+        keep_name = keep.Name if keep is not None else None
+        FreeCAD.closeDocument(tmp_name)
+        if keep_name and keep_name != tmp_name:
+            FreeCAD.setActiveDocument(keep_name)
     if not edges:
         raise ToolError("failed", "The file has no curves FreeCAD reads: paths and shapes, not images or text (turn text into paths first).")
     closed, open_ = [], 0
@@ -313,6 +315,89 @@ def tools(session):
             out["warning"] = "The outline runs past the face's edge: a smaller width."
         return out
 
+    def draft_array(a):
+        o = s.body(a.get("body"))
+        base = o.Shape
+        kind = a.get("kind", "grid")
+        places = []
+        if kind == "grid":
+            n = [int(x) for x in (a.get("count") or [2, 1, 1])] + [1, 1]
+            n = n[:3]
+            if any(k < 1 for k in n) or n[0] * n[1] * n[2] < 2:
+                raise ToolError("invalid_input", "count: [nx, ny, nz], each 1 or more, two copies or more in all.")
+            bb = base.BoundBox
+            gap = picks.num(a.get("gap", 2), "gap")
+            step = a.get("spacing")
+            step = picks.vec3(step, "spacing") if step is not None else V(bb.XLength + gap, bb.YLength + gap, bb.ZLength + gap)
+            for i in range(n[0]):
+                for j in range(n[1]):
+                    for k in range(n[2]):
+                        places.append(FreeCAD.Placement(V(i * step.x, j * step.y, k * step.z), FreeCAD.Rotation()))
+        elif kind == "polar":
+            count = int(a.get("count", 6))
+            if count < 2:
+                raise ToolError("invalid_input", "count: 2 or more copies round the circle.")
+            angle = float(a.get("angle", 360))
+            centre = picks.vec3(a["center"], "center") if a.get("center") is not None else V(0, 0, 0)
+            axis = picks.vec3(a["axis"], "axis") if a.get("axis") is not None else V(0, 0, 1)
+            each = angle / count if abs(angle) >= 360 - 1e-9 else angle / (count - 1)
+            for i in range(count):
+                r = FreeCAD.Rotation(axis, each * i)
+                places.append(FreeCAD.Placement(centre - r.multVec(centre), r))
+        elif kind == "path":
+            ref = a.get("path")
+            if not ref:
+                raise ToolError("invalid_input", "path: an edge (\"Body.Edge3\"), a sketch or wire, or { points: [[x,y,z] …] }.")
+            w = _curve(ref, "path", a.get("bodyOfPath"))
+            count = int(a.get("count", 5))
+            if count < 2:
+                raise ToolError("invalid_input", "count: 2 or more copies along the path.")
+            pts = w.discretize(Number=count if not w.isClosed() else count + 1)[:count]
+            start = pts[0]
+            align = bool(a.get("align"))
+            e0 = w.Edges[0]
+            t0 = e0.tangentAt(e0.FirstParameter)
+            for p in pts:
+                if align:
+                    best = min(w.Edges, key=lambda e: e.distToShape(Part.Vertex(p))[0])
+                    t = best.tangentAt(best.Curve.parameter(p))
+                    rot = FreeCAD.Rotation(t0, t)
+                    places.append(FreeCAD.Placement(p - rot.multVec(start), rot))
+                else:
+                    places.append(FreeCAD.Placement(p - start, FreeCAD.Rotation()))
+        else:
+            raise ToolError("invalid_input", "kind: grid (count [nx, ny, nz], gap or spacing), polar (count, angle, center, axis) or path (path, count, align).")
+        copies = []
+        for pl in places:
+            c = base.copy()
+            c.transformShape(pl.toMatrix())
+            copies.append(c)
+        out = {"kind": kind, "copies": len(copies)}
+        if a.get("separate"):
+            made = []
+            for i, c in enumerate(copies[1:], 2):
+                n = s.doc.addObject("Part::Feature", f"{o.Name}_{i}")
+                n.Label = f"{o.Label} {i}"
+                n.Shape = c
+                made.append(n.Label)
+            s.doc.recompute()
+            s.snapshot("draft_array")
+            out.update({"bodies": [o.Label] + made, "step": len(s.steps)})
+            return out
+        try:
+            res = copies[0].fuse(copies[1:]).removeSplitter() if len(copies) > 1 else copies[0]
+        except Exception as e:
+            raise ToolError("failed", f"The copies could not be joined: {e} — separate: true keeps them apart.")
+        apart = len(res.Solids) > 1
+        if apart and not a.get("allowApart"):
+            out["note"] = f"The copies do not touch: one body of {len(res.Solids)} separate solids. separate: true makes each its own body (to print or move apart)."
+        done = picks.bake(s, o, res, a.get("name"))
+        s.doc.recompute()
+        s.snapshot("draft_array")
+        bb = done.Shape.BoundBox
+        out.update({"body": done.Label, "solids": len(res.Solids), "volume": round(done.Shape.Volume, 2), "size": [round(bb.XLength, 2), round(bb.YLength, 2), round(bb.ZLength, 2)], "step": len(s.steps)})
+        return out
+
     def draft_fonts(a):
         have = fonts()
         q = (a.get("name") or "").lower()
@@ -487,6 +572,10 @@ def tools(session):
              obj({"path": {"type": "string"}, "body": {"type": "string"}, "face": face_q, "at": {"type": "array", "items": {"type": "number"}}, "width": {"type": "number"}, "height": {"type": "number"},
                   "depth": {"type": "number"}, "mode": {"type": "string", "enum": ["emboss", "engrave", "extrude"]}, "rotate": {"type": "number"}, "mirror": {"type": "boolean"}, "name": {"type": "string"}}, ["path"]),
              draft_outline, changes=True),
+        Tool("draft_array", "Copies of a whole body: kind grid (count [nx, ny, nz]; gap mm between them, 2, or spacing [dx, dy, dz]), polar (count round center about axis, angle degrees, 360), or path (count along a curve — an edge, a sketch or { points } — align to turn each with it). Joined into the body by default (one undo step); separate: true makes each copy its own body instead — a batch to print. For a feature repeated inside one part, pd_linear_pattern or pd_polar_pattern.",
+             obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": ["grid", "polar", "path"]}, "count": {}, "gap": {"type": "number"}, "spacing": {"type": "array", "items": {"type": "number"}},
+                  "angle": {"type": "number"}, "center": {"type": "array", "items": {"type": "number"}}, "axis": {"type": "array", "items": {"type": "number"}}, "path": {}, "bodyOfPath": {"type": "string"},
+                  "align": {"type": "boolean"}, "separate": {"type": "boolean"}, "name": {"type": "string"}}), draft_array, changes=True),
         Tool("draft_fonts", "The TrueType fonts on this computer (name filters), and the one draft_text takes by default.", obj({"name": {"type": "string"}}), draft_fonts),
         Tool("surface_loft", "A surface through curves in order — edges (\"Body.Edge3\"), sketches, or { points: [[x,y,z] …], closed } for a smooth curve through them: open curves make a sheet, closed ones a tube. ruled for straight lines between; thickness mm makes it a solid (side out, in or both). A curved panel, a duct, a shell for an organic shape.",
              obj({"curves": {"type": "array"}, "body": {"type": "string"}, "ruled": {"type": "boolean"}, "closed": {"type": "boolean"}, "thickness": {"type": "number"}, "side": {"type": "string", "enum": ["out", "in", "both"]}, "name": {"type": "string"}}, ["curves"]), surface_loft, changes=True),
