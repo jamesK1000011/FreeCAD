@@ -77,5 +77,34 @@ class SketchTools(Base):
         self.refused("sketch_offset", {"sketch": "TrayOut", "distance": 0})
 
 
+    def test_9_fillet_mirror_trim_split(self):
+        # A 40 x 20 plate: one corner rounded 5 mm, a 3 mm hole mirrored
+        # across the vertical axis, then padded 4 mm.
+        import math
+
+        self.ok("pd_body_new", {"name": "Edited"})
+        self.ok("sketch_new", {"body": "Edited", "plane": "XY", "name": "EditMe"})
+        self.ok("sketch_add", {"sketch": "EditMe", "items": [{"kind": "rectangle", "center": [0, 0], "size": [40, 20]}, {"kind": "circle", "center": [12, 4], "radius": 3}]})
+        st = self.ok("sketch_state", {"sketch": "EditMe"})
+        # The corner where line 0 ends.
+        f = self.ok("sketch_edit", {"sketch": "EditMe", "fillet": {"at": [0, 2], "radius": 5}})
+        self.assertIn("fillet r5", f["done"][0])
+        m = self.ok("sketch_edit", {"sketch": "EditMe", "mirror": {"geos": [4], "about": "y"}})
+        self.assertIn("mirrored", m["done"][0])
+        p = self.ok("pd_pad", {"body": "Edited", "sketch": "EditMe", "length": 4})
+        vol = next(o for o in self.session.doc.Objects if o.Label == "Edited").Shape.Volume
+        want = (40 * 20 - (25 - math.pi * 25 / 4) - 2 * math.pi * 9) * 4
+        self.assertAlmostEqual(vol, want, delta=want * 0.005)
+        # Trim and split on a sketch of its own: a line across a circle.
+        self.ok("sketch_new", {"body": "Edited", "plane": "XY", "name": "Cuts"})
+        self.ok("sketch_add", {"sketch": "Cuts", "items": [{"kind": "circle", "center": [0, 0], "radius": 10}, {"kind": "line", "from": [-15, 0], "to": [15, 0]}]})
+        t = self.ok("sketch_edit", {"sketch": "Cuts", "trim": {"geo": 1, "at": [-13, 0]}})
+        self.assertIn("trimmed", t["done"][0])
+        sp = self.ok("sketch_edit", {"sketch": "Cuts", "split": {"geo": 0, "at": [0, 10]}})
+        self.assertIn("split", sp["done"][0])
+        e = self.refused("sketch_edit", {"sketch": "Cuts", "fillet": {"at": [0, 1], "radius": 0}})
+        self.assertIn("radius", e["message"])
+
+
 if __name__ == "__main__":
     unittest.main()

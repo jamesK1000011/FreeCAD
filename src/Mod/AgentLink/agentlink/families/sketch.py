@@ -676,8 +676,70 @@ def tools(session):
             ids = sorted({gid(g) for g in a["delete"]})
             sk.delGeometries(ids)
             done.append(f"deleted geometry {ids} (later ids shift down by the count before them)")
+        if "fillet" in a:
+            # A corner rounded: at a shared end point [g, v], or between two
+            # curves near the points given; the curves are trimmed to the arc.
+            x = a["fillet"]
+            r = float(x.get("radius", 0))
+            if r <= 0:
+                raise ToolError("invalid_input", "fillet.radius: mm, over 0.")
+            n0 = len(sk.Geometry)
+            try:
+                if x.get("at") is not None:
+                    g, v = x["at"]
+                    sk.fillet(gid(g), int(v), r, True, False)
+                else:
+                    g1, g2 = (gid(g) for g in x.get("geos") or [])
+                    p1, p2 = (FreeCAD.Vector(*pc.vec2(q, "fillet.near"), 0) for q in x.get("near") or [])
+                    sk.fillet(g1, g2, p1, p2, r, True, False)
+            except ValueError:
+                raise ToolError("invalid_input", "fillet: at [geo, vertex] (a corner where two curves meet), or geos [g1, g2] with near [[x, y], [x, y]] on each, and radius.")
+            except Exception as e:
+                raise ToolError("failed", f"No fillet of {r:g} mm fits there: {e} — a smaller radius.")
+            if len(sk.Geometry) == n0:
+                raise ToolError("failed", f"No fillet of {r:g} mm fits there — a smaller radius, or a corner where two curves meet.")
+            done.append(f"fillet r{r:g}: arc {len(sk.Geometry) - 1}")
+        if "trim" in a:
+            x = a["trim"]
+            g = gid(x.get("geo"))
+            at = pc.vec2(x.get("at"), "trim.at")
+            n0 = len(sk.Geometry)
+            try:
+                sk.trim(g, FreeCAD.Vector(at[0], at[1], 0))
+            except Exception as e:
+                raise ToolError("failed", f"Geometry {g} could not be trimmed at {at}: {e} — the piece to cut off lies between where other curves cross it.")
+            done.append(f"trimmed {g} at {list(at)} ({len(sk.Geometry) - n0:+d} geometry)")
+        if "split" in a:
+            x = a["split"]
+            g = gid(x.get("geo"))
+            at = pc.vec2(x.get("at"), "split.at")
+            try:
+                sk.split(g, FreeCAD.Vector(at[0], at[1], 0))
+            except Exception as e:
+                raise ToolError("failed", f"Geometry {g} could not be split at {at}: {e}.")
+            done.append(f"split {g} at {list(at)}: its second part is {len(sk.Geometry) - 1}")
+        if "mirror" in a:
+            # Copies mirrored about a line, an axis, or the origin, kept
+            # symmetric by constraints.
+            x = a["mirror"]
+            geos = [gid(g) for g in x.get("geos") or []]
+            if not geos:
+                raise ToolError("invalid_input", "mirror.geos: the geometry ids to mirror.")
+            about = x.get("about", "y")
+            ref = {"x": (-1, None), "y": (-2, None), "origin": (-1, 1)}.get(about) if isinstance(about, str) else (gid(about), None)
+            if ref is None:
+                raise ToolError("invalid_input", "mirror.about: \"x\" (the horizontal axis), \"y\" (the vertical), \"origin\", or a line's id.")
+            n0 = len(sk.Geometry)
+            try:
+                if ref[1] is None:
+                    sk.addSymmetric(geos, ref[0])
+                else:
+                    sk.addSymmetric(geos, ref[0], ref[1])
+            except Exception as e:
+                raise ToolError("failed", f"The geometry could not be mirrored: {e}.")
+            done.append(f"mirrored {geos} about {about}: new {list(range(n0, len(sk.Geometry)))}")
         if not done:
-            raise ToolError("invalid_input", "Give one or more of: move { geo, vertex, to }, set [{ constraint, value }], construction { geo, on }, rename { constraint, name }, deleteConstraints [ids|names], delete [geometry ids].")
+            raise ToolError("invalid_input", "Give one or more of: move { geo, vertex, to }, set [{ constraint, value }], construction { geo, on }, rename { constraint, name }, deleteConstraints [ids|names], delete [geometry ids], fillet { at [g, v] | geos, near; radius }, trim { geo, at }, split { geo, at }, mirror { geos, about }.")
         doc().recompute()
         st = state_of(sk)
         b = pc.body_of(sk)
@@ -739,8 +801,9 @@ def tools(session):
         ),
         Tool(
             "sketch_edit",
-            "Edit a sketch: move { geo, vertex (0 the whole, 1/2/3), to [x,y] }, set [{ constraint: id|name, value mm|deg }], construction { geo, on }, rename { constraint, name }, deleteConstraints [id|name], delete [geometry ids — later ids shift down, and their constraints go]. Features built on it recompute; a feature it breaks is refused with FreeCAD's error and nothing kept.",
-            obj({"sketch": sketch, "move": {"type": "object"}, "set": {}, "construction": {"type": "object"}, "rename": {"type": "object"}, "deleteConstraints": {"type": "array"}, "delete": {"type": "array", "items": {"type": "integer"}}}),
+            "Edit a sketch: move { geo, vertex (0 the whole, 1/2/3), to [x,y] }, set [{ constraint: id|name, value mm|deg }], construction { geo, on }, rename { constraint, name }, deleteConstraints [id|name], delete [geometry ids — later ids shift down, and their constraints go], fillet { at: [g, v] a corner, or geos [g1, g2] near [[x,y],[x,y]]; radius } (round a corner, the curves trimmed to it), trim { geo, at [x,y] } (cut off the piece there, between crossings), split { geo, at }, mirror { geos, about: \"x\" | \"y\" | \"origin\" | a line id } (symmetric copies). Features built on it recompute; a feature it breaks is refused with FreeCAD's error and nothing kept.",
+            obj({"sketch": sketch, "move": {"type": "object"}, "set": {}, "construction": {"type": "object"}, "rename": {"type": "object"}, "deleteConstraints": {"type": "array"}, "delete": {"type": "array", "items": {"type": "integer"}},
+                 "fillet": {"type": "object"}, "trim": {"type": "object"}, "split": {"type": "object"}, "mirror": {"type": "object"}}),
             sketch_edit,
             changes=True,
         ),
