@@ -236,6 +236,13 @@ def tools(session):
             j.Proxy.setJointConnectors(j, refs)
         except Exception as e:
             raise ToolError("failed", f"FreeCAD could not make the {kind} joint between {ends[0][0].Label}.{ends[0][1]} and {ends[1][0].Label}.{ends[1][1]}: {e}")
+        # The joint's frames on each element, worked out again here: later
+        # releases leave that to the window's selection, which there is none
+        # of headless.
+        try:
+            j.Proxy.updateJCSPlacements(j)
+        except Exception:
+            pass
         if a.get("reverse"):
             try:
                 j.Proxy.flipOnePart(j)
