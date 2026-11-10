@@ -2,7 +2,6 @@
 # Toolpaths with FreeCAD's CAM workbench, on a real FreeCAD: a job, a
 # profile, a pocket and the holes, posted as G-code.
 import json
-import os
 import unittest
 
 from _fc import HAVE, add_body, caller, server

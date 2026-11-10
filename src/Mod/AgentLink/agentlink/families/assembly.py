@@ -30,6 +30,14 @@ OFFERED = ["fixed", "revolute", "cylindrical", "slider", "ball", "distance", "pa
 SOLVE = {0: "solved", -1: "solver error", -2: "redundant constraints", -3: "conflicting constraints", -4: "over-constrained", -5: "malformed constraints", -6: "no part is grounded"}
 
 
+def _release():
+    v = FreeCAD.Version()
+    try:
+        return int(v[0]), int(v[1])
+    except (ValueError, IndexError):
+        return (1, 1)
+
+
 def _assemblies(doc):
     return [o for o in doc.Objects if o.TypeId == "Assembly::AssemblyObject"]
 
@@ -229,9 +237,12 @@ def tools(session):
         rot = a.get("rotate")
         if off is not None or rot is not None:
             j.Offset2 = FreeCAD.Placement(V(0, 0, picks.num(off or 0, "offset")), FreeCAD.Rotation(V(0, 0, 1), picks.num(rot or 0, "rotate")))
-        # From the assembly down, as FreeCAD's own selection gives them (and
-        # as 1.0 and later both read): the part's name, then the element.
-        refs = [[asm, [f"{part.Name}.{el}", f"{part.Name}.{el}"]] for part, el in ends]
+        # 1.0 reads a reference from the assembly down (the part's name, then
+        # the element); later releases from the part itself.
+        if _release() < (1, 1):
+            refs = [[asm, [f"{part.Name}.{el}", f"{part.Name}.{el}"]] for part, el in ends]
+        else:
+            refs = [[part, [el, el]] for part, el in ends]
         try:
             j.Proxy.setJointConnectors(j, refs)
         except Exception as e:
