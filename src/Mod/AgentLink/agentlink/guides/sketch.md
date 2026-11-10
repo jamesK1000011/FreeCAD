@@ -18,3 +18,9 @@
 - Free curves: `bspline { points }` passes through the points (`closed: true` for a loop); `interpolate: false` takes them as control poles with `degree`. `ellipse { center, major, minor, rotation }`.
 - `sketch_offset { distance }` — the profile moved out (negative: in) as new geometry: a wall's inside, a lid's lip, a clearance band. Round corners by default; `join: "intersection"` keeps them sharp. The offset does not follow later edits unless constrained.
 - `sketch_external { edges }` brings the body's own edges in (negative ids from -3) so a new profile is constrained to what is already there — a hole on a boss's axis, a rib off a wall — and follows when the part changes.
+
+## Editing what is drawn
+- `sketch_edit { fillet: { at: [g, v], radius } }` rounds a corner where two curves meet (the curves are trimmed to the arc); `geos [g1, g2]` with `near` points rounds between two curves that do not share an end.
+- `trim { geo, at: [x, y] }` cuts off the piece of a curve between the crossings round that point; `split { geo, at }` breaks it in two there.
+- `mirror { geos, about }` adds symmetric copies about `"x"`, `"y"`, `"origin"` or a line's id, kept symmetric by constraints — draw one side, mirror the other.
+- Ids shift after a delete or a trim: read `sketch_state` before using ids again.

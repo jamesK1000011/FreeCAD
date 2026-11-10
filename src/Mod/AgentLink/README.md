@@ -3,7 +3,7 @@
 
 An agent drives FreeCAD over the Model Context Protocol, in ScanRuler's
 manner: one call per job, small answers in millimetres and grams, and
-refusals that say what to do instead. There are 143 tools in 27 groups.
+refusals that say what to do instead. There are 145 tools in 27 groups.
 The lean list (the default) shows the core and the make-check-verdict
 loop; `tool_groups` shows the rest. Any tool can be called by name
 whether it is listed or not. Every change is one FreeCAD undo step.
@@ -20,7 +20,7 @@ whether it is listed or not. Every change is one FreeCAD undo step.
 | make | setups (print, cut, mill), part spec and material, printability (`dfm_check`), `part_review`, `slice` |
 | fits, embed | fits, printer calibration, tolerance stacks, hardware holes; parts sealed in mid-print with their pauses |
 | material, mass, strength, thread | FreeCAD's material library and custom materials; mass as printed, centre of mass, ballast to a target; FEM with CalculiX: strength (print-aware), natural frequencies, steady heat against where the material softens; thread tables, identification and cutting |
-| draft | `draft_text` (lettering raised or cut into a flat face from a TrueType font), `draft_fonts`, `surface_fill` (a smooth surface across a boundary), `surface_loft` (through curves), `surface_points` (fitted to a grid of points), `surface_thicken` (any surface made a solid) |
+| draft | `draft_text` (lettering raised or cut into a flat face from a TrueType font), `draft_fonts`, `draft_outline` (a logo or shape from SVG or DXF, raised, cut in or extruded), `draft_array` (copies of a body in a grid, round a circle or along a path), `surface_fill` (a smooth surface across a boundary), `surface_loft` (through curves), `surface_points` (fitted to a grid of points), `surface_thicken` (any surface made a solid) |
 | assembly | FreeCAD's Assembly workbench: `asm_new` (parts, one grounded), `asm_joint` (fixed, revolute, cylindrical, slider, ball, distance, parallel, perpendicular, angle between faces and edges picked by query, solved), `asm_check` (overlaps, clearances, parts left floating), `asm_list`, `asm_ground`, `asm_add`, `asm_joint_remove` |
 | cam | FreeCAD's CAM workbench: `cam_job` (stock and end mill), `cam_op` (profile, pocket, adaptive, facing, drilling — each computed and read back), `cam_sim` (the operations run on a height map of the stock: crashes, gouges, what is left, a picture), `cam_post` (G-code by FreeCAD's post-processors, checked against the stock), `cam_list`, `cam_tool`, `cam_remove` |
 | cut, mill | sheet-part checks with DXF/SVG nested on the sheet; milling checks with STEP and a setup sheet |
