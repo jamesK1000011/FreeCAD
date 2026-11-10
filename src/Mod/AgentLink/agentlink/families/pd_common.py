@@ -403,9 +403,10 @@ def repair_refs(doc, snap):
                 return None
             taken.add(m)
             new.append(m)
-        if [s.split(".")[-1] for s in e["subs"]] != new:
-            plans.append((f, base, new))
-            moved[f.Label] = [[o.split(".")[-1], n] for o, n in zip(e["subs"], new) if o.split(".")[-1] != n]
+        # Set again even where the name is the same: the link FreeCAD keeps
+        # behind a name (1.0's element map) can be stale while the name is not.
+        plans.append((f, base, new))
+        moved[f.Label] = [[o.split(".")[-1], n] for o, n in zip(e["subs"], new) if o.split(".")[-1] != n] or "relinked"
     for f, base, new in plans:
         f.Base = (base, new)
     doc.recompute()
