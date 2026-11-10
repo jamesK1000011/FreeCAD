@@ -129,5 +129,36 @@ class Assembly(unittest.TestCase):
         self.assertAlmostEqual(peg.ZMax, 25, delta=1e-3)
 
 
+    def test_6_sweep_an_arm_past_a_post(self):
+        """An arm turning on a plate's middle, a post beside it: it hits
+        the post lying along x (0 and 180 degrees), clears it across y."""
+        import FreeCAD
+        import Part
+
+        FreeCAD.newDocument("Sweep")
+        self.session.switch(FreeCAD.ActiveDocument)
+        add_body(self.session, "Plate", Part.makeBox(100, 100, 5))
+        add_body(self.session, "Post", Part.makeBox(10, 10, 20, FreeCAD.Vector(70, 45, 5)))
+        add_body(self.session, "Arm", Part.makeBox(60, 6, 5, FreeCAD.Vector(20, 47, 5)))
+        err, n = self.call("asm_new", {"parts": ["Plate", "Post", "Arm"]})
+        self.assertFalse(err, n)
+        self.call("asm_joint", {"kind": "fixed", "a": {"part": "Plate", "element": {"kind": "face", "normal": [0, 0, 1]}}, "b": {"part": "Post", "element": {"kind": "face", "normal": [0, 0, -1]}}, "reverse": False})
+        err, r = self.call("asm_joint", {"kind": "revolute", "name": "Pivot", "a": {"part": "Plate", "element": {"kind": "face", "normal": [0, 0, 1]}}, "b": {"part": "Arm", "element": {"kind": "face", "normal": [0, 0, -1]}}, "reverse": False})
+        self.assertFalse(err, r)
+        before = self.session.body("Arm").Placement.copy()
+        err, sw = self.call("asm_sweep", {"joint": "Pivot", "from": 0, "to": 180, "steps": 12})
+        print("\nsweep:", json.dumps({k: sw.get(k) for k in ("verdict", "collidesAt", "clearFromStart")}))
+        self.assertFalse(err, sw)
+        self.assertEqual(sw["verdict"], "collides")
+        hit = set(sw["collidesAt"])
+        self.assertIn(0.0, hit)
+        self.assertIn(180.0, hit)
+        self.assertNotIn(90.0, hit)
+        # Every part put back where it was.
+        self.assertTrue(self.session.body("Arm").Placement.isSame(before, 1e-6))
+        err, x = self.call("asm_sweep", {"joint": "Nope"})
+        self.assertTrue(err)
+
+
 if __name__ == "__main__":
     unittest.main()

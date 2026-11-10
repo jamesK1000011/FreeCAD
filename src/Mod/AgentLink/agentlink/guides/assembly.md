@@ -29,3 +29,7 @@ FreeCAD's own Assembly workbench, its solver and its joints. Parts are bodies al
 - A joint that holds what another already holds is **redundant** and the solve refuses it: nothing is kept. Fixed after a revolute on the same pair is the common one.
 - An assembly needs one grounded part: `asm_ground`.
 - The solve moves parts; it does not check they fit. `asm_check` does — a press fit reads as an overlap of its interference volume.
+
+## Moving it through its range
+- `asm_sweep { joint, from, to, steps }` turns a revolute joint through degrees (a slider or cylindrical one along its axis, mm), solving and checking for overlaps at each step, then puts every part back. `collidesAt` lists where parts run into each other; `clearFromStart` the range that is clear from the start.
+- Does a lid open to 110°, does an arm swing past a post, does a drawer slide out: sweep it before printing. Steps are a sample — a thin part can pass between two: more steps to look closer, `clearance` to list near misses too.

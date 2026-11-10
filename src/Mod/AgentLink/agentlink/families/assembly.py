@@ -327,6 +327,80 @@ def tools(session):
         code, said = _status(asm)
         return {"assembly": asm.Label, "parts": [{"part": o.Label, "placement": _placement(o), "grounded": o in _grounded(asm)} for o in _parts(asm)], "joints": joints, "solve": said}
 
+    def _switch(j, on):
+        # 1.0 calls it Activated; later releases Suppressed, the other way.
+        if hasattr(j, "Suppressed"):
+            j.Suppressed = not on
+        elif hasattr(j, "Activated"):
+            j.Activated = on
+
+    def asm_sweep(a):
+        asm = _assembly(doc(), a.get("assembly"))
+        name = a.get("joint")
+        j = next((x for x in _joints(asm).Group if x.Label == name or x.Name == name), None)
+        if j is None or getattr(j, "ObjectToGround", None) is not None:
+            raise ToolError("not_found", f"joint {name!r}: not in {asm.Label} — asm_list names them.")
+        kind = str(getattr(j, "JointType", "")).lower()
+        if kind not in ("revolute", "slider", "cylindrical"):
+            raise ToolError("invalid_input", f"{j.Label} is {kind}: a sweep moves a revolute (turning, degrees), slider or cylindrical (sliding, mm) joint.")
+        turning = kind == "revolute" or (kind == "cylindrical" and a.get("turn"))
+        lo = float(a.get("from", 0))
+        hi = float(a.get("to", 90 if turning else 10))
+        steps = int(a.get("steps", 12))
+        if not 1 <= steps <= 72:
+            raise ToolError("invalid_input", "steps: 1 to 72.")
+        clearance = float(a.get("clearance", 0))
+        parts = _parts(asm)
+        kept = {o.Name: o.Placement.copy() for o in parts}
+        base_off = j.Offset2.copy()
+        t = _joints(asm).newObject("App::FeaturePython", "SweepHold")
+        JointObject.Joint(t, JointObject.JointTypes.index("Fixed"))
+        out_steps = []
+        try:
+            t.Reference1 = j.Reference1
+            t.Reference2 = j.Reference2
+            t.Offset1 = j.Offset1
+            _switch(j, False)
+            for k in range(steps + 1):
+                v = lo + (hi - lo) * k / steps
+                move = FreeCAD.Placement(V(0, 0, 0), FreeCAD.Rotation(V(0, 0, 1), v)) if turning else FreeCAD.Placement(V(0, 0, v), FreeCAD.Rotation())
+                t.Offset2 = base_off.multiply(move)
+                try:
+                    t.Proxy.updateJCSPlacements(t)
+                except Exception:
+                    pass
+                doc().recompute()
+                code, said = _status(asm)
+                row = {"at": round(v, 3), "solve": said}
+                if code == 0:
+                    hits, near = _overlaps(_parts(asm), clearance)
+                    if hits:
+                        row["overlaps"] = [{"parts": h["parts"], "volume": h["volume"]} for h in hits]
+                    if clearance > 0 and near:
+                        row["closer"] = near
+                out_steps.append(row)
+        finally:
+            for o in _parts(asm):
+                if o.Name in kept:
+                    o.Placement = kept[o.Name]
+            doc().removeObject(t.Name)
+            _switch(j, True)
+            doc().recompute()
+            _status(asm)
+        unit = "degrees" if turning else "mm"
+        bad = [r["at"] for r in out_steps if r.get("overlaps") or r["solve"] != SOLVE.get(0)]
+        clear_run = []
+        for r in out_steps:
+            if r.get("overlaps") or r["solve"] != SOLVE.get(0):
+                break
+            clear_run.append(r["at"])
+        out = {"joint": j.Label, "kind": kind, "unit": unit, "from": lo, "to": hi, "steps": out_steps,
+               "verdict": "clear" if not bad else "collides", "note": f"The joint turned back where it was; every part put back. Steps are {abs(hi - lo) / steps:g} {unit} apart: a collision between two steps is not seen — more steps to look closer."}
+        if bad:
+            out["collidesAt"] = bad
+            out["clearFromStart"] = [clear_run[0], clear_run[-1]] if clear_run else None
+        return out
+
     def asm_joint_remove(a):
         asm = _assembly(doc(), a.get("assembly"))
         name = a.get("joint")
@@ -367,6 +441,8 @@ def tools(session):
              asm_joint, changes=True),
         Tool("asm_list", "An assembly: its parts with their placements and which are grounded, its joints with what each joins, and whether it solves. Changes nothing.", obj({"assembly": asm_ref}), asm_list),
         Tool("asm_joint_remove", "Remove a joint (by label, asm_list lists them) and solve again.", obj({"assembly": asm_ref, "joint": {"type": "string"}}, ["joint"]), asm_joint_remove, changes=True),
+        Tool("asm_sweep", "Move a revolute joint through angles (from, to degrees; 0 to 90) or a slider or cylindrical one along its axis (mm; turn: true turns a cylindrical) in steps (12), solving at each and checking the parts for overlaps (clearance mm also lists those closer). Answers each step, collidesAt and the clear range from the start, and puts every part back. Does the lid open fully, does the arm swing past the post.",
+             obj({"assembly": asm_ref, "joint": {"type": "string"}, "from": {"type": "number"}, "to": {"type": "number"}, "steps": {"type": "integer"}, "clearance": {"type": "number"}, "turn": {"type": "boolean"}}, ["joint"]), asm_sweep),
         Tool("asm_check", "Check an assembly: whether it solves, which parts overlap (the volume and where), with clearance mm the pairs closer than it, and parts joined to nothing grounded. verdict clear or fix. view_render shows it; section cuts it open at a fit.",
              obj({"assembly": asm_ref, "clearance": {"type": "number"}}), asm_check),
     ]
