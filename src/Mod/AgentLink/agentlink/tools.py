@@ -390,7 +390,7 @@ class Session:
             tops = int((setup or {}).get("topLayers", 5))
             bottoms = int((setup or {}).get("bottomLayers", 4))
             side_shell, skin_shell = printmass.shells(setup, walls)
-            reads, nz = printmass.readings(geo.least_wall(shape))
+            reads, nz = printmass.readings(geo.least_wall(shape, reach=shape.BoundBox.DiagonalLength + 1.0))
             if reads:
                 f = printed_fraction(reads, nz, side_shell, skin_shell, infill)
             else:

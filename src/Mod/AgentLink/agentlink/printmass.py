@@ -45,7 +45,9 @@ def shells(setup, walls):
 
 
 def readings(wall):
-    """Thicknesses and how far each faces up or down, from geometry.least_wall."""
+    """Thicknesses and how far each faces up or down, from geometry.least_wall
+    read with a reach across the whole part: a ray it could not finish is
+    left out, and leaving out the long ones (mostly infill) reads solid."""
     reads = [r[0] for r in (wall.get("readings") or [])]
     nz = [abs(n[2]) for n in (wall.get("normals") or [])] or [0.0] * len(reads)
     return reads, nz

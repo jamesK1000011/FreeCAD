@@ -102,7 +102,7 @@ def body_mass(shape, rho, setup):
     # readings (perimeters, top and bottom skins), the rest at the infill's
     # share. The shells' mass sits on the surface.
     area, c_a, I_a = _surface_parts(shape)
-    reads, nz = printmass.readings(geo.least_wall(shape))
+    reads, nz = printmass.readings(geo.least_wall(shape, reach=shape.BoundBox.DiagonalLength + 1.0))
     if reads:
         shell = vol * printmass.solid_share(reads, nz, *printmass.shells(setup, walls))
     else:
