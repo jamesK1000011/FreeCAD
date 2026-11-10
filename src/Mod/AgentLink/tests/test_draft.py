@@ -84,5 +84,36 @@ class Draft(unittest.TestCase):
         self.assertTrue(err)
 
 
+    def test_5_outline_from_svg(self):
+        """A logo from an SVG: a 20 x 10 plate with a round hole, a triangle,
+        and an open stroke left out. In millimetres (width 100mm, viewBox 100)."""
+        import math
+        import tempfile
+
+        svg = os.path.join(tempfile.mkdtemp(), "logo.svg")
+        with open(svg, "w") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50mm" viewBox="0 0 100 50">'
+                    '<path d="M 10 10 L 30 10 L 30 20 L 10 20 Z"/>'
+                    '<circle cx="20" cy="15" r="3"/>'
+                    '<path d="M 40 10 L 50 10 L 45 20 Z"/>'
+                    '<path d="M 60 10 L 70 20" fill="none" stroke="black"/></svg>')
+        err, o = self.call("draft_outline", {"path": svg, "mode": "extrude", "depth": 2, "name": "Logo"})
+        print("\noutline:", json.dumps(o))
+        self.assertFalse(err, o)
+        # The circle inside the plate is a hole in it (FaceMakerBullseye).
+        want = (200 - math.pi * 9 + 50) * 2
+        self.assertAlmostEqual(o["volume"], want, delta=want * 0.01)
+        self.assertEqual(o["openCurvesLeftOut"], 1)
+        # Raised on the tag's top, scaled to 30 mm wide.
+        err, e = self.call("draft_outline", {"path": svg, "body": "Tag", "width": 30, "depth": 0.8})
+        print("on the tag:", json.dumps(e))
+        self.assertFalse(err, e)
+        self.assertEqual(e["mode"], "emboss")
+        self.assertAlmostEqual(e["size"][0], 30, delta=0.01)
+        self.assertGreater(e["volumeChange"], 0)
+        err, x = self.call("draft_outline", {"path": "/nonexistent.svg"})
+        self.assertTrue(err)
+
+
 if __name__ == "__main__":
     unittest.main()

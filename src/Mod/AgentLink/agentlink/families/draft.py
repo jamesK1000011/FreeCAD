@@ -92,6 +92,86 @@ def face_frame(face, point=None):
     return FreeCAD.Placement(m), n
 
 
+def outline_faces(path):
+    """The closed outlines of an SVG or DXF file as planar faces in XY (holes
+    kept as holes), and how many open curves were left out."""
+    path = os.path.expanduser(path)
+    if not os.path.isfile(path):
+        raise ToolError("not_found", f"path: no file at {path}.")
+    ext = os.path.splitext(path)[1].lower()
+    keep = FreeCAD.ActiveDocument
+    try:
+        tmp = FreeCAD.newDocument("AgentLinkOutline", hidden=True)
+    except TypeError:
+        tmp = FreeCAD.newDocument("AgentLinkOutline")
+    try:
+        if ext == ".svg":
+            import importSVG
+
+            importSVG.insert(path, tmp.Name)
+        elif ext == ".dxf":
+            import Import
+
+            try:
+                Import.readDXF(path, tmp.Name)
+            except Exception as e:
+                raise ToolError("failed", f"FreeCAD could not read the DXF: {e} — save it as DXF R12 or 2000, or as SVG.")
+        else:
+            raise ToolError("invalid_input", "path: an .svg or .dxf file.")
+        tmp.recompute()
+        edges = []
+        for o in tmp.Objects:
+            sh = getattr(o, "Shape", None)
+            if sh is not None and not sh.isNull():
+                edges += sh.Edges
+    finally:
+        FreeCAD.closeDocument(tmp.Name)
+        if keep is not None and keep.Name != tmp.Name:
+            FreeCAD.setActiveDocument(keep.Name)
+    if not edges:
+        raise ToolError("failed", "The file has no curves FreeCAD reads: paths and shapes, not images or text (turn text into paths first).")
+    closed, open_ = [], 0
+    for group in Part.sortEdges(edges):
+        try:
+            w = Part.Wire(group)
+        except Exception:
+            open_ += 1
+            continue
+        if w.isClosed():
+            closed.append(w)
+        else:
+            open_ += 1
+    if not closed:
+        raise ToolError("failed", f"No closed outline in the file ({open_} open curve(s)): close the paths, or trace the artwork as filled shapes.")
+    # Flat on XY whatever plane the file put them on.
+    bb = Part.makeCompound(closed).BoundBox
+    if bb.ZLength > 1e-6:
+        raise ToolError("failed", "The outlines are not flat in one plane.")
+    try:
+        f = Part.makeFace(closed, "Part::FaceMakerBullseye")
+    except Exception:
+        f = Part.makeFace(closed, "Part::FaceMakerCheese")
+    f.translate(V(0, 0, -bb.ZMin))
+    return f, open_
+
+
+def place_on(o, face, flat, at, rotate, depth, mode):
+    """Flat faces in XY, centred, turned and stood on a body's face: the
+    solid to join (emboss) or cut (engrave), and its box."""
+    pl, n = face_frame(face, at)
+    bb = flat.BoundBox
+    flat = flat.copy()
+    flat.translate(V(-(bb.XMin + bb.XMax) / 2, -(bb.YMin + bb.YMax) / 2, 0))
+    if rotate:
+        flat.rotate(V(0, 0, 0), V(0, 0, 1), float(rotate))
+    flat.transformShape(pl.toMatrix())
+    solid = flat.extrude(n * (depth if mode == "emboss" else -depth))
+    if mode == "engrave":
+        # Started a hair above the face, so the cut opens cleanly.
+        solid.translate(n * 0.01)
+    return solid, flat.BoundBox
+
+
 def tools(session):
     s = session
 
@@ -166,6 +246,71 @@ def tools(session):
         if stroke < 0.4:
             out["printNote"] = f"Strokes about {stroke:.2f} mm wide: under a 0.4 mm nozzle's line — print letters at least {math.ceil(0.4 / 0.12)} mm tall, or expect them to blur."
         out["view"] = "view_render { zoom: { at: the box's middle, size } } to look at it."
+        return out
+
+    def draft_outline(a):
+        if not a.get("path"):
+            raise ToolError("invalid_input", "path: an .svg or .dxf with closed outlines (a logo, a shape).")
+        flat, open_ = outline_faces(a["path"])
+        bb = flat.BoundBox
+        w, h = picks.num(a["width"], "width") if a.get("width") is not None else None, picks.num(a["height"], "height") if a.get("height") is not None else None
+        k = 1.0
+        if w:
+            k = w / bb.XLength
+        elif h:
+            k = h / bb.YLength
+        if k != 1.0:
+            flat = flat.copy()
+            flat.scale(k)
+        if a.get("mirror"):
+            flat = flat.mirror(V(0, 0, 0), V(1, 0, 0))
+        bb = flat.BoundBox
+        depth = picks.num(a.get("depth", 0.6), "depth")
+        if depth <= 0:
+            raise ToolError("invalid_input", "depth: mm, over 0.")
+        mode = a.get("mode", "emboss" if a.get("body") else "extrude")
+        if mode not in ("emboss", "engrave", "extrude"):
+            raise ToolError("invalid_input", "mode: emboss (raised on a face), engrave (cut in), or extrude (a part of its own).")
+        out = {"outlines": len(flat.Faces), "size": [round(bb.XLength, 2), round(bb.YLength, 2)], "scale": round(k, 5), "mode": mode, "depth": depth}
+        if open_:
+            out["openCurvesLeftOut"] = open_
+        # The narrowest stroke: what an inward offset of half a line leaves.
+        try:
+            thin = flat.makeOffset2D(-0.2, 0, False, False, False)
+            lost = 1 - (thin.Area / flat.Area) if flat.Area else 0
+            if lost > 0.5:
+                out["printNote"] = "Much of the artwork is under 0.4 mm across: thin strokes will blur or vanish — scale it up (width), or thicken the artwork."
+        except Exception:
+            out["printNote"] = "Parts of the artwork are under 0.4 mm across (thinner than a printed line): scale it up, or expect them to blur."
+        if mode == "extrude":
+            solid = flat.extrude(V(0, 0, depth))
+            o = s.doc.addObject("Part::Feature", (a.get("name") or "Outline").replace(" ", "_"))
+            o.Label = a.get("name") or "Outline"
+            o.Shape = solid
+            s.doc.recompute()
+            s.snapshot("draft_outline")
+            out.update({"body": o.Label, "volume": round(solid.Volume, 2), "step": len(s.steps)})
+            return out
+        o = s.body(a.get("body"))
+        face = pick_face(o, a.get("face") or {"normal": [0, 0, 1]})
+        at = picks.vec3(a["at"], "at") if a.get("at") is not None else None
+        solid, lb = place_on(o, face, flat, at, a.get("rotate"), depth, mode)
+        before = o.Shape.Volume
+        off = [p for p in (V(lb.XMin, lb.YMin, lb.ZMin), V(lb.XMax, lb.YMax, lb.ZMax)) if face.distToShape(Part.Vertex(p))[0] > 0.05]
+        try:
+            res = (o.Shape.fuse(solid) if mode == "emboss" else o.Shape.cut(solid)).removeSplitter()
+        except Exception as e:
+            raise ToolError("failed", f"The outline could not be {'joined to' if mode == 'emboss' else 'cut into'} {o.Label}: {e}")
+        if not res.isValid() or not res.Solids:
+            raise ToolError("failed", "The result is not a valid solid: a smaller size or a shallower depth.")
+        done = picks.bake(s, o, res, a.get("name"))
+        s.doc.recompute()
+        s.snapshot("draft_outline")
+        out.update({"body": done.Label, "volumeChange": round(done.Shape.Volume - before, 2),
+                    "box": {"min": [round(v, 2) for v in (lb.XMin, lb.YMin, lb.ZMin)], "max": [round(v, 2) for v in (lb.XMax, lb.YMax, lb.ZMax)]}, "step": len(s.steps),
+                    "view": "view_render { zoom: { at: the box's middle, size } } to look at it."})
+        if off:
+            out["warning"] = "The outline runs past the face's edge: a smaller width."
         return out
 
     def draft_fonts(a):
@@ -338,6 +483,10 @@ def tools(session):
              obj({"body": {"type": "string"}, "text": {"type": "string"}, "face": face_q, "at": {"type": "array", "items": {"type": "number"}}, "size": {"type": "number"}, "depth": {"type": "number"},
                   "mode": {"type": "string", "enum": ["emboss", "engrave"]}, "font": {"type": "string"}, "rotate": {"type": "number"}, "tracking": {"type": "number"}, "name": {"type": "string"}}, ["text"]),
              draft_text, changes=True),
+        Tool("draft_outline", "Bring a logo or shape from an SVG or DXF file (closed outlines; holes kept): scaled to width or height mm, then mode emboss (raised on a body's face, the largest facing up by default), engrave (cut in), or extrude (a part of its own, depth mm thick — a sign, a stencil, a cookie cutter's outline). face, at, rotate as draft_text; mirror flips it. Says how many open curves were left out, and when strokes are under a printed line.",
+             obj({"path": {"type": "string"}, "body": {"type": "string"}, "face": face_q, "at": {"type": "array", "items": {"type": "number"}}, "width": {"type": "number"}, "height": {"type": "number"},
+                  "depth": {"type": "number"}, "mode": {"type": "string", "enum": ["emboss", "engrave", "extrude"]}, "rotate": {"type": "number"}, "mirror": {"type": "boolean"}, "name": {"type": "string"}}, ["path"]),
+             draft_outline, changes=True),
         Tool("draft_fonts", "The TrueType fonts on this computer (name filters), and the one draft_text takes by default.", obj({"name": {"type": "string"}}), draft_fonts),
         Tool("surface_loft", "A surface through curves in order — edges (\"Body.Edge3\"), sketches, or { points: [[x,y,z] …], closed } for a smooth curve through them: open curves make a sheet, closed ones a tube. ruled for straight lines between; thickness mm makes it a solid (side out, in or both). A curved panel, a duct, a shell for an organic shape.",
              obj({"curves": {"type": "array"}, "body": {"type": "string"}, "ruled": {"type": "boolean"}, "closed": {"type": "boolean"}, "thickness": {"type": "number"}, "side": {"type": "string", "enum": ["out", "in", "both"]}, "name": {"type": "string"}}, ["curves"]), surface_loft, changes=True),

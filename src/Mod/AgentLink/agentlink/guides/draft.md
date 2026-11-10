@@ -7,6 +7,11 @@
 - `draft_fonts` lists the fonts; a bold, simple face (sans) prints best. The answer warns when the strokes are thinner than a printed line, and when the text runs off the face.
 - Look at it: `view_render { zoom: { at, size } }` on the answer's box.
 
+## A logo or shape from a file
+- `draft_outline { path, body, width, depth, mode }` — the closed outlines of an SVG or DXF (holes stay holes), scaled to `width` or `height` mm: `emboss` or `engrave` on a body's face (as lettering), or `extrude` into a part of its own (a sign, a stencil, a badge).
+- Text in the file must be paths first (Inkscape: Path → Object to Path); images are not outlines (trace them first). Open curves are left out and counted — close them if they matter.
+- `mirror: true` for artwork printed face down on the bed, or read through clear material.
+
 ## Surfaces
 - `surface_fill { edges, thickness }` — a smooth surface across a closed boundary (edges of bodies, or a sketch's outline), thickened into a solid when `thickness` is given. Then `part_boolean` joins it to a part.
 - `surface_loft { curves, thickness, side }` — a surface through curves in order: edges, sketches, or `{ points: [[x,y,z] …] }` for a smooth curve through them. Open curves make a sheet (a curved panel), closed ones a tube (a duct between two outlines). `ruled` for straight lines between them.
