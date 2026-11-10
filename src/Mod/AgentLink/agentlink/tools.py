@@ -620,7 +620,7 @@ ABOUT_HEADLESS = (
 WORKING = (
     "Start with session_state: the document, its bodies with their sizes, the step count and the folder files go to. "
     "Before a task's first step read its guide: guide_read with no topic lists them (start, parts, model, sketch, "
-    "measure, strength, drawing, assembly, cam, slice, view, and the scan guides when ScanRuler for FreeCAD is here); a guide's "
+    "draft, measure, mass, strength, drawing, assembly, cam, slice, view, and the scan guides when ScanRuler for FreeCAD is here); a guide's "
     "## sections can be read one at a time. "
     "Lengths are millimetres, angles degrees, masses grams. A body is named by its label; a face or edge by what it "
     "is (shape_query: normal, radius, near a point) rather than by FreeCAD's Face12, which changes with the model. "
@@ -635,7 +635,7 @@ WORKING = (
 )
 LEAN_NOTE = (
     "Only the tools every task uses are listed at the start: the session, guides, undo, the make-check-verdict loop "
-    "and the pictures. The rest come in groups (doc, model, sketch, feature, measure, strength, drawing, assembly, cam, scan, align "
+    "and the pictures. The rest come in groups (doc, model, sketch, feature, draft, measure, strength, drawing, assembly, cam, scan, align "
     "…): tool_groups lists them and enable: [group] lists a group's tools from then on — enable what the task's "
     "guide names, not all. A tool not listed still runs: call it by name, or through batch. AGENTLINK_TOOLS=full "
     "lists every tool from the start."

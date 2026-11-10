@@ -15,6 +15,20 @@
 5. Waive a finding only when the person says it is meant (a stacking lip, say): `part_review { waive }` or `dfm_check { waive }`.
 6. Write `export_file` for STEP or STL, or `slice` for G-code. Starting a print is the person's call.
 
+## What is here, by task
+| The person wants | Tools | Guide |
+|---|---|---|
+| A standard part to size (bin, box, bracket) | `gen_make`, `gen_part` | `parts` |
+| A parametric part they can change later | `pd_body_new`, `sketch_new`, `sketch_add`, `pd_pad` … , `param_set` | `model`, `sketch`, `feature`, `param` |
+| Lettering, a logo from SVG/DXF, copies of a part | `draft_text`, `draft_outline`, `draft_array` | `draft` |
+| A curved panel, a shape through points, a surface made solid | `surface_loft`, `surface_points`, `surface_fill`, `surface_thicken` | `draft` |
+| Will it break, shake or get too hot | `fea_setup` … `fea_solve`, `fea_modes`, `fea_heat` | `strength` |
+| What it weighs as printed, ballast to a target | `mass_properties`, `mass_target`, `mass_ballast` | `mass` |
+| A drawing to send (dims, fits, holes, a section) | `drawing_make`, `drawing_exploded` | `drawing` |
+| Parts put together, a lid on its box | `asm_new`, `asm_joint`, `asm_check` | `assembly` |
+| Toolpaths and G-code for a mill | `cam_job`, `cam_op`, `cam_sim`, `cam_post` | `cam` |
+| A print: slice it, pause for magnets | `setup`, `slice`, `slice_with` | `slice` |
+
 ## Scans
 - With ScanRuler for FreeCAD installed, scans are measured, aligned, compared with a reference and cleaned up here too: read `measure-scan`, and `mesh-tools` for cleaning one up.
 - A scan lives in the session, not in the FreeCAD file; `section_to_sketch` turns a section of it into a sketch to model from.
