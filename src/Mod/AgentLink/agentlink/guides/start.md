@@ -18,3 +18,22 @@
 ## Scans
 - With ScanRuler for FreeCAD installed, scans are measured, aligned, compared with a reference and cleaned up here too: read `measure-scan`, and `mesh-tools` for cleaning one up.
 - A scan lives in the session, not in the FreeCAD file; `section_to_sketch` turns a section of it into a sketch to model from.
+
+## Refusals
+Every refusal is `{ error: { code, message } }`; the message says what to change. By code:
+
+| Code | Means | Do |
+|---|---|---|
+| `invalid_input` | An argument is wrong: a type, a value out of range, an unknown field, a name that is not there | Read the message, correct that argument, call again |
+| `invalid_state` | The call is right but not now: no study set up, no print setup, a parameter bound | Do the step it names first |
+| `not_found` | No body, feature, face, guide or tool by that name | `session_state`, `object_list`, `feature_list` or `tool_groups` for the names there are |
+| `unavailable` | Something this computer lacks: a slicer, the FreeCAD window, a module | Say so to the person; the message names what to install or set |
+| `failed` | It ran and did not work: a boolean, a fillet, a mesh, a solve. Nothing was kept | Change the input (a smaller radius, another face, a coarser mesh); never send the same call again unchanged |
+
+- A batch stops at the first refusal and rolls back what it did (`rollback: false` keeps it): fix that call and send the batch again.
+- If FreeCAD itself stops (the answer says it was started again), the document was lost: `session_state`, then make the part again or `doc_open` what was saved. The same call doing it again means the call is the cause.
+
+## Keeping answers small
+- `view_render` pictures at the default size; `inline: false` writes the file only.
+- `object_get` with `filter`; `scan_query` with `limit`; `report_get` once at the end.
+- `batch` for runs of predictable calls: one answer instead of many.
