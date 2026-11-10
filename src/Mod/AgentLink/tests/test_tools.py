@@ -126,10 +126,11 @@ class Tools(unittest.TestCase):
         self.assertEqual(len(r["pauses"]), 1)
         self.assertGreater(r["pauses"][0]["z"], 2.4)
         self.assertLess(r["pauses"][0]["z"], 2.8)
-        # The review's printed weight within a sixth of the slicer's.
+        # The review's printed weight within an eighth of the slicer's (it reads
+        # about a tenth light: gap fill and overlaps the sections leave out).
         err, rv = self.call("part_review", {"body": "Bin"})
         print("review mass:", rv["figures"]["mass"], "slicer:", r["filamentG"], "+ encased", rv["figures"].get("encasedMass"))
-        self.assertAlmostEqual(rv["figures"]["mass"], r["filamentG"] + rv["figures"].get("encasedMass", 0), delta=(r["filamentG"] + 3.4) / 6)
+        self.assertAlmostEqual(rv["figures"]["mass"], r["filamentG"] + rv["figures"].get("encasedMass", 0), delta=(r["filamentG"] + 3.4) / 8)
         with open(r["gcode"]) as f:
             self.assertIn("M601 ; Insert 8 6x2 magnets", f.read())
 
