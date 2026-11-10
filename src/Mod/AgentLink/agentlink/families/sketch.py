@@ -534,17 +534,8 @@ def tools(session):
                 raise ToolError("failed", f"The offset of {d:g} mm failed ({e}): a distance inward bigger than the profile allows, or a profile crossing itself.")
             for e in off.Edges:
                 added.append(sk.addGeometry(_geo_of_edge(e), bool(a.get("construction"))))
-        # The new edges meet end to end: coincident where they touch.
-        pts = {}
-        for g in added:
-            geo_ = sk.Geometry[g]
-            if hasattr(geo_, "StartPoint") and not isinstance(geo_, Part.Circle):
-                for v, p in ((1, geo_.StartPoint), (2, geo_.EndPoint)):
-                    key = (round(p.x, 6), round(p.y, 6))
-                    if key in pts:
-                        sk.addConstraint(Sketcher.Constraint("Coincident", pts[key][0], pts[key][1], g, v))
-                    else:
-                        pts[key] = (g, v)
+        # The new edges meet end to end as made; no constraints are added
+        # between them (on 1.0 the solver can pull an offset's arcs apart).
         doc().recompute()
         s.snapshot("sketch_offset")
         return {"sketch": sk.Label, "from": ids, "distance": d, "added": added, "state": state_of(sk), "step": len(s.steps),
