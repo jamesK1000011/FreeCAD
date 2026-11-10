@@ -21,13 +21,20 @@ def packs():
 
 def tokens(path):
     out = {}
-    for line in open(path, encoding="utf-8"):
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    for line in lines:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         k, v = line.split(":", 1)
         out[k.strip()] = v.strip().strip('"')
     return out
+
+
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
 
 
 def stock_stylesheet():
@@ -44,10 +51,10 @@ class Theme(unittest.TestCase):
         names = packs()
         self.assertEqual(sorted(names), ["Studio Dark", "Studio Light"])
         qss = stock_stylesheet()
-        wanted = set(re.findall(r"@([A-Za-z0-9]+)", open(qss, encoding="utf-8").read())) if qss else set()
+        wanted = set(re.findall(r"@([A-Za-z0-9]+)", read(qss))) if qss else set()
         for name in names:
             folder = os.path.join(ROOT, name)
-            cfg = open(os.path.join(folder, name + ".cfg"), encoding="utf-8").read()
+            cfg = read(os.path.join(folder, name + ".cfg"))
             self.assertIn(f'<FCText Name="Theme">{name}</FCText>', cfg)
             self.assertIn('<FCText Name="StyleSheet">FreeCAD.qss</FCText>', cfg)
             ET.fromstring(cfg)
