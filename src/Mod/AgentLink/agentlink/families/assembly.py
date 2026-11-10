@@ -229,7 +229,9 @@ def tools(session):
         rot = a.get("rotate")
         if off is not None or rot is not None:
             j.Offset2 = FreeCAD.Placement(V(0, 0, picks.num(off or 0, "offset")), FreeCAD.Rotation(V(0, 0, 1), picks.num(rot or 0, "rotate")))
-        refs = [[part, [el, el]] for part, el in ends]
+        # From the assembly down, as FreeCAD's own selection gives them (and
+        # as 1.0 and later both read): the part's name, then the element.
+        refs = [[asm, [f"{part.Name}.{el}", f"{part.Name}.{el}"]] for part, el in ends]
         try:
             j.Proxy.setJointConnectors(j, refs)
         except Exception as e:
@@ -267,7 +269,13 @@ def tools(session):
                 if not r:
                     return None
                 o, subs = r[0], (r[1] if len(r) > 1 else [])
-                return f"{o.Label}.{subs[0]}" if subs else o.Label
+                if not subs:
+                    return o.Label
+                path = subs[0].split(".")
+                if o.TypeId == "Assembly::AssemblyObject" and len(path) > 1:
+                    p = doc().getObject(path[0])
+                    return f"{p.Label if p else path[0]}.{path[-1]}"
+                return f"{o.Label}.{path[-1]}"
 
             joints.append({"joint": j.Label, "kind": str(getattr(j, "JointType", "?")).lower(), "a": ref(r1), "b": ref(r2), "suppressed": bool(getattr(j, "Suppressed", False))})
         code, said = _status(asm)
