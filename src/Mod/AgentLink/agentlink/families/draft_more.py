@@ -61,8 +61,15 @@ def tools(session):
             FreeCAD.setActiveDocument(doc().Name)
 
     def named(o, name, default):
+        # unique among the others: Draft has already given it a label of its own
         if o is not None:
-            o.Label = s.unique(name or default)
+            want = name or default
+            taken = {x.Label for x in doc().Objects if x is not o}
+            lab, n = want, 2
+            while lab in taken:
+                lab = f"{want} {n}"
+                n += 1
+            o.Label = lab
         return o
 
     def finish(objs, tool, extra=None):
@@ -232,6 +239,10 @@ def tools(session):
             r = Draft.offset(objs[0], v3(a.get("by"), "by"), copy=copy)
         elif op in ("upgrade", "downgrade"):
             r = (Draft.upgrade if op == "upgrade" else Draft.downgrade)(objs, delete=bool(a.get("delete", True)))
+            made_ = list(r[0]) if isinstance(r, (list, tuple)) and r and isinstance(r[0], (list, tuple)) else []
+            if not made_:
+                raise ToolError("failed", f"Nothing to {op}: {', '.join(o.Label for o in objs)} {'are already as far as they go (a face upgrades to a solid only with others that close a volume)' if op == 'upgrade' else 'cannot be taken apart further'}.")
+            r = made_
         elif op == "join":
             ok = Draft.join_wires(objs)
             r = objs[0] if ok else None
@@ -243,7 +254,8 @@ def tools(session):
             raise bad("op: move (by), rotate (angle, center, axis), scale (factor, center), mirror (from, to: a line in the plane), offset (by: a vector to the first vertex's side), upgrade, downgrade, join, fillet (radius, chamfer).")
         made = [o for o in doc().Objects[n0:]]
         res = made or ([r] if r is not None and not isinstance(r, (list, tuple, bool)) else list(r) if isinstance(r, (list, tuple)) else objs)
-        res = [x[0] if isinstance(x, (list, tuple)) else x for x in res if x is not None]
+        res = [(x[0] if x else None) if isinstance(x, (list, tuple)) else x for x in res if x is not None]
+        res = [x for x in res if x is not None]
         res = [x for x in res if hasattr(x, "Label")]
         return finish(res or objs, "draft_modify", {"op": op})
 
