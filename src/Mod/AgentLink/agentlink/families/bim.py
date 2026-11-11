@@ -5,6 +5,7 @@
 # building on a site, a schedule of quantities (into a sheet when asked), and
 # IFC out and in where IfcOpenShell is installed.
 
+import math
 import os
 
 import FreeCAD
@@ -630,7 +631,7 @@ def tools(session):
         if span <= 0:
             raise bad("cover: more than the structure is wide.")
         if a.get("spacing"):
-            n = int(span // picks.num(a["spacing"], "spacing")) + 1
+            n = math.ceil(span / picks.num(a["spacing"], "spacing") - 1e-9) + 1  # at most the spacing asked
         else:
             n = int(a.get("amount", 4))
         if n < 1:
