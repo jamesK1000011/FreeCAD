@@ -476,6 +476,7 @@ def draw_arch(sh, v, H):
     lines = []
     big = max(s.BoundBox.DiagonalLength for s in shapes) * 4 + 1
     beyond = Part.makeBox(big, big, big, FreeCAD.Vector(-big / 2, -big / 2, -big))
+    belows = []
     for s in shapes:
         for w in s.slice(FreeCAD.Vector(0, 0, 1), 0.0):
             for e in w.Edges:
@@ -484,9 +485,11 @@ def draw_arch(sh, v, H):
             below = s.common(beyond)
         except Exception:
             continue
-        if below.isNull() or not below.Solids:
-            continue
-        res = TechDraw.projectEx(below, FreeCAD.Vector(0, 0, 1))
+        if not below.isNull() and below.Solids:
+            belows += below.Solids
+    if belows:
+        # all at once, so what is nearer hides what is behind it
+        res = TechDraw.projectEx(Part.makeCompound(belows), FreeCAD.Vector(0, 0, 1))
         for i in (0, 1, 3):
             if not res[i].isNull():
                 for e in res[i].Edges:
