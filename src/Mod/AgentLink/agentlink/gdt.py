@@ -278,3 +278,91 @@ def describe(rows):
         parts += [d.replace("|", " (") + ")" if "|" in d else d for d in (r.get("datums") or [])]
         out.append(" | ".join(parts))
     return " / ".join(out)
+
+
+# ---- weld symbols (ISO 2553 / AWS A2.4, the common forms) ----------------------
+
+WELDS = ("fillet", "square", "v", "bevel", "u", "j", "plug", "spot", "seam", "flare-v", "flare-bevel", "backing", "surfacing")
+
+
+def _weld_glyph(f, kind, cx, y0, h, up):
+    """One weld symbol on the reference line at x = cx, y0 the line; up: drawn
+    above it (the other side) rather than below (the arrow side). y grows down."""
+    s = -1 if up else 1
+    a = h * 0.9  # the symbol's size
+    if kind == "fillet":
+        f.line([(cx - a / 2, y0), (cx - a / 2, y0 + s * a), (cx + a / 2, y0)])
+    elif kind == "square":
+        f.line([(cx - a / 4, y0), (cx - a / 4, y0 + s * a)])
+        f.line([(cx + a / 4, y0), (cx + a / 4, y0 + s * a)])
+    elif kind == "v":
+        f.line([(cx - a / 2, y0 + s * a), (cx, y0), (cx + a / 2, y0 + s * a)])
+    elif kind == "bevel":
+        f.line([(cx - a / 3, y0), (cx - a / 3, y0 + s * a)])
+        f.line([(cx - a / 3, y0), (cx + a / 2, y0 + s * a)])
+    elif kind == "u":
+        f.line([(cx, y0), (cx, y0 + s * a * 0.3)])
+        n, r = 12, a * 0.45  # the U's round bottom, open away from the line
+        f.line([(cx + r * math.cos(math.pi * i / n), y0 + s * (a * 0.3 + r - r * math.sin(math.pi * i / n))) for i in range(n + 1)])
+    elif kind == "j":
+        x0 = cx - a / 3
+        f.line([(x0, y0), (x0, y0 + s * a)])
+        n, r = 8, a * 0.6  # a quarter round from the upright out, open away from the line
+        f.line([(x0 + r + r * math.cos(math.pi - math.pi / 2 * i / n), y0 + s * (a * 0.4 + r * math.sin(math.pi - math.pi / 2 * i / n))) for i in range(n + 1)])
+    elif kind == "plug":
+        f.line([(cx - a / 2, y0), (cx - a / 2, y0 + s * a * 0.6), (cx + a / 2, y0 + s * a * 0.6), (cx + a / 2, y0)])
+    elif kind == "spot":
+        f.circle(cx, y0 + s * a * 0.45, a * 0.45)
+    elif kind == "seam":
+        f.circle(cx, y0 + s * a * 0.45, a * 0.45)
+        f.line([(cx - a * 0.7, y0 + s * a * 0.3), (cx + a * 0.7, y0 + s * a * 0.3)])
+        f.line([(cx - a * 0.7, y0 + s * a * 0.6), (cx + a * 0.7, y0 + s * a * 0.6)])
+    elif kind in ("flare-v", "flare-bevel"):
+        n, r = 8, a * 0.8  # quarter rounds bowing in to the joint line
+        for k in ((-1, 1) if kind == "flare-v" else (1,)):
+            f.line([(cx + k * (a * 0.1 + r - r * math.cos(math.pi / 2 * i / n)), y0 + s * r * math.sin(math.pi / 2 * i / n)) for i in range(n + 1)])
+        if kind == "flare-bevel":
+            f.line([(cx - a * 0.1, y0), (cx - a * 0.1, y0 + s * r)])
+    elif kind == "backing":
+        n = 12
+        f.line([(cx + a / 2 * math.cos(math.pi * i / n), y0 + s * a / 2 * math.sin(math.pi * i / n)) for i in range(n + 1)])
+    elif kind == "surfacing":
+        n = 12
+        for k in (-1, 1):
+            f.line([(cx + k * a / 4 + a / 4 * math.cos(math.pi * i / n), y0 + s * a / 4 * math.sin(math.pi * i / n)) for i in range(n + 1)])
+
+
+def weld(kind="fillet", size="", length="", side="arrow", all_around=False, field=False, tail="", h=3.5):
+    """A weld symbol: the reference line from the leader's end, the symbol on
+    the arrow side (below), the other side (above) or both, size to its left,
+    length (and pitch) to its right, all-around circle and field flag at the
+    junction, a tail with a note. Origin (0, 0) is where the leader meets the
+    reference line; the figure runs to +x; y grows down."""
+    if kind not in WELDS:
+        raise GdtError(f"kind: {', '.join(WELDS)}")
+    if side not in ("arrow", "other", "both"):
+        raise GdtError("side: arrow (below the line), other (above) or both")
+    f = Figure()
+    sw, lw = text_w(str(size), h) if size else 0.0, text_w(str(length), h) if length else 0.0
+    cx = h * 1.5 + sw + h * 0.6
+    L = cx + h * 0.9 + lw + h * 1.5
+    f.line([(0, 0), (L, 0)])
+    sides = {"arrow": [False], "other": [True], "both": [False, True]}[side]
+    for up in sides:
+        _weld_glyph(f, kind, cx, 0, h, up)
+        ty = -h * 0.35 if up else h * 1.05
+        if size:
+            f.text(cx - h * 0.9, ty, h, size, "end")
+        if length:
+            f.text(cx + h * 0.9, ty, h, length, "start")
+    if all_around:
+        f.circle(0, 0, h * 0.5)
+    if field:
+        f.line([(0, 0), (0, -h * 2.2)])
+        f.filled.append([(0, -h * 2.2), (h * 1.2, -h * 1.85), (0, -h * 1.5)])
+    if tail:
+        f.line([(L, 0), (L + h, -h)])
+        f.line([(L, 0), (L + h, h)])
+        f.text(L + h * 1.3, h * 0.35, h, tail, "start")
+    f.w, f.h = L + (h * 1.3 + text_w(tail, h) if tail else 0), h * 2.5
+    return f

@@ -505,6 +505,7 @@ def draw_arch(sh, v, H):
 
 MARKS_PROP = "AgentLinkCenterMarks"
 HATCH_PROP = "AgentLinkHatch"
+WELD_PROP = "AgentLinkWeld"
 
 
 def paper_polys(v, faces, X, Y, H):
@@ -674,6 +675,16 @@ def draw_item(doc, sh, v, H):
             sh.line(pts, "thin")
             if str(getattr(v, "StartSymbol", "")).lower() not in ("none", "no symbol", "-1"):
                 sh.arrow(pts[0], pts[1])
+            spec = getattr(v, WELD_PROP, "") if WELD_PROP in v.PropertiesList else ""
+            if spec:
+                w = json.loads(spec)
+                fig = gdt.weld(w["kind"], w.get("size", ""), w.get("length", ""), w.get("side", "arrow"), w.get("allAround", False),
+                               w.get("field", False), w.get("tail", ""), w.get("h", 3.5))
+                jx, jy = pts[-1]
+                for poly, closed, filled in fig.polylines():
+                    sh.line([(jx + x, jy + y) for x, y in poly], "thin", closed=closed, filled=filled)
+                for x, y, hh, s_, anchor in fig.texts:
+                    sh.text(jx + x, jy + y, hh, s_, anchor)
         return
     if t == "TechDraw::DrawViewAnnotation":
         X, Y = abs_xy(v)
@@ -1181,6 +1192,29 @@ def tools(session):
         if flat:
             out["warning"] = f"{', '.join(flat)} {'is' if len(flat) == 1 else 'are'} seen edge-on in {v.Label}: nothing to hatch there — shape_query {{ normal }} finds the faces facing this view."
         return done("td_hatch", out)
+
+    def td_weld(a):
+        """A weld symbol on a leader from a feature of a view (ISO 2553 / AWS A2.4 forms)."""
+        v = view_of(doc(), a.get("view"))
+        if not edges_of(v):
+            recompute([v])
+        spec = {"kind": a.get("kind", "fillet"), "size": str(a.get("size", "")), "length": str(a.get("length", "")),
+                "side": a.get("side", "arrow"), "allAround": bool(a.get("allAround")), "field": bool(a.get("field")),
+                "tail": str(a.get("tail", "")), "h": float(a.get("textSize", 3.5))}
+        try:
+            gdt.weld(spec["kind"], spec["size"], spec["length"], spec["side"], spec["allAround"], spec["field"], spec["tail"], spec["h"])
+        except gdt.GdtError as e:
+            raise bad(str(e)) from None
+        ref, p = ref_point(v, a.get("on"))
+        X, Y = abs_xy(v)
+        to = pt2(a["at"], "at") if a.get("at") is not None else (X + p[0] + 15, Y - p[1] + 15)
+        ln = leader(v, p, to)
+        ln.Label = s.unique(a.get("name") or f"Weld {spec['kind']}", ln)
+        ln.addProperty("App::PropertyString", WELD_PROP, "AgentLink", "The weld symbol drawn at the leader's end (JSON)")
+        setattr(ln, WELD_PROP, json.dumps(spec))
+        recompute()
+        return done("td_weld", {"weld": ln.Label, "on": ref, **{k: spec[k] for k in ("kind", "size", "length", "side", "allAround", "field", "tail")},
+                                "note": "Drawn by td_export: the symbol below the reference line is the arrow side, above it the other side."})
 
     def td_projection(a):
         page = page_of(doc(), a.get("page"))
@@ -1706,6 +1740,10 @@ def tools(session):
              obj({"views": {}, "extend": {"type": "number"}, "on": {"type": "boolean"}}), td_centermarks, changes=True),
         Tool("td_hatch", "Hatch faces of the part in a view (thin lines spacing mm apart at angle degrees; a section's cut is hatched by itself): view, faces [\"Face6\" …] — none takes it off.",
              obj({"view": {"type": "string"}, "faces": {}, "spacing": {"type": "number"}, "angle": {"type": "number"}}, ["view"]), td_hatch, changes=True),
+        Tool("td_weld", f"A weld symbol on a leader from a feature of a view (on, as td_balloon takes it; at the leader's end on the page): kind {', '.join(gdt.WELDS)}, size (left of it), length (right: \"50\" or \"50-100\" for pitch), side arrow | other | both, allAround, field (a site weld), tail (process, \"GMAW\").",
+             obj({"view": {"type": "string"}, "on": {}, "at": {"type": "array"}, "kind": {"type": "string", "enum": list(gdt.WELDS)}, "size": {}, "length": {},
+                  "side": {"type": "string", "enum": ["arrow", "other", "both"]}, "allAround": {"type": "boolean"}, "field": {"type": "boolean"}, "tail": {"type": "string"},
+                  "textSize": {"type": "number"}, "name": {"type": "string"}}, ["view", "kind"]), td_weld, changes=True),
         Tool("td_bim", "A BIM section plane drawn on a page (a building plan or section): section, scale (0.02 = 1:50), at, render Wireframe | Solid, fill (cut faces hatched), spaces, hidden.",
              obj({"page": {"type": "string"}, "section": {"type": "string"}, "scale": {"type": "number"}, "at": {"type": "array"}, "render": {"type": "string"},
                   "fill": {"type": "boolean"}, "spaces": {"type": "boolean"}, "hidden": {"type": "boolean"}, "name": {"type": "string"}}, ["section"]), td_bim, changes=True),
