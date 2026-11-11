@@ -565,6 +565,182 @@ def tools(session):
             out.append(e)
         return {"objects": out, "count": len(out)}
 
+    # ---- more building elements ---------------------------------------------------
+
+    def setprops(o, vals):
+        """Set those of vals the object has; answer what was set."""
+        done = {}
+        for k, v in vals.items():
+            if v is not None and hasattr(o, k):
+                try:
+                    setattr(o, k, v)
+                    done[k] = v
+                except Exception:
+                    pass
+        return done
+
+    def bim_curtain_wall(a):
+        name = a.get("name") or "Curtain wall"
+        pts = a.get("points")
+        h = pos(a, "height", 3000)
+        line = baseline(pts, f"{name} line")
+        face = line.Shape.extrude(V(0, 0, h))
+        line.Shape = face
+        mk = getattr(Arch, "makeCurtainWall", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no curtain wall.")
+        o = headless_call(mk, line)
+        named(o, name)
+        length = sum(e.Length for e in Part.makePolygon([vec(p, "points") for p in pts]).Edges)
+        vs, hs = pos(a, "vertical", 1500), pos(a, "horizontal", 1500)
+        mw, md = pos(a, "mullion", 50), pos(a, "depth", 100)
+        set_ = setprops(o, {"VerticalSections": max(1, round(length / vs)), "HorizontalSections": max(1, round(h / hs)),
+                            "VerticalMullionWidth": mw, "VerticalMullionHeight": md, "HorizontalMullionWidth": mw, "HorizontalMullionHeight": md,
+                            "PanelThickness": float(a.get("glass", 20))})
+        return finish(o, "bim_curtain_wall", {"length": round(length, 1), "height": h, "set": set_})
+
+    def bim_rebar(a):
+        host = picks.find(doc(), a.get("structure"), "structure")
+        sh = getattr(host, "Shape", None)
+        if not isinstance(sh, Part.Shape) or not sh.Solids:
+            raise bad(f"structure: {host.Label} has no solid to reinforce.")
+        mk = getattr(Arch, "makeRebar", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no rebar.")
+        bb = sh.BoundBox
+        cover = picks.num(a.get("cover", 30), "cover")
+        dia = pos(a, "diameter", 12)
+        along = a.get("along", "x")
+        layer = a.get("layer", "bottom")
+        z = bb.ZMin + cover + dia / 2 if layer == "bottom" else bb.ZMax - cover - dia / 2
+        if along == "x":
+            p0, p1, spread, width = V(bb.XMin + cover, bb.YMin, z), V(bb.XMax - cover, bb.YMin, z), V(0, 1, 0), bb.YLength
+        elif along == "y":
+            p0, p1, spread, width = V(bb.XMin, bb.YMin + cover, z), V(bb.XMin, bb.YMax - cover, z), V(1, 0, 0), bb.XLength
+        elif along == "z":
+            y = bb.YMin + cover + dia / 2
+            p0, p1, spread, width = V(bb.XMin, y, bb.ZMin + cover), V(bb.XMin, y, bb.ZMax - cover), V(1, 0, 0), bb.XLength
+        else:
+            raise bad("along: x | y | z — the bars' own direction.")
+        if (p1 - p0).Length <= 0:
+            raise bad("cover: more than the structure is long.")
+        span = width - 2 * cover - dia
+        if span <= 0:
+            raise bad("cover: more than the structure is wide.")
+        if a.get("spacing"):
+            n = int(span // picks.num(a["spacing"], "spacing")) + 1
+        else:
+            n = int(a.get("amount", 4))
+        if n < 1:
+            raise bad("amount: 1 or more bars.")
+        bar = doc().addObject("Part::Feature", "RebarLine")
+        bar.Label = s.unique(f"{a.get('name') or 'Rebar'} line")
+        bar.Shape = Part.makePolygon([p0, p1])
+        o = headless_call(mk, host, bar, diameter=dia, amount=n, offset=cover + dia / 2)
+        named(o, a.get("name") or "Rebar")
+        setprops(o, {"Direction": spread})
+        out = finish(o, "bim_rebar", {"structure": host.Label, "bars": n, "diameter": dia, "along": along, "layer": layer,
+                                       "spacing": round(span / (n - 1), 1) if n > 1 else None})
+        length = (p1 - p0).Length
+        out["totalLength_m"] = round(n * length / 1000, 3)
+        out["mass_kg"] = round(n * length * 3.14159 * (dia / 2) ** 2 * 7.85e-6, 2)
+        return out
+
+    def bim_panel(a):
+        mk = getattr(Arch, "makePanel", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no panel.")
+        t = pos(a, "thickness", 18)
+        if a.get("points"):
+            base = baseline(a["points"], f"{a.get('name') or 'Panel'} outline", closed=True)
+            base.Shape = Part.Face(base.Shape)
+            o = headless_call(mk, base, thickness=t)
+        else:
+            o = headless_call(mk, None, length=pos(a, "length", 1000), width=pos(a, "width", 500), thickness=t)
+            o.Placement.Base = vec(a.get("at", [0, 0, 0]), "at")
+        named(o, a.get("name") or "Panel")
+        return finish(o, "bim_panel", {"thickness": t})
+
+    def bim_pipe(a):
+        mk = getattr(Arch, "makePipe", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no pipe.")
+        path = baseline(a.get("points"), f"{a.get('name') or 'Pipe'} path")
+        d = pos(a, "diameter", 50)
+        o = headless_call(mk, path, d)
+        named(o, a.get("name") or "Pipe")
+        setprops(o, {"Diameter": d, "WallThickness": a.get("wall")})
+        return finish(o, "bim_pipe", {"diameter": d, "length": round(path.Shape.Length, 1)})
+
+    def bim_equipment(a):
+        mk = getattr(Arch, "makeEquipment", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no equipment.")
+        base = picks.find(doc(), a.get("object"))
+        o = headless_call(mk, base)
+        named(o, a.get("name") or f"{base.Label} equipment")
+        setprops(o, {"Model": a.get("model"), "Url": a.get("url"), "EquipmentPower": a.get("watts")})
+        if a.get("ifc"):
+            setprops(o, {"IfcType": a["ifc"]})
+        return finish(o, "bim_equipment", {"from": base.Label})
+
+    def bim_grid(a):
+        mk = getattr(Arch, "makeAxis", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no axes.")
+        made = []
+        for dirn, k in (("x", "xSpacing"), ("y", "ySpacing")):
+            sp = a.get(k) or a.get("spacing")
+            if not sp:
+                continue
+            sp = [float(x) for x in sp] if isinstance(sp, list) else [float(sp)] * (int(a.get("count", 4)) - 1)
+            ax = headless_call(mk, len(sp) + 1, float(a.get("length", 10000)))
+            ax.Distances = [0.0] + sp
+            if dirn == "y":
+                ax.Placement = FreeCAD.Placement(V(0, 0, 0), FreeCAD.Rotation(V(0, 0, 1), 90))
+            named(ax, f"{a.get('name') or 'Grid'} {dirn.upper()}")
+            made.append(ax.Label)
+        if not made:
+            raise bad("spacing (or xSpacing / ySpacing): mm between grid lines, one number or a list.")
+        doc().recompute()
+        s.snapshot("bim_grid")
+        return {"axes": made, "step": len(s.steps)}
+
+    def bim_section(a):
+        mk = getattr(Arch, "makeSectionPlane", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no section plane.")
+        objs = [picks.find(doc(), r) for r in (a.get("objects") or [])] or [o for o in doc().Objects if is_bim(o) and not any(is_bim(p) for p in o.InList)]
+        o = headless_call(mk, objs)
+        n = vec(a.get("normal", [0, 0, 1]), "normal")
+        o.Placement = FreeCAD.Placement(vec(a.get("at", [0, 0, 1200]), "at"), FreeCAD.Rotation(V(0, 0, 1), n))
+        named(o, a.get("name") or "Section")
+        doc().recompute()
+        s.snapshot("bim_section")
+        return {"object": o.Label, "cuts": [x.Label for x in objs], "note": "A section plane for TechDraw (td_view of it) and the FreeCAD window; export { section: z } writes a plan cut as DXF/SVG headless.", "step": len(s.steps)}
+
+    def bim_material(a):
+        mk = getattr(Arch, "makeMaterial", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no materials.")
+        name = a.get("name") or "Material"
+        mat = next((o for o in doc().Objects if o.Label == name and type(getattr(o, "Proxy", None)).__name__ == "_ArchMaterial"), None)
+        if mat is None:
+            mat = headless_call(mk, name)
+            named(mat, name)
+        data = dict(getattr(mat, "Material", {}) or {})
+        for k, key in (("density", "Density"), ("description", "Description"), ("color", "Color")):
+            if a.get(k) is not None:
+                data[key] = (f"{a[k]} kg/m^3" if k == "density" else str(a[k]))
+        mat.Material = data
+        objs = [picks.find(doc(), r) for r in (a.get("objects") or [])]
+        for o in objs:
+            if hasattr(o, "Material"):
+                o.Material = mat
+        doc().recompute()
+        s.snapshot("bim_material")
+        return {"material": mat.Label, "data": data, "on": [o.Label for o in objs if hasattr(o, "Material")], "step": len(s.steps)}
+
     pt = {"type": "array", "items": {"type": "number"}}
     pts = {"type": "array", "items": pt}
     return [
@@ -587,6 +763,23 @@ def tools(session):
              obj({"objects": {"type": "array", "items": {"type": "string"}}, "elevation": {"type": "number"}, "height": {"type": "number"}, "name": {"type": "string"}}), bim_level, changes=True),
         Tool("bim_building", "A building holding levels, on a site (site: false for none).",
              obj({"levels": {"type": "array", "items": {"type": "string"}}, "site": {"type": "boolean"}, "siteName": {"type": "string"}, "name": {"type": "string"}}), bim_building, changes=True),
+        Tool("bim_curtain_wall", "A curtain wall along points, height mm: mullions every vertical / horizontal mm (1500), mullion width and depth, glass thickness.",
+             obj({"points": pts, "height": {"type": "number"}, "vertical": {"type": "number"}, "horizontal": {"type": "number"}, "mullion": {"type": "number"},
+                  "depth": {"type": "number"}, "glass": {"type": "number"}, "name": {"type": "string"}}, ["points"]), bim_curtain_wall, changes=True),
+        Tool("bim_rebar", "Straight reinforcing bars in a structure (slab, beam, column, footing): along x | y | z (the bars' direction), layer bottom | top, diameter (12), cover (30), spacing or amount. Answers bars, total length and steel mass.",
+             obj({"structure": {"type": "string"}, "along": {"type": "string", "enum": ["x", "y", "z"]}, "layer": {"type": "string", "enum": ["bottom", "top"]}, "diameter": {"type": "number"},
+                  "cover": {"type": "number"}, "spacing": {"type": "number"}, "amount": {"type": "integer"}, "name": {"type": "string"}}, ["structure"]), bim_rebar, changes=True),
+        Tool("bim_panel", "A panel (sheet material: plywood, cladding): an outline (points) or length × width at, thickness (18).",
+             obj({"points": pts, "length": {"type": "number"}, "width": {"type": "number"}, "thickness": {"type": "number"}, "at": pt, "name": {"type": "string"}}), bim_panel, changes=True),
+        Tool("bim_pipe", "A pipe along points: diameter, wall (thickness) mm.", obj({"points": pts, "diameter": {"type": "number"}, "wall": {"type": "number"}, "name": {"type": "string"}}, ["points"]), bim_pipe, changes=True),
+        Tool("bim_equipment", "An object made BIM equipment (furniture, fixtures, appliances): object, ifc (e.g. Furniture, Sanitary Terminal), model, url, watts.",
+             obj({"object": {"type": "string"}, "ifc": {"type": "string"}, "model": {"type": "string"}, "url": {"type": "string"}, "watts": {"type": "number"}, "name": {"type": "string"}}, ["object"]), bim_equipment, changes=True),
+        Tool("bim_grid", "Structural grid lines: spacing mm (one number with count, or a list), or xSpacing / ySpacing each; length of the lines.",
+             obj({"spacing": {}, "xSpacing": {}, "ySpacing": {}, "count": {"type": "integer"}, "length": {"type": "number"}, "name": {"type": "string"}}), bim_grid, changes=True),
+        Tool("bim_section", "A section plane through objects (all BIM objects when left out): at, normal ([0,0,1] for a plan cut).",
+             obj({"objects": {"type": "array", "items": {"type": "string"}}, "at": pt, "normal": pt, "name": {"type": "string"}}), bim_section, changes=True),
+        Tool("bim_material", "A BIM material (made if new): name, density kg/m³, description, color; put on objects.",
+             obj({"name": {"type": "string"}, "density": {"type": "number"}, "description": {"type": "string"}, "color": {"type": "string"}, "objects": {"type": "array", "items": {"type": "string"}}}, ["name"]), bim_material, changes=True),
         Tool("bim_schedule", "Quantities: every wall (length, height, area, volume), window and door (size, area), column, beam, slab, roof, stairs (volume) and space (floor area), with totals by kind; sheet: true (or a name) writes them to a spreadsheet.",
              obj({"sheet": {}}), bim_schedule),
         Tool("bim_list", "The BIM objects: IFC type, what each holds, which wall each opening is in. Changes nothing.", obj({}), bim_list),
