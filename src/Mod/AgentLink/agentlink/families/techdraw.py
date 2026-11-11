@@ -504,6 +504,64 @@ def draw_arch(sh, v, H):
 
 
 MARKS_PROP = "AgentLinkCenterMarks"
+HATCH_PROP = "AgentLinkHatch"
+
+
+def paper_polys(v, faces, X, Y, H):
+    """3D faces as polygons on the paper, through the view's own projection."""
+    cache = {}
+    fr = frame_of(v, cache)
+    if fr is None:
+        return []
+    out = []
+    for f in faces:
+        for w in f.Wires:
+            pts = []
+            for e in w.OrderedEdges if hasattr(w, "OrderedEdges") else w.Edges:
+                ps = e.discretize(Deflection=0.02)
+                pts += ps if not pts else ps[1:]
+            poly = []
+            for p in pts:
+                gx, gy = to_paper(v, cache, to_view(fr, v, p))
+                poly.append((X + gx, H - Y + gy))
+            if len(poly) >= 3:
+                out.append(poly)
+    return out
+
+
+def hatch_regions(v, X, Y, H):
+    """What to hatch in a view: a section's cut faces (unless its hatch is off),
+    and faces given by td_hatch. [(polygons, spacing, angle)]"""
+    import Part
+
+    out = []
+    try:
+        if v.isDerivedFrom("TechDraw::DrawViewSection") and str(getattr(v, "CutSurfaceDisplay", "Hatch")) != "None":
+            src = source_shapes(v)
+            if src is not None:
+                o, n = V(v.SectionOrigin), V(v.SectionNormal)
+                wires = src.slice(n, n.dot(o))
+                if wires:
+                    try:
+                        faces = Part.makeFace(wires, "Part::FaceMakerBullseye").Faces
+                    except Exception:
+                        faces = [Part.Face(w) for w in wires if w.isClosed()]
+                    polys = paper_polys(v, faces, X, Y, H)
+                    if polys:
+                        out.append((polys, 2.5, 45.0))
+    except Exception:
+        pass
+    if HATCH_PROP in v.PropertiesList and getattr(v, HATCH_PROP):
+        try:
+            spec = json.loads(getattr(v, HATCH_PROP))
+            src = source_shapes(v)
+            faces = [src.getElement(f) for f in spec.get("faces", [])] if src is not None else []
+            polys = paper_polys(v, faces, X, Y, H)
+            if polys:
+                out.append((polys, float(spec.get("spacing", 2.5)), float(spec.get("angle", 45))))
+        except Exception:
+            pass
+    return out
 
 
 def circle_centres(v):
@@ -549,6 +607,11 @@ def draw_item(doc, sh, v, H):
                 pts = [(X + p.x, H - Y + p.y) for p in e.discretize(Deflection=0.05)] if e.Length > 1e-6 else []
                 if len(pts) >= 2:
                     sh.line(pts, kind)
+        for polys, spacing, angle in hatch_regions(v, X, Y, H):
+            for p, q in sheets.hatch(polys, spacing, angle):
+                sh.line([p, q], "thin")
+            for poly in polys:
+                sh.line(poly, "visible", closed=True)
         ext = float(getattr(v, MARKS_PROP, 0) or 0) if MARKS_PROP in v.PropertiesList else 0
         if ext > 0:
             for c, r in circle_centres(v):
@@ -1088,6 +1151,32 @@ def tools(session):
             out.append({"view": v.Label, "circles": len(circle_centres(v))})
         return done("td_centermarks", {"views": out, "extend": ext, "note": "Drawn as thin chain lines by td_export."})
 
+    def td_hatch(a):
+        """Hatching on faces of the part, seen in a view (a section's cut is hatched by itself)."""
+        v = view_of(doc(), a.get("view"))
+        faces = a.get("faces") or []
+        if isinstance(faces, str):
+            faces = [faces]
+        src = source_shapes(v)
+        if src is None:
+            raise bad(f"{v.Label} shows no shape.")
+        for f in faces:
+            if not str(f).startswith("Face"):
+                raise bad("faces: the part's own faces, \"Face6\" (shape_query finds them).")
+            try:
+                src.getElement(f)
+            except Exception:
+                raise bad(f"faces: {f} is not a face of {v.Label}'s part.") from None
+        if HATCH_PROP not in v.PropertiesList:
+            v.addProperty("App::PropertyString", HATCH_PROP, "AgentLink", "Faces hatched in the exported page (JSON)")
+        spec = {"faces": faces, "spacing": float(a.get("spacing", 2.5)), "angle": float(a.get("angle", 45))}
+        setattr(v, HATCH_PROP, json.dumps(spec) if faces else "")
+        X, Y = abs_xy(v)
+        H = paper_size(page_holding(v))[1] if page_holding(v) is not None else 210.0
+        polys = paper_polys(v, [src.getElement(f) for f in faces], X, Y, H)
+        return done("td_hatch", {"view": v.Label, "faces": faces, "regions": len(polys), **{k: spec[k] for k in ("spacing", "angle")},
+                                 "note": "Drawn by td_export; a face seen edge-on has no area to hatch." if faces else "Hatching taken off."})
+
     def td_projection(a):
         page = page_of(doc(), a.get("page"))
         objs = bodies_for(a.get("bodies"))
@@ -1610,6 +1699,8 @@ def tools(session):
              obj({"page": {"type": "string"}, "bodies": {"type": "array", "items": {"type": "string"}}, "direction": {"type": ["string", "array"]}, "scale": {"type": "number"}, "at": {"type": "array"}, "hidden": {"type": "boolean"}, "name": {"type": "string"}}), td_view, changes=True),
         Tool("td_centermarks", "Centre marks (thin chain crosses) on the holes and round edges of views (all part views when left out): extend mm past each circle (2); on: false takes them off.",
              obj({"views": {}, "extend": {"type": "number"}, "on": {"type": "boolean"}}), td_centermarks, changes=True),
+        Tool("td_hatch", "Hatch faces of the part in a view (thin lines spacing mm apart at angle degrees; a section's cut is hatched by itself): view, faces [\"Face6\" …] — none takes it off.",
+             obj({"view": {"type": "string"}, "faces": {}, "spacing": {"type": "number"}, "angle": {"type": "number"}}, ["view"]), td_hatch, changes=True),
         Tool("td_bim", "A BIM section plane drawn on a page (a building plan or section): section, scale (0.02 = 1:50), at, render Wireframe | Solid, fill (cut faces hatched), spaces, hidden.",
              obj({"page": {"type": "string"}, "section": {"type": "string"}, "scale": {"type": "number"}, "at": {"type": "array"}, "render": {"type": "string"},
                   "fill": {"type": "boolean"}, "spaces": {"type": "boolean"}, "hidden": {"type": "boolean"}, "name": {"type": "string"}}, ["section"]), td_bim, changes=True),

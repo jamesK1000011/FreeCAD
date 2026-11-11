@@ -27,6 +27,33 @@ def best_scale(fit):
     return None
 
 
+def hatch(polys, spacing=2.5, angle=45.0):
+    """Parallel lines filling polygons (even–odd: holes stay clear): [(p, q)]
+    segments, spacing mm apart at angle degrees."""
+    a = math.radians(angle)
+    ca, sa = math.cos(a), math.sin(a)
+    rot = [[(x * ca + y * sa, -x * sa + y * ca) for x, y in poly] for poly in polys if len(poly) >= 3]
+    if not rot or spacing <= 0:
+        return []
+    ys = [y for poly in rot for _, y in poly]
+    lo, hi = min(ys), max(ys)
+    out = []
+    k = math.floor(lo / spacing) + 1
+    while k * spacing < hi:
+        yv = k * spacing
+        xs = []
+        for poly in rot:
+            for (x0, y0), (x1, y1) in zip(poly, poly[1:] + poly[:1]):
+                if (y0 <= yv < y1) or (y1 <= yv < y0):
+                    xs.append(x0 + (yv - y0) * (x1 - x0) / (y1 - y0))
+        xs.sort()
+        for i in range(0, len(xs) - 1, 2):
+            p, q = (xs[i], yv), (xs[i + 1], yv)
+            out.append(((p[0] * ca - p[1] * sa, p[0] * sa + p[1] * ca), (q[0] * ca - q[1] * sa, q[0] * sa + q[1] * ca)))
+        k += 1
+    return out
+
+
 class Sheet:
     def __init__(self, width, height, title=""):
         self.w = float(width)
