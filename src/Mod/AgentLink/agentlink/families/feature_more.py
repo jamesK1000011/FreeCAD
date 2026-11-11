@@ -161,7 +161,7 @@ def tools(session):
             pad.Profile = prof
             pad.Type = "ThroughAll"
             pad.Reversed = True
-            info["outsideDiameter"] = round(2 * ring.Radius, 3)
+            info["outsideDiameter"] = round(2 * float(ring.Radius), 3)
             before = pc.volume(b)
             must = "cut"
         else:
