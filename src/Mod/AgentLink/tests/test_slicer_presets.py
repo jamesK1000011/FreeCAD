@@ -76,6 +76,21 @@ class Presets(unittest.TestCase):
         self.assertEqual(mach["from"], "system")
         self.assertNotIn("_system", mach)
 
+    def test_two_nozzles_get_their_volume_types(self):
+        from agentlink import slicers
+
+        p = os.path.join(self.tmp, "m2.json")
+        with open(p, "w") as f:
+            json.dump({"nozzle_diameter": ["0.4", "0.4"], "default_nozzle_volume_type": ["Standard"]}, f)
+        self.assertEqual(slicers.nozzle_volume_types(p), ["Standard", "Standard"])
+        with open(p, "w") as f:
+            json.dump({"nozzle_diameter": ["0.4"]}, f)
+        self.assertIsNone(slicers.nozzle_volume_types(p))
+        b = SP.bundle("bambustudio", "Bambu Lab H2D 0.4 nozzle", "My fine PLA", "My PLA")
+        b["machine"]["default_nozzle_volume_type"] = ["Standard", "Standard"]
+        with open(SP.write_profiles(b, os.path.join(self.tmp, "w2"))["machine"]) as f:
+            self.assertEqual(json.load(f)["nozzle_volume_type"], ["Standard", "Standard"])
+
     def test_export_import_round_trip(self):
         b = SP.bundle("bambustudio", "Bambu Lab H2D 0.4 nozzle", "My fine PLA", "Bambu PLA Basic @BBL H2D", "H2D fine")
         name, path = SP.save(self.out, b)

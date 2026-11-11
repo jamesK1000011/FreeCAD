@@ -95,6 +95,9 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900):
     args = [exe, "--slice", "0", "--load-settings", f"{profiles['machine']};{profiles['process']}", "--load-filaments", profiles["filament"], "--outputdir", out_dir]
     if name == "bambustudio":
         args += ["--export-3mf", three_mf]
+        kinds = nozzle_volume_types(profiles["machine"])
+        if kinds:
+            args += ["--nozzle-volume-type", ",".join(kinds)]
     args.append(stl)
     run = _run(args, timeout)
     found = sorted(glob.glob(os.path.join(out_dir, "*.gcode")))
@@ -109,6 +112,26 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900):
         raise RuntimeError(_tail(run))
     shutil.copyfile(found[0], gcode)
     return exe, used
+
+
+def nozzle_volume_types(machine_path):
+    """One nozzle volume type per nozzle for a printer with more than one
+    (an H2D): Bambu Studio's command line does not seed them from the
+    printer as its window does, and stops — or crashes — without them. None
+    for a printer with one nozzle."""
+    try:
+        with open(machine_path, encoding="utf-8") as f:
+            m = json.load(f)
+    except (OSError, ValueError):
+        return None
+    nozzles = m.get("nozzle_diameter")
+    n = len(nozzles) if isinstance(nozzles, list) else 1
+    if n < 2:
+        return None
+    given = m.get("nozzle_volume_type") or m.get("default_nozzle_volume_type") or []
+    if isinstance(given, str):
+        given = [given]
+    return [(given[i] if i < len(given) else (given[-1] if given else "Standard")) for i in range(n)]
 
 
 def _tail(run):

@@ -214,6 +214,10 @@ def write_profiles(data, folder_):
         # (Bambu Studio knows it by the folder); the command line refuses a
         # file that does not.
         part["type"] = k
+        if k == "machine" and "nozzle_volume_type" not in part and part.get("default_nozzle_volume_type"):
+            # The window seeds it from the default; the command line looks
+            # for the key itself.
+            part["nozzle_volume_type"] = part["default_nozzle_volume_type"]
         if k != "machine" and printer:
             cp = list(part.get("compatible_printers") or [])
             for want in (printer, m.get("name")):
