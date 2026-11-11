@@ -51,6 +51,31 @@ def frame(x, y):
     return FreeCAD.Rotation(m)
 
 
+def headless_call(fn, *args, **kw):
+    """An Arch call that reaches for its dialogs when FreeCAD says a window is up
+    (Agent Link's headless renderer loads FreeCADGui): called again as console
+    mode would; a failure says where it came from."""
+    import traceback
+
+    try:
+        return fn(*args, **kw)
+    except AttributeError as e:
+        if "FreeCADGui" not in str(e):
+            where = traceback.extract_tb(e.__traceback__)[-1]
+            raise ToolError("failed", f"{e} ({os.path.basename(where.filename)}:{where.lineno})") from None
+        first = e
+    up = FreeCAD.GuiUp
+    try:
+        FreeCAD.GuiUp = False
+        return fn(*args, **kw)
+    except Exception as e:
+        where = traceback.extract_tb(e.__traceback__)[-1]
+        w0 = traceback.extract_tb(first.__traceback__)[-1]
+        raise ToolError("failed", f"{e} ({os.path.basename(where.filename)}:{where.lineno}); first {first} ({os.path.basename(w0.filename)}:{w0.lineno})") from None
+    finally:
+        FreeCAD.GuiUp = up
+
+
 def is_bim(o):
     return hasattr(o, "IfcType") and not o.isDerivedFrom("Spreadsheet::Sheet")
 
@@ -143,7 +168,7 @@ def tools(session):
         pane = 40.0 if door else 10.0
         parts = ["Frame", "Frame", "Wire0,Wire1", str(depth), "0",
                  "Pane", "Solid panel" if door else "Glass panel", "Wire1", str(pane), str((depth - pane) / 2)]
-        win = Arch.makeWindow(sk, width=width, height=height, parts=parts)
+        win = headless_call(Arch.makeWindow, sk, width=width, height=height, parts=parts)
         if win is None:
             raise ToolError("failed", "FreeCAD could not make the window.")
         return win
@@ -185,8 +210,8 @@ def tools(session):
         w1, w2 = float(a.get("depth", 100)), float(a.get("frame", 50))
         built = preset
         try:
-            win = Arch.makeWindowPreset(preset, width=width, height=height, h1=h1, h2=h2, h3=h3, w1=w1, w2=w2, o1=0.0, o2=w2, placement=pl)
-        except Exception:
+            win = headless_call(Arch.makeWindowPreset, preset, width=width, height=height, h1=h1, h2=h2, h3=h3, w1=w1, w2=w2, o1=0.0, o2=w2, placement=pl)
+        except ToolError:
             # The presets reach for the window's dialogs in some FreeCAD builds:
             # the same window drawn here — a frame round a pane (a door's panel).
             win = None
