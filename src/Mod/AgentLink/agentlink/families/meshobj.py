@@ -485,13 +485,50 @@ def tools(session):
 
     mref = {"type": "string", "description": "The mesh's label; may be left out when there is one."}
     cp = {"copy": {"type": "boolean"}, "name": {"type": "string"}}
+    def unwrap_apart(P, F, iters, weight):
+        import subprocess
+        import sys
+        import tempfile
+
+        d = tempfile.mkdtemp(prefix="agentlink-unwrap-")
+        src, dst = os.path.join(d, "in.npz"), os.path.join(d, "out.npz")
+        np.savez(src, P=P, F=F)
+        code = (
+            "import sys, numpy as np, flatmesh\n"
+            "z = np.load(sys.argv[1])\n"
+            "fl = flatmesh.FaceUnwrapper(np.ascontiguousarray(z['P'], dtype=np.float64), np.ascontiguousarray(z['F'], dtype=np.int64))\n"
+            f"fl.findFlatNodes({iters}, {weight})\n"
+            "b = fl.getFlatBoundaryNodes()\n"
+            "np.savez(sys.argv[2], Q=np.asarray(fl.ze_nodes, float), n=np.array([len(x) for x in b]), B=np.concatenate([np.asarray(x, float) for x in b]) if b else np.zeros((0, 3)))\n"
+        )
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join([x for x in sys.path if x])
+        exe = sys.executable if sys.executable and "python" in os.path.basename(sys.executable).lower() else None
+        if exe is None:
+            raise ToolError("unavailable", "No Python to run the unwrapping in apart from FreeCAD here.")
+        try:
+            r = subprocess.run([exe, "-c", code, src, dst], env=env, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            raise ToolError("failed", "The unwrapping ran over 5 minutes: a coarser tolerance, or a smaller surface.") from None
+        if r.returncode != 0 or not os.path.isfile(dst):
+            why = (r.stderr or "").strip().splitlines()[-1:] or [f"it stopped (code {r.returncode})"]
+            raise ToolError("failed", f"FreeCAD's unwrapping could not lay this surface flat: {why[0]} — split it into simpler faces (a cone or cylinder side unwraps; a whole sphere does not).")
+        z = np.load(dst)
+        Q = np.asarray(z["Q"], float)[:, :2]
+        n, B = list(z["n"]), np.asarray(z["B"], float)
+        bounds, k = [], 0
+        for c in n:
+            bounds.append(B[k:k + int(c), :2])
+            k += int(c)
+        return Q, bounds
+
     def meshobj_unwrap(a):
         """A curved surface laid flat (MeshPart's unwrap): its outline as a flat
         pattern to cut from sheet, with how much it had to stretch."""
-        try:
-            import flatmesh
-        except ImportError:
-            raise ToolError("unavailable", "This FreeCAD has no flatmesh (MeshPart's unwrapping): it was built without it.") from None
+        import importlib.util
+
+        if importlib.util.find_spec("flatmesh") is None:
+            raise ToolError("unavailable", "This FreeCAD has no flatmesh (MeshPart's unwrapping): it was built without it.")
         from .. import flat2d
         from . import picks as _p
 
@@ -509,9 +546,9 @@ def tools(session):
             F = np.array([list(f) for f in m.Topology[1]], int)
         if len(F) < 2:
             raise bad("of: a surface with area.")
-        fl = flatmesh.FaceUnwrapper(P, F)
-        fl.findFlatNodes(int(a.get("iterations", 5)), float(a.get("weight", 0.95)))
-        Q = np.asarray(fl.ze_nodes, float)[:, :2]
+        # flatmesh can bring FreeCAD down on a surface it cannot handle:
+        # it runs in a Python of its own, and a crash there is only a refusal
+        Q, bounds = unwrap_apart(P, F, int(a.get("iterations", 5)), float(a.get("weight", 0.95)))
         def area(X, T):
             A, B, C = X[T[:, 0]], X[T[:, 1]], X[T[:, 2]]
             if X.shape[1] == 2:
@@ -519,7 +556,6 @@ def tools(session):
             return 0.5 * np.linalg.norm(np.cross(B - A, C - A), axis=1)
         a3, a2 = area(P, F), area(Q, F)
         stretch = np.where(a3 > 1e-12, a2 / np.maximum(a3, 1e-12) - 1, 0.0)
-        bounds = [np.asarray(b, float)[:, :2] for b in fl.getFlatBoundaryNodes()]
         items = [{"kind": "line", "points": b.tolist(), "closed": True, "layer": "cut"} for b in bounds if len(b) >= 3]
         out = {"of": ref, "area3d": round(float(a3.sum()), 3), "areaFlat": round(float(a2.sum()), 3),
                "stretch": {"mean": round(float(np.abs(stretch).mean()) * 100, 3), "max": round(float(np.abs(stretch).max()) * 100, 3), "unit": "%"},
