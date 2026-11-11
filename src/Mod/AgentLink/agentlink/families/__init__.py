@@ -41,6 +41,7 @@ NAMES = [
     "assembly_more",
     "cam",
     "draft",
+    "draft_more",
 ]
 
 

@@ -27,3 +27,12 @@
 - Name the faces that must not change first — mating faces, press-fits, threads, a face another part slides on — and say them back to the person.
 - `texture_prepare { body, faces, mode }` writes the part as an STL and a mask of exactly those faces' triangles: `include` textures only them (a grip), `exclude` all but them. It answers the `bumpmesh_texture_file` call to make (BumpMesh's own engine, its library textures, depth `textureHeight`, tile `scaleU`).
 - Check what came back: `texture_check { body, path }` — the depth on each textured face, `leaked` (a face meant to stay plain that moved: fix the mask, texture again), `bare` (meant for texture, barely moved: the texture is finer than `refineLength`), and whether the mesh is closed. Only an `ok` goes to the slicer. A textured part is a mesh: slice it as it is.
+
+## Draft's own objects
+These make the Draft workbench's parametric objects, which the person can edit in Draft later.
+- `draft_shape` makes 2D shapes (wire, rectangle, circle, arc, ellipse, polygon, B-spline, Bezier, point). `face: true` fills a closed one.
+- `draft_dimension` and `draft_label` annotate the model itself, not a drawing (for a drawing: TechDraw, `td_*`).
+- `draft_link_array` makes ortho, polar, circular, path and point arrays as links: light, and they follow the original. `draft_clone` makes a copy that follows.
+- `draft_modify` covers move, rotate, scale, mirror, offset, upgrade (wires → face → solid), downgrade, join and fillet. `copy: true` keeps the originals.
+- `draft_layer` groups objects; `draft_hatch` puts a PAT pattern on a face.
+- `draft_to_sketch` / `draft_from_sketch` convert between Draft and Sketcher. `draft_2d_view` is a 2D projection (with hidden lines, or cut faces only), ready for DXF. `draft_facebinder` makes a surface that follows faces.
