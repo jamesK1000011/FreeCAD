@@ -438,7 +438,7 @@ def tools(session):
             # custom columns: filled by name, kept by FreeCAD across regenerations
             from .. import cells as Cc
 
-            hdr = [bom.getContents(Cc.name(1, c)) for c in range(1, len(bom.columnsNames) + 1)]
+            hdr = [bom.getContents(Cc.name(1, c)).lstrip("'") for c in range(1, len(bom.columnsNames) + 1)]
             name_col = hdr.index("Name") + 1 if "Name" in hdr else 2
             r = 2
             while bom.getContents(Cc.name(r, name_col)):

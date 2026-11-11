@@ -49,7 +49,9 @@ class AssemblyMore(Base):
         self.ok("asm_explode", {"collapse": True})
         b = self.ok("asm_bom")
         self.assertEqual(sorted(p["name"] for p in b["parts"]), ["Pin", "Plate"])
-        self.ok("sheet_read", {"sheet": b["bom"]})
+        cells = {c["cell"]: c.get("value") for c in self.ok("sheet_read", {"sheet": b["bom"]})["cells"]}
+        self.assertIn("Volume (cm3)", cells.values())
+        self.assertTrue(any(isinstance(v, (int, float)) and v > 1 for k, v in cells.items() if k.startswith(("D", "E", "F")) and k not in ("D1", "E1", "F1")))
 
 
 if __name__ == "__main__":
