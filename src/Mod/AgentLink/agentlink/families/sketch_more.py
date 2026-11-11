@@ -67,6 +67,27 @@ def tools(session):
     def sketch(a):
         return pc.sketch_of(doc(), a.get("sketch"), None)
 
+    def kept(sk):
+        """The sketch as it is, to put back if a change fails: some Sketcher
+        calls change it outside the document's undo."""
+        return ([g.copy() for g in sk.Geometry], [sk.getConstruction(i) for i in range(len(sk.Geometry))], [c.clone() if hasattr(c, "clone") else c for c in sk.Constraints])
+
+    def restore(sk, snap):
+        geo, cons_flags, cons = snap
+        try:
+            sk.deleteAllConstraints()
+            sk.deleteAllGeometry()
+            if geo:
+                sk.addGeometry(geo, False)
+                for i, f in enumerate(cons_flags):
+                    if f:
+                        sk.setConstruction(i, True)
+            if cons:
+                sk.addConstraint(cons)
+            doc().recompute()
+        except Exception:
+            pass
+
     def done(sk, tool, extra=None):
         doc().recompute()
         b = pc.broken(doc())
@@ -287,31 +308,50 @@ def tools(session):
                 found[k] = st[k]
         fixed = []
         if a.get("fix"):
-            if found.get("degenerate"):
-                sk.removeDegeneratedGeometries(prec)
-                fixed.append("degenerate geometry removed")
-            if found.get("missingCoincidences"):
-                try:
-                    sk.makeMissingPointOnPointCoincident(False)
-                    fixed.append("missing coincidences added")
-                except Exception as e:
-                    fixed.append(f"coincidences not added: {e}")
-            if found.get("invalidConstraints"):
-                sk.validateConstraints()
-                fixed.append("invalid constraints removed")
-            if st.get("redundant"):
-                sk.autoRemoveRedundants(True)
-                fixed.append("redundant constraints removed")
-            if a.get("autoconstrain"):
-                n0 = len(sk.Constraints)
-                sk.autoconstraint(prec, math.radians(float(a.get("angle", 1))), False)
-                fixed.append(f"{len(sk.Constraints) - n0} constraints added by the auto-constrainer")
-            if st.get("conflicting"):
-                fixed.append(f"conflicting {st['conflicting']} left: say which to drop (sketch_edit deleteConstraints)")
-            out = done(sk, "sketch_validate", {"found": found, "fixed": fixed})
-        else:
-            out = {**st, "found": found, "next": "fix: true repairs what can be (autoconstrain: true adds coincident/horizontal/vertical where the geometry already is)."}
+            snap = kept(sk)
+            try:
+                return repair(sk, prec, found, st, fixed, a)
+            except ToolError:
+                restore(sk, snap)
+                raise
+            except Exception as e:
+                restore(sk, snap)
+                raise ToolError("failed", f"Repair stopped: {e} — the sketch is as it was. Close the gaps by hand (sketch_constrain coincident), or drop autoconstrain.")
+        out = {**st, "found": found, "next": "fix: true repairs what can be (autoconstrain: true adds coincident/horizontal/vertical where the geometry already is)."}
         return out
+
+    def repair(sk, prec, found, st, fixed, a):
+        if found.get("degenerate"):
+            sk.removeDegeneratedGeometries(prec)
+            fixed.append("degenerate geometry removed")
+        if found.get("missingCoincidences"):
+            try:
+                sk.makeMissingPointOnPointCoincident(False)
+                fixed.append("missing coincidences added")
+            except Exception as e:
+                fixed.append(f"coincidences not added: {e}")
+        if found.get("invalidConstraints"):
+            sk.validateConstraints()
+            fixed.append("invalid constraints removed")
+        if st.get("redundant"):
+            sk.autoRemoveRedundants(True)
+            fixed.append("redundant constraints removed")
+        if a.get("autoconstrain"):
+            # the auto-constrainer's steps one by one, leaving out equality
+            # (FreeCAD's whole run can fail there and stop the rest)
+            n0 = len(sk.Constraints)
+            sk.detectMissingPointOnPointConstraints(prec, False)
+            sk.makeMissingPointOnPointCoincident(True)
+            sk.detectMissingVerticalHorizontalConstraints(math.radians(float(a.get("angle", 1))))
+            sk.makeMissingVerticalHorizontal(True)
+            fixed.append(f"{len(sk.Constraints) - n0} coincident / horizontal / vertical constraints added")
+        sk.solve()
+        if getattr(sk, "Redundant", None):
+            sk.autoRemoveRedundants(True)
+            fixed.append("redundant constraints removed")
+        if getattr(sk, "Conflicting", None):
+            raise ToolError("failed", f"Constraints {list(sk.Conflicting)} conflict after the repair — nothing was kept; sketch_edit deleteConstraints the one that is wrong.")
+        return done(sk, "sketch_validate", {"found": found, "fixed": fixed})
 
     geo_ids = {"type": "array", "items": {"type": "integer"}}
     sk_ref = {"type": "string", "description": "The sketch's name; may be left out when there is one."}
