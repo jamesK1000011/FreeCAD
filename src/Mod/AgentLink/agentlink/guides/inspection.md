@@ -20,3 +20,6 @@ FreeCAD's own Inspection feature measures an actual against nominals, point by p
 - A body as the actual is sampled every `spacing` mm (default 1% of its size). Finer finds smaller faults and takes longer.
 - Comparing two versions of a design works the same way: the new body as the actual, the old one as the nominal.
 - A mesh is measured at its vertices. A scan has plenty of them, but an STL exported from CAD has only a few, so a cylinder's wall may go unmeasured. Inspect the body itself instead; it is sampled every `spacing` mm.
+
+## face by face
+`insp_faces` splits an inspection by the nominal's faces: each face's mean offset, min, max and RMS, and how many points are out of tolerance. The faces that are off come first. A face that sits off evenly is moved; one whose min and max are far apart is out of form.

@@ -23,3 +23,4 @@
 - A design table's active row is bound. Change the variants' rows, or switch with `use`. Don't `sheet_set` the active row.
 - An error anywhere after a change (a bad expression, a feature that cannot take the value) is refused, and nothing is kept.
 - `sheet_clear` refuses a range whose aliases are in use. Unbind them first, or pass `force: true`.
+- `sheet_chart` draws a sheet's columns as an SVG chart (line, bar or scatter), with a legend and labels.
