@@ -593,7 +593,11 @@ def tools(session):
             if v:
                 shape = os.path.splitext(os.path.basename(str(v)))[0]
                 break
-        rec = {"name": tc.Label, "shape": shape or "endmill", "diameter": _q(b.Diameter, "mm"), "number": tc.ToolNumber,
+        shape = shape or "endmill"
+        if shape not in SHAPES:
+            alt = shape.replace("_", "-").lower()
+            shape = alt if alt in SHAPES else shape.replace("-", "").replace("_", "").lower()
+        rec = {"name": tc.Label, "shape": shape, "diameter": _q(b.Diameter, "mm"), "number": tc.ToolNumber,
                "feed": _q(tc.HorizFeed, "mm/min"), "plunge": _q(tc.VertFeed, "mm/min"), "rpm": tc.SpindleSpeed}
         for k, prop, unit in (("angle", "CuttingEdgeAngle", "°"), ("tipDiameter", "TipDiameter", "mm"), ("cornerRadius", "TorusRadius", "mm"),
                               ("length", "Length", "mm"), ("cuttingLength", "CuttingEdgeHeight", "mm")):
@@ -602,7 +606,7 @@ def tools(session):
                     rec[k] = _q(getattr(b, prop), unit)
                 except Exception:
                     pass
-        if hasattr(b, "Flutes"):
+        if int(getattr(b, "Flutes", 0) or 0) > 0:
             rec["flutes"] = int(b.Flutes)
         return rec
 
