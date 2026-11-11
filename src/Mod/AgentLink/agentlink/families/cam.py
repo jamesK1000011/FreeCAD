@@ -30,6 +30,14 @@ OPS = {
     "adaptive": "Path.Op.Adaptive",
     "face": "Path.Op.MillFace",
     "drill": "Path.Op.Drilling",
+    "engrave": "Path.Op.Engrave",
+    "helix": "Path.Op.Helix",
+    "slot": "Path.Op.Slot",
+    "deburr": "Path.Op.Deburr",
+    "vcarve": "Path.Op.Vcarve",
+    "thread": "Path.Op.ThreadMilling",
+    "surface": "Path.Op.Surface",
+    "waterline": "Path.Op.Waterline",
 }
 POSTS = ["grbl", "linuxcnc", "mach3_mach4", "marlin", "smoothie", "centroid", "generic"]
 RAPID = 3000.0  # mm/min, for the time estimate where the machine's is not known
@@ -225,7 +233,10 @@ def tools(session):
         kind = str(a.get("kind", "")).lower()
         if kind not in OPS:
             raise ToolError("invalid_input", f"kind: one of {', '.join(OPS)}.")
-        mod = importlib.import_module(OPS[kind])
+        try:
+            mod = importlib.import_module(OPS[kind])
+        except ImportError as e:
+            raise ToolError("unavailable", f"{kind} is not in this FreeCAD's CAM ({e})" + (": 3D surface and waterline need OpenCamLib (ocl) installed." if kind in ("surface", "waterline") else "."))
         model = job.Model.Group[0]
         base_body = s.body(a.get("body")) if a.get("body") else None
         src = base_body or model
@@ -240,8 +251,27 @@ def tools(session):
             op = mod.Create(a.get("name") or kind.capitalize(), None, job)
         if a.get("name"):
             op.Label = a["name"]
+        if a.get("tool"):
+            tc = next((x for x in job.Tools.Group if a["tool"] in (x.Label, x.Name)), None)
+            if tc is None:
+                raise ToolError("not_found", f"tool {a['tool']!r}: the job's tools are {', '.join(x.Label for x in job.Tools.Group)} (cam_tool_add adds one).")
+            op.ToolController = tc
+        if a.get("base"):
+            # what an engraving or V-carve follows: letters (draft_text's ShapeString), a sketch, a wire
+            objs = [picks.find(d, r) for r in a["base"]]
+            if kind == "engrave" and hasattr(op, "BaseShapes"):
+                op.BaseShapes = objs
+            else:
+                op.Base = [(x, [f"Face{i + 1}" for i in range(len(x.Shape.Faces))] or [f"Edge{i + 1}" for i in range(len(x.Shape.Edges))]) for x in objs]
         if a.get("faces") is not None:
             op.Base = [(model, faces_of(src, a["faces"], "faces"))]
+        for k, v in (a.get("props") or {}).items():
+            if k not in op.PropertiesList:
+                raise ToolError("invalid_input", f"props.{k}: {op.Label} has no such property (object_get lists them).")
+            try:
+                setattr(op, k, v)
+            except Exception as e:
+                raise ToolError("invalid_input", f"props.{k} = {v!r}: {e}")
         if kind == "profile":
             op.Side = "Inside" if a.get("side") == "inside" else "Outside"
         if kind == "adaptive":
@@ -453,15 +483,157 @@ def tools(session):
 
     jobref = {"type": "string", "description": "The job's label; may be left out when there is one."}
     faces = {"description": "The faces to work: [\"Face6\"] or queries [{ normal: [0,0,1], z: 12 }] as shape_query takes; left out, the whole part (profile: its outline; drill: every hole)."}
+    # ---- more tools, dressups, setup ----
+
+    SHAPES = ("endmill", "ballend", "bullnose", "v-bit", "chamfer", "drill", "thread-mill", "radius", "dovetail", "reamer", "tap", "slittingsaw", "taperedballnose")
+
+    def make_bit(shape, name):
+        """A tool bit of a shape from CAM's shape library, across the tool
+        systems of 1.0 and later."""
+        shape_file = None
+        for root in (os.path.join(FreeCAD.getResourceDir(), "Mod", "CAM", "Tools", "Shape"), os.path.join(FreeCAD.getResourceDir(), "Mod", "Path", "Tools", "Shape")):
+            f = os.path.join(root, f"{shape}.fcstd")
+            if os.path.isfile(f):
+                shape_file = f
+                break
+        try:
+            import Path.Tool.Bit as PathToolBit  # 1.0
+        except ImportError:
+            PathToolBit = None
+        if PathToolBit is not None:
+            if shape_file is None:
+                raise ToolError("not_found", f"No {shape} shape in this FreeCAD's CAM tool shapes.")
+            return PathToolBit.Factory.Create(name, shape_file)
+        try:
+            from Path.Tool.toolbit import ToolBit  # later releases
+
+            return ToolBit.from_shape_id(shape).attach_to_doc(FreeCAD.ActiveDocument)
+        except Exception as e:
+            raise ToolError("unavailable", f"This FreeCAD's tool bits could not be made here ({e}): cam_tool changes the job's first tool instead.")
+
+    def cam_tool_add(a):
+        d = doc()
+        job = _job(d, a.get("job"))
+        shape = a.get("shape", "endmill")
+        if shape not in SHAPES:
+            raise ToolError("invalid_input", f"shape: one of {', '.join(SHAPES)}.")
+        if a.get("diameter") is None:
+            raise ToolError("invalid_input", "diameter: the tool's, mm — ask the person which tool.")
+        name = a.get("name") or f"{shape} {a['diameter']} mm"
+        bit = make_bit(shape, name)
+        bit.Diameter = f"{picks.num(a['diameter'], 'diameter')} mm"
+        for k, prop, unit in (("angle", "CuttingEdgeAngle", "°"), ("length", "Length", "mm"), ("cuttingLength", "CuttingEdgeHeight", "mm"), ("tipDiameter", "TipDiameter", "mm"), ("cornerRadius", "TorusRadius", "mm")):
+            if a.get(k) is not None and prop in bit.PropertiesList:
+                setattr(bit, prop, f"{float(a[k])} {unit}")
+        if a.get("flutes") is not None and "Flutes" in bit.PropertiesList:
+            bit.Flutes = int(a["flutes"])
+        tc = PathToolController.Create(name, bit)
+        job.Proxy.addToolController(tc)
+        set_tool(tc, {"feed": 600, "plunge": 200, "rpm": 12000, "number": len(job.Tools.Group), **{k: a[k] for k in ("feed", "plunge", "rpm", "number") if a.get(k) is not None}})
+        d.recompute()
+        return {"job": job.Label, "tool": tool_out(tc), "shape": shape, "tools": [x.Label for x in job.Tools.Group], "next": f"cam_op {{ …, tool: \"{tc.Label}\" }} uses it."}
+
+    DRESSUPS = {"tags": "Path.Dressup.Tags", "dogbone": "Path.Dressup.DogboneII", "boundary": "Path.Dressup.Boundary", "array": "Path.Dressup.Array",
+                "ramp": "Path.Dressup.Gui.RampEntry", "leadinout": "Path.Dressup.Gui.LeadInOut"}
+
+    def cam_dressup(a):
+        d = doc()
+        job = _job(d, a.get("job"))
+        op = next((x for x in job.Operations.Group if a.get("op") in (x.Label, x.Name)), None)
+        if op is None:
+            raise ToolError("not_found", f"op {a.get('op')!r}: cam_list lists them.")
+        kind = a.get("kind")
+        if kind not in DRESSUPS:
+            raise ToolError("invalid_input", f"kind: {', '.join(DRESSUPS)} — tags (holding tabs: count, width, height), dogbone (inside corners cleared), boundary (moves kept inside the stock), array (copies), ramp (entry instead of plunging), leadinout.")
+        try:
+            mod = importlib.import_module(DRESSUPS[kind])
+        except ImportError as e:
+            raise ToolError("unavailable", f"The {kind} dressup lives in FreeCAD's GUI and is not there headless ({e}) — add it in the CAM workbench (adaptive ops enter helically anyway).")
+        before = path_stats(list(op.Path.Commands), op.ToolController)
+        try:
+            dr = mod.Create(op)
+        except Exception as e:
+            raise ToolError("failed", f"The {kind} dressup would not go on {op.Label}: {e}")
+        if kind == "tags":
+            for k, prop, unit in (("width", "Width", "mm"), ("height", "Height", "mm"), ("angle", "Angle", "°")):
+                if a.get(k) is not None and prop in dr.PropertiesList:
+                    setattr(dr, prop, f"{float(a[k])} {unit}")
+            if a.get("count") and hasattr(dr.Proxy, "setup"):
+                try:
+                    dr.Proxy.setup(dr, int(a["count"]))
+                except Exception:
+                    pass
+        if kind == "dogbone" and a.get("style") and "Style" in dr.PropertiesList:
+            dr.Style = a["style"]
+        for k, v in (a.get("props") or {}).items():
+            if k in dr.PropertiesList:
+                setattr(dr, k, v)
+        d.recompute()
+        cmds = list(dr.Path.Commands) if getattr(dr, "Path", None) is not None else []
+        if not cmds:
+            raise ToolError("failed", f"The {kind} dressup made no path from {op.Label}.")
+        after = path_stats(cmds, op.ToolController)
+        out = {"dressup": dr.Label, "kind": kind, "on": op.Label, "before": {k: before[k] for k in ("cutMm", "minutes")}, "after": {k: after[k] for k in ("cutMm", "minutes")}}
+        if kind == "tags" and hasattr(dr, "Positions"):
+            out["tags"] = len(dr.Positions)
+        out["note"] = "cam_post writes the dressed path; cam_sim checks it."
+        return out
+
+    def cam_setup(a):
+        d = doc()
+        job = _job(d, a.get("job"))
+        out = {"job": job.Label}
+        if a.get("fixtures"):
+            fx = [str(x).upper() for x in a["fixtures"]]
+            if not all(x in ("G54", "G55", "G56", "G57", "G58", "G59") for x in fx):
+                raise ToolError("invalid_input", "fixtures: work offsets G54 … G59 (each one runs the job again in that offset).")
+            job.Fixtures = fx
+            out["fixtures"] = fx
+        if a.get("coolant"):
+            mode = {"none": "None", "flood": "Flood", "mist": "Mist"}.get(a["coolant"])
+            if mode is None:
+                raise ToolError("invalid_input", "coolant: none, flood or mist.")
+            n = 0
+            for op in job.Operations.Group:
+                if "CoolantMode" in op.PropertiesList:
+                    op.CoolantMode = mode
+                    n += 1
+            out["coolant"] = {"mode": mode, "ops": n}
+        sh = getattr(job, "SetupSheet", None)
+        if sh is not None:
+            if a.get("safeHeight") is not None and "SafeHeightOffset" in sh.PropertiesList:
+                sh.SafeHeightOffset = f"{float(a['safeHeight'])} mm"
+                out["safeHeightOffset"] = a["safeHeight"]
+            if a.get("clearance") is not None and "ClearanceHeightOffset" in sh.PropertiesList:
+                sh.ClearanceHeightOffset = f"{float(a['clearance'])} mm"
+                out["clearanceOffset"] = a["clearance"]
+        if a.get("order"):
+            ops = list(job.Operations.Group)
+            byname = {o.Label: o for o in ops}
+            want = [byname[n] for n in a["order"] if n in byname]
+            if len(want) != len(ops) or len(set(a["order"])) != len(ops):
+                raise ToolError("invalid_input", f"order: every op once — {', '.join(byname)}.")
+            job.Operations.Group = want
+            out["order"] = [o.Label for o in want]
+        d.recompute()
+        return out
+
     return [
         Tool("cam_job", "Start a CAM job for a body: the stock round it (stock { margin mm each side, top mm over, bottom mm under }) and the end mill (tool { diameter mm, feed and plunge mm/min, rpm, number }) — ask the person which mill and feeds; the defaults are gentle. Then cam_op.",
              obj({"body": {"type": "string"}, "tool": {"type": "object"}, "stock": {"type": "object"}, "name": {"type": "string"}}, ["tool"]), cam_job, changes=True),
-        Tool("cam_op", "Add an operation to the job and compute it: kind profile (round the outline, side outside|inside), pocket (clear down to the faces given — a pocket's floor), adaptive (adaptive clearing, side inside|outside; finish: true for a finishing pass), face (face the top flat), drill (the holes, every one when faces are left out). stepDown mm, stepOver %, finalDepth mm (z), stockToLeave mm. Returns the cut and rapid lengths, minutes and the depth it reaches; refused with nothing kept when it makes no cutting moves.",
-             obj({"job": jobref, "kind": {"type": "string", "enum": list(OPS)}, "faces": faces, "body": {"type": "string"}, "side": {"type": "string", "enum": ["outside", "inside"]}, "finish": {"type": "boolean"}, "stepDown": {"type": "number"}, "stepOver": {"type": "number"}, "finalDepth": {"type": "number"}, "stockToLeave": {"type": "number"}, "name": {"type": "string"}}, ["kind"]),
+        Tool("cam_op", "Add an operation to the job and compute it: kind profile (round the outline, side outside|inside), pocket (clear down to the faces given — a pocket's floor), adaptive (adaptive clearing, side inside|outside; finish: true for a finishing pass), face (face the top flat), drill (the holes, every one when faces are left out), engrave (follows base: letters from draft_text, a sketch), helix (holes, helically), slot, deburr (edges chamfered with a V or chamfer tool), vcarve (base letters, a V-bit), thread (thread milling a hole: props ThreadName …), surface / waterline (3D finishing; need OpenCamLib). tool: one of the job's tools by name (cam_tool_add); props { Property: value } sets any of the op's own. stepDown mm, stepOver %, finalDepth mm (z), stockToLeave mm. Returns the cut and rapid lengths, minutes and the depth it reaches; refused with nothing kept when it makes no cutting moves.",
+             obj({"job": jobref, "kind": {"type": "string", "enum": list(OPS)}, "faces": faces, "tool": {"type": "string"}, "base": {"type": "array", "items": {"type": "string"}}, "props": {"type": "object"}, "body": {"type": "string"}, "side": {"type": "string", "enum": ["outside", "inside"]}, "finish": {"type": "boolean"}, "stepDown": {"type": "number"}, "stepOver": {"type": "number"}, "finalDepth": {"type": "number"}, "stockToLeave": {"type": "number"}, "name": {"type": "string"}}, ["kind"]),
              cam_op, changes=True),
         Tool("cam_list", "The job: stock, tool, each operation with its cut length, minutes and depth, and the total time. Changes nothing.", obj({"job": jobref}), cam_list),
         Tool("cam_tool", "Change the job's end mill or feeds (diameter, feed, plunge, rpm, number); every operation is computed again.",
              obj({"job": jobref, "diameter": {"type": "number"}, "feed": {"type": "number"}, "plunge": {"type": "number"}, "rpm": {"type": "number"}, "number": {"type": "integer"}}), cam_tool, changes=True),
+        Tool("cam_tool_add", "Add a tool to the job: shape endmill | ballend | bullnose | v-bit | chamfer | drill | thread-mill | radius | dovetail | …, diameter mm, angle (V-bit, chamfer), tipDiameter, cornerRadius, flutes, feed, plunge (mm/min), rpm, number, name. Ask the person which tools they have.",
+             obj({"job": jobref, "shape": {"type": "string"}, "diameter": {"type": "number"}, "angle": {"type": "number"}, "tipDiameter": {"type": "number"}, "cornerRadius": {"type": "number"}, "flutes": {"type": "integer"},
+                  "length": {"type": "number"}, "cuttingLength": {"type": "number"}, "feed": {"type": "number"}, "plunge": {"type": "number"}, "rpm": {"type": "number"}, "number": {"type": "integer"}, "name": {"type": "string"}}, ["diameter"]), cam_tool_add, changes=True),
+        Tool("cam_dressup", "Dress an operation's path: kind tags (holding tabs so the part stays in the stock: count, width, height, angle), dogbone (inside corners cleared: style), boundary (kept within the stock), array, ramp / leadinout (where this FreeCAD has them headless); props for the dressup's own.",
+             obj({"job": jobref, "op": {"type": "string"}, "kind": {"type": "string"}, "count": {"type": "integer"}, "width": {"type": "number"}, "height": {"type": "number"}, "angle": {"type": "number"}, "style": {"type": "string"}, "props": {"type": "object"}}, ["op", "kind"]), cam_dressup, changes=True),
+        Tool("cam_setup", "The job's setup: fixtures [G54 …] (the job run in each offset), coolant none | flood | mist (every op), safeHeight / clearance offsets mm, order [op labels] to run them in.",
+             obj({"job": jobref, "fixtures": {"type": "array", "items": {"type": "string"}}, "coolant": {"type": "string"}, "safeHeight": {"type": "number"}, "clearance": {"type": "number"}, "order": {"type": "array", "items": {"type": "string"}}}), cam_setup, changes=True),
         Tool("cam_remove", "Remove an operation from the job.", obj({"job": jobref, "op": {"type": "string"}}, ["op"]), cam_remove, changes=True),
         Tool("cam_sim", "Simulate the job's operations on the stock (3-axis, from above): what each removes, rapid moves that go through stock (a crash), cuts into the part (gouges) or under the stock, and what is left over the part — with a picture from above coloured by what is left on the part (blue gouged, green right, red left over). verdict fix or clear. resolution mm per cell (a sixth of the tool by default). Before cam_post.",
              obj({"job": jobref, "resolution": {"type": "number"}, "inline": {"type": "boolean"}, "path": {"type": "string"}}), cam_sim),

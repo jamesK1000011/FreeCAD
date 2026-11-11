@@ -22,3 +22,10 @@ FreeCAD's CAM workbench makes the paths; these tools set it up, read each path b
 - `profile` cuts to the part's bottom: with the stock on a spoil board that is right; on a vice set `finalDepth` above the jaws and hold the part with tabs or leave a skin.
 - The time is an estimate at the feeds given, rapids at 3000 mm/min.
 - The G-code is checked against the stock, not simulated. The person checks it in their controller's preview before it runs; running it is theirs.
+
+## More operations, tools and dressups
+- More kinds of `cam_op`: `engrave` and `vcarve` follow `base` (letters from `draft_text`, a sketch); `helix` mills holes; `slot`; `deburr`; `thread` mills a thread (`props` for its size). `surface` and `waterline` are 3D finishing, and need OpenCamLib.
+- More than one tool: `cam_tool_add { shape: "v-bit", diameter, angle }`, then `cam_op { tool }` per operation. Ask the person what is in their tool rack; never assume.
+- `cam_dressup { op, kind: "tags" }` adds holding tabs, so a profiled part stays in the stock. `dogbone` clears inside corners so a square part fits; `boundary` keeps moves inside the stock. Ramp and lead-in/out need FreeCAD's window; adaptive ops enter helically anyway.
+- `cam_setup` sets work offsets (`fixtures`), coolant, safe heights and the order the ops run in.
+- `props` on any op sets its own FreeCAD properties by name (object_get lists them): for what these tools don't name.
