@@ -11,7 +11,7 @@ import math
 import os
 
 import FreeCAD
-import Mesh
+import Mesh  # noqa: F401 — the family stands on the Mesh module; left out without it
 import Part
 
 import numpy as np
@@ -73,7 +73,7 @@ def evaluation(m):
 
 
 def _curv_map(s, a):
-    ref = a.get("mesh")
+    ref = a.get("mesh") or (a.get("objects") or [None])[0]
     ms = meshes(s.doc)
     o = next((x for x in ms if ref in (x.Label, x.Name)), None) if ref else (ms[-1] if ms else None)
     if o is None:
@@ -81,7 +81,7 @@ def _curv_map(s, a):
     m = o.Mesh
     V_ = np.array([[p.x, p.y, p.z] for p in m.Points], dtype=float)
     F_ = np.array([list(f.PointIndices) for f in m.Facets], dtype=int)
-    c = np.array(m.getCurvaturePerVertex(), dtype=float)  # (k1, k2) per point
+    c = np.array([(k[0], k[1]) for k in m.getCurvaturePerVertex()], dtype=float)  # k1, k2 (and their directions) per point
     kind = a.get("curvature", "mean")
     vals = {"mean": (c[:, 0] + c[:, 1]) / 2, "gauss": c[:, 0] * c[:, 1], "max": np.max(np.abs(c), axis=1)}.get(kind, (c[:, 0] + c[:, 1]) / 2)
     hi = float(np.percentile(np.abs(vals), 95)) or 1.0
@@ -308,19 +308,39 @@ def tools(session):
         op = a.get("op", "union")
         if not (x.Mesh.isSolid() and y.Mesh.isSolid()):
             raise ToolError("invalid_state", "Mesh booleans need closed meshes: meshobj_repair { fix: [\"holes\"] } first.")
+        if op not in ("union", "intersection", "difference"):
+            raise bad("op: union, intersection or difference.")
         mx = x.Mesh.copy()
+        how = "mesh"
         try:
             res = {"union": mx.unite, "intersection": mx.intersect, "difference": mx.difference}[op](y.Mesh)
-        except KeyError:
-            raise bad("op: union, intersection or difference.")
-        except Exception as e:
-            raise ToolError("failed", f"The {op} failed: {e}")
-        if res.CountFacets == 0:
-            raise ToolError("failed", f"The {op} left nothing: the meshes do not overlap that way.")
+        except Exception:
+            res = None
+        # The Mesh module's own booleans often leave an open, broken mesh:
+        # then through solids (OpenCASCADE) and meshed again.
+        if res is None or res.CountFacets == 0 or not res.isSolid() or evaluation(res)[1]:
+            if max(x.Mesh.CountFacets, y.Mesh.CountFacets) > int(a.get("maxFacets", 60000)):
+                raise ToolError("failed", f"The mesh {op} came out broken, and the meshes are too dense to go through solids (maxFacets): meshobj_decimate them first.")
+            import MeshPart
+
+            def solid(m):
+                sh = Part.Shape()
+                sh.makeShapeFromMesh(m.Topology, 0.01)
+                return Part.makeSolid(Part.makeShell(sh.Faces))
+
+            try:
+                sa, sb = solid(x.Mesh), solid(y.Mesh)
+                r = {"union": sa.fuse, "intersection": sa.common, "difference": sa.cut}[op](sb)
+            except Exception as e:
+                raise ToolError("failed", f"The {op} failed both as meshes and as solids: {e}")
+            if r.isNull() or not r.Solids or r.Volume < 1e-9:
+                raise ToolError("failed", f"The {op} left nothing: the meshes do not overlap that way.")
+            res = MeshPart.meshFromShape(Shape=r, LinearDeflection=float(a.get("deflection", 0.05)), AngularDeflection=0.3, Relative=False)
+            how = "through solids (the mesh boolean came out broken)"
         n = new_mesh(res, a.get("name") or f"{x.Label} {op} {y.Label}")
         doc().recompute()
         s.snapshot("meshobj_boolean")
-        return {"mesh": n.Label, "op": op, **reading(res), "step": len(s.steps)}
+        return {"mesh": n.Label, "op": op, "how": how, **reading(res), "step": len(s.steps)}
 
     # ---- sections, pieces, segments, curvature ----
 
@@ -414,7 +434,7 @@ def tools(session):
 
     def meshobj_curvature(a):
         o = mesh_of(a.get("mesh"))
-        c = np.array(o.Mesh.getCurvaturePerVertex(), dtype=float)
+        c = np.array([(k[0], k[1]) for k in o.Mesh.getCurvaturePerVertex()], dtype=float)
         k1, k2 = c[:, 0], c[:, 1]
         mean = (k1 + k2) / 2
         kmax = np.max(np.abs(c), axis=1)

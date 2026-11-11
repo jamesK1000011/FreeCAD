@@ -126,7 +126,7 @@ def _map(s, a):
     """view_render's "inspection" map: the actual coloured by its distances."""
     doc = s.doc
     ins = inspections(doc)
-    ref = a.get("inspection")
+    ref = a.get("inspection") or (a.get("objects") or [None])[0]
     o = next((x for x in ins if ref in (x.Label, x.Name)), None) if ref else (ins[-1] if ins else None)
     if o is None:
         raise ToolError("not_found", "No inspection to show: insp_run first" + (f" ({ref!r} is not one)" if ref else "") + ".")
@@ -155,7 +155,7 @@ def _map(s, a):
             "note": f"{o.Label}: distance to the nominal at each point ({'tolerance' if lo is not None else '± the search radius'} spans the colours; grey is out of reach)."}
 
 
-render.register_map("inspection", _map, "An Inspection feature's distances on its actual (insp_run): inspection names which, else the last.")
+render.register_map("inspection", _map, "An Inspection feature's distances on its actual (insp_run): objects [the inspection], else the last.")
 
 
 def tools(session):
