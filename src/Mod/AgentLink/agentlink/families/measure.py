@@ -387,7 +387,49 @@ def tools(session):
             out["meets"] = out["state"] == "clear" and dist >= picks.num(need, "min")
         return out
 
+    KEEP = {"distance": ("Measure::MeasureDistance", 2, "Distance"), "angle": ("Measure::MeasureAngle", 2, "Angle"),
+            "length": ("Measure::MeasureLength", 0, "Length"), "area": ("Measure::MeasureArea", 0, "Area"),
+            "radius": ("Measure::MeasureRadius", 1, "Radius"), "diameter": ("Measure::MeasureDiameter", 1, "Diameter"),
+            "position": ("Measure::MeasurePosition", 1, "Position")}
+
+    def measure_keep(a):
+        """A measurement kept in the document (FreeCAD's Measure objects): it follows the model."""
+        kind = a.get("kind", "distance")
+        if kind not in KEEP:
+            raise ToolError("invalid_input", f"kind: {', '.join(KEEP)}.")
+        tid, n, out_prop = KEEP[kind]
+        refs = a.get("of") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        if (n and len(refs) != n) or (not n and not refs):
+            raise ToolError("invalid_input", f"of: {n or 'one or more'} element(s), \"Body.Face3\" / \"Body.Edge2\" / \"Body.Vertex1\".")
+        links = []
+        for r in refs:
+            label, sub, _ = picks.resolve(session, r)
+            o = picks.find(session.doc, label)
+            links.append((o, [sub] if sub else []))
+        try:
+            m = session.doc.addObject(tid, kind.capitalize())
+        except Exception as e:
+            raise ToolError("unavailable", f"This FreeCAD has no {tid} ({e}): measure_* tools answer the same without keeping it.") from None
+        if n == 2:
+            m.Element1, m.Element2 = links
+        elif n == 1:
+            m.Element = links[0]
+        else:
+            m.Elements = links
+        m.Label = session.unique(a.get("name") or f"{kind.capitalize()} {' – '.join(refs)}", m)
+        session.doc.recompute()
+        v = getattr(m, out_prop)
+        val = [round(c, 4) for c in v] if hasattr(v, "x") else round(float(getattr(v, "Value", v)), 4)
+        session.snapshot("measure_keep")
+        return {"measure": m.Label, "kind": kind, "of": refs, "value": val,
+                "unit": {"angle": "°", "area": "mm²", "position": "mm"}.get(kind, "mm"), "step": len(session.steps)}
+
+
     return [
+        Tool("measure_keep", "Keep a measurement in the document as FreeCAD's Measure objects do (it follows the model and shows in its tree): kind distance | angle (two elements) | length | area (one or more) | radius | diameter | position (one); of [\"Body.Face3\" …].",
+             obj({"kind": {"type": "string", "enum": ["distance", "angle", "length", "area", "radius", "diameter", "position"]}, "of": {}, "name": {"type": "string"}}, ["of"]), measure_keep, changes=True),
         Tool(
             "shape_query",
             "Find a body's faces, edges or vertices by what they are, as references other tools take (\"Face12\", \"Edge3\"): kind face|edge|vertex; type plane, cylinder, cone, sphere, torus, bspline (faces) or line, circle, ellipse, bspline (edges); normal [x,y,z] (faces, outward) or axis (a line's direction or a circle's axis, either way) within degrees (1 by default); radius, area, length as a number or [least, most]; near [x,y,z] or { point, within } (sorted nearest first); inside { min, max } (the centre); of \"Face6\" takes that face's edges. sort area|radius|length|distance|x|y|z, -key for largest first; limit (20). Trap: numbers change after any modelling step — query again rather than reuse old ones.",
