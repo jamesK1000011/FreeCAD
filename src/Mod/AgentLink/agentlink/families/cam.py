@@ -249,6 +249,10 @@ def tools(session):
                 d.removeObject(o.Name)
             d.recompute()
             kind = str(a.get("kind", "")).lower()
+            import traceback
+
+            fr = traceback.extract_tb(e.__traceback__)[-1]
+            e = f"{e} ({os.path.basename(fr.filename)}:{fr.lineno})"
             raise ToolError("failed", f"The {kind} would not compute: {e}" + (f" — {HINTS[kind]}." if kind in HINTS else ".") + " Nothing was kept.") from None
 
     def make_op(d, mod, kind, a, job):
