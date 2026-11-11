@@ -256,11 +256,13 @@ def tools(session):
             raise ToolError("failed", f"The {kind} would not compute: {e}" + (f" — {HINTS[kind]}." if kind in HINTS else ".") + " Nothing was kept.") from None
 
     def make_op(d, mod, kind, a, job):
-        if kind == "drill":
-            # FreeCAD 1.0's Drilling.Create looks for holes before the op knows
-            # its model and fails; build it the way newer releases do.
-            op = d.addObject("Path::FeaturePython", a.get("name") or "Drill")
-            op.Proxy = mod.ObjectDrilling(op, a.get("name") or "Drill", job)
+        cls = {"drill": "ObjectDrilling", "helix": "ObjectHelix", "thread": "ObjectThreadMilling"}.get(kind)
+        if cls and hasattr(mod, cls):
+            # FreeCAD 1.0's hole ops look for holes in Create before the op knows
+            # its model, and fail; built the way newer releases do.
+            nm = a.get("name") or kind.capitalize()
+            op = d.addObject("Path::FeaturePython", nm)
+            op.Proxy = getattr(mod, cls)(op, nm, job)
             if getattr(op.Proxy, "model", None) is None:
                 op.Proxy.job, op.Proxy.model = job, job.Model.Group
             return op
@@ -320,7 +322,7 @@ def tools(session):
         if kind == "adaptive":
             op.Side = "Inside" if a.get("side", "inside") == "inside" else "Outside"
             op.OperationType = "Profile" if a.get("finish") else "Clearing"
-        if kind == "drill" and a.get("faces") is None:
+        if kind in ("drill", "helix", "thread") and a.get("faces") is None:
             op.Proxy.findAllHoles(op)
             if not op.Base:
                 raise ToolError("failed", f"No holes the tool ({_q(job.Tools.Group[0].Tool.Diameter, 'mm')} mm) fits, upright, in {model.Label}: give faces, or a smaller tool (cam_tool). Nothing was kept.")
