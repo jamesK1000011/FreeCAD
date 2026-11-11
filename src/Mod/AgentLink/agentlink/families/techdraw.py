@@ -370,6 +370,35 @@ def resolve_ref(v, r, cache, want="any"):
         if d > max(0.05, 0.002 * (source_shapes(v).BoundBox.DiagonalLength)):
             raise ToolError("not_found", f"No vertex of {v.Label} at {r['point']} (nearest {d:.3g} mm off): a hidden point, or one this view does not draw.")
         return f"Vertex{k}"
+    if "center" in r or "centre" in r:
+        # a circle's centre: its vertex if the view has one there, else a
+        # cosmetic vertex made at it (it follows the part)
+        c = r.get("center") or r.get("centre") or {}
+        en = resolve_ref(v, {"circle": c}, cache)
+        cu = edges_of(v)[int(en[4:])].Curve
+        ctr = getattr(cu, "Location", None) or cu.Center
+        verts = vertices_of(v)
+        for k, q in enumerate(verts):
+            if math.hypot(q.x - ctr.x, q.y - ctr.y) < 1e-3 * max(1.0, sc):
+                return f"Vertex{k}"
+        src = source_shapes(v)
+        best = None
+        for e in src.Edges:
+            ec = getattr(e, "Curve", None)
+            if ec is None or type(ec).__name__ != "Circle":
+                continue
+            loc = getattr(ec, "Location", None) or ec.Center
+            gx, gy = to_view(fr, v, loc)
+            dd = math.hypot(gx - ctr.x, gy - ctr.y)
+            if best is None or dd < best[0]:
+                best = (dd, loc)
+        if best is None:
+            raise ToolError("not_found", "That circle's centre is not found on the part.")
+        v.makeCosmeticVertex3d(best[1])
+        v.recompute()
+        verts = vertices_of(v)
+        k = min(range(len(verts)), key=lambda i: math.hypot(verts[i].x - ctr.x, verts[i].y - ctr.y))
+        return f"Vertex{k}"
     if "circle" in r:
         c = r["circle"] or {}
         dia = c.get("diameter")
@@ -377,11 +406,12 @@ def resolve_ref(v, r, cache, want="any"):
         hits = []
         for i, e in enumerate(edges_of(v)):
             cu = getattr(e, "Curve", None)
-            if not (hasattr(cu, "Radius") and hasattr(cu, "Center")):
+            if not (hasattr(cu, "Radius") and (hasattr(cu, "Location") or hasattr(cu, "Center"))):
                 continue
             if dia is not None and abs(2 * cu.Radius / sc - float(dia)) > max(0.01, 0.002 * float(dia)):
                 continue
-            hits.append((math.hypot(cu.Center.x - near[0], cu.Center.y - near[1]) if near else 0.0, i))
+            ctr = getattr(cu, "Location", None) or cu.Center
+            hits.append((math.hypot(ctr.x - near[0], ctr.y - near[1]) if near else 0.0, i))
         if not hits:
             raise ToolError("not_found", f"No circle{f' of ⌀{dia}' if dia else ''} in {v.Label} — td_geometry {{ kind: \"circles\" }} lists them.")
         hits.sort()
