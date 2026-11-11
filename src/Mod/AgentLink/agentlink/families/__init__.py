@@ -28,6 +28,7 @@ NAMES = [
     "slicing",
     "parts",
     "drawing",
+    "techdraw",
     "electronics",
     "share",
     "view",
