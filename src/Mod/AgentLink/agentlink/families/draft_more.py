@@ -229,6 +229,82 @@ def tools(session):
 
     # ---- modify ----
 
+    def pointed(o):
+        if not hasattr(o, "Points"):
+            raise bad(f"{o.Label} is not a Draft wire or B-spline (they hold points).")
+        pl = o.Placement
+        return [pl.multVec(p) for p in o.Points], pl
+
+    def set_points(o, pts, pl):
+        inv = pl.inverse()
+        o.Points = [inv.multVec(p) for p in pts]
+
+    def edit_points(op, objs, a):
+        """The point edits Draft does by hand: split, stretch, trim/extend, wire ↔ B-spline."""
+        if op == "split":
+            if len(objs) != 1:
+                raise bad("split: one wire.")
+            o = objs[0]
+            pts, pl = pointed(o)
+            k = int(a.get("edge", 0))
+            at = v3(a.get("at"), "at") if a.get("at") is not None else None
+            if not 1 <= k <= len(pts) - 1:
+                raise bad(f"edge: which segment, 1 … {len(pts) - 1}.")
+            cut = at if at is not None else (pts[k - 1] + pts[k]) * 0.5
+            first, second = pts[:k] + [cut], [cut] + pts[k:]
+            set_points(o, first, pl)
+            if hasattr(o, "Closed"):
+                o.Closed = False
+            other = Draft.make_wire(second, closed=False)
+            other.Label = s.unique(f"{o.Label} split", other)
+            return [o, other]
+        if op == "stretch":
+            box = a.get("box")
+            if not (isinstance(box, list) and len(box) == 2):
+                raise bad("box: [[xmin, ymin, zmin], [xmax, ymax, zmax]] — the points inside it move.")
+            lo, hi = v3(box[0], "box"), v3(box[1], "box")
+            by = v3(a.get("by"), "by")
+            moved = 0
+            for o in objs:
+                pts, pl = pointed(o)
+                new = []
+                for p in pts:
+                    inside = all(min(getattr(lo, c), getattr(hi, c)) - 1e-9 <= getattr(p, c) <= max(getattr(lo, c), getattr(hi, c)) + 1e-9 for c in "xyz")
+                    new.append(p + by if inside else p)
+                    moved += inside
+                set_points(o, new, pl)
+            if not moved:
+                raise ToolError("failed", "No point lies inside the box: nothing was stretched.")
+            return objs
+        if op == "extend":
+            by = float(a.get("by", 0))
+            for o in objs:
+                pts, pl = pointed(o)
+                if len(pts) < 2:
+                    continue
+                if a.get("end", "end") == "start":
+                    d = pts[0] - pts[1]
+                    if d.Length + by <= 0:
+                        raise bad("by: trims past the whole first segment.")
+                    pts[0] = pts[1] + d.normalize() * (d.Length + by)
+                else:
+                    d = pts[-1] - pts[-2]
+                    if d.Length + by <= 0:
+                        raise bad("by: trims past the whole last segment.")
+                    pts[-1] = pts[-2] + d.normalize() * (d.Length + by)
+                set_points(o, pts, pl)
+            return objs
+        made = []
+        for o in objs:
+            pts, _pl = pointed(o)
+            closed = bool(getattr(o, "Closed", False))
+            n = Draft.make_bspline(pts, closed=closed) if op == "to_bspline" else Draft.make_wire(pts, closed=closed)
+            n.Label = s.unique(o.Label, n)
+            made.append(n)
+            if a.get("delete", True):
+                doc().removeObject(o.Name)
+        return made
+
     def draft_modify(a):
         active()
         op = a.get("op")
@@ -261,8 +337,10 @@ def tools(session):
             if len(objs) != 2:
                 raise bad("fillet: two lines or wires that meet.")
             r = Draft.make_fillet(objs, float(a.get("radius", 5)), chamfer=bool(a.get("chamfer")), delete=bool(a.get("delete")))
+        elif op in ("split", "stretch", "extend", "to_bspline", "to_wire"):
+            r = edit_points(op, objs, a)
         else:
-            raise bad("op: move (by), rotate (angle, center, axis), scale (factor, center), mirror (from, to: a line in the plane), offset (by: a vector to the first vertex's side), upgrade, downgrade, join, fillet (radius, chamfer).")
+            raise bad("op: move (by), rotate (angle, center, axis), scale (factor, center), mirror (from, to: a line in the plane), offset (by: a vector to the first vertex's side), upgrade, downgrade, join, fillet (radius, chamfer), split (at a point, edge n), stretch (box [[min], [max]], by), extend (by mm, end start | end; negative trims), to_bspline, to_wire.")
         made = [o for o in doc().Objects[n0:]]
         res = made or ([r] if r is not None and not isinstance(r, (list, tuple, bool)) else list(r) if isinstance(r, (list, tuple)) else objs)
         res = [(x[0] if x else None) if isinstance(x, (list, tuple)) else x for x in res if x is not None]
@@ -378,9 +456,9 @@ def tools(session):
                   "symmetry": {"type": "integer"}, "path": {"type": "string"}, "align": {"type": "boolean"}, "points": {"type": "string"}, "link": {"type": "boolean"}, "name": {"type": "string"}}, ["object"]), draft_link_array, changes=True),
         Tool("draft_clone", "A Draft clone: an exact copy that follows the original; scale (a factor or [x,y,z]), move [x,y,z].",
              obj({"object": {"type": "string"}, "scale": {}, "move": xyz, "name": {"type": "string"}}, ["object"]), draft_clone, changes=True),
-        Tool("draft_modify", "Draft's modify tools on objects: op move (by) | rotate (angle, center, axis) | scale (factor, center) | mirror (from, to) | offset (by) | upgrade (wires → faces → solids) | downgrade | join (wires) | fillet (two lines: radius, chamfer); copy: true leaves the originals.",
+        Tool("draft_modify", "Draft's modify tools on objects: op move (by) | rotate (angle, center, axis) | scale (factor, center) | mirror (from, to) | offset (by) | upgrade (wires → faces → solids) | downgrade | join (wires) | fillet (two lines: radius, chamfer) | split (a wire at point at, on segment edge n) | stretch (the points inside box [[min], [max]] moved by) | extend (by mm at end start | end; negative trims) | to_bspline | to_wire; copy: true leaves the originals.",
              obj({"op": {"type": "string"}, "objects": {"type": "array", "items": {"type": "string"}}, "by": xyz, "angle": {"type": "number"}, "center": xyz, "axis": xyz, "factor": {}, "from": xyz, "to": xyz,
-                  "radius": {"type": "number"}, "chamfer": {"type": "boolean"}, "copy": {"type": "boolean"}, "delete": {"type": "boolean"}}, ["op", "objects"]), draft_modify, changes=True),
+                  "radius": {"type": "number"}, "chamfer": {"type": "boolean"}, "copy": {"type": "boolean"}, "delete": {"type": "boolean"}, "at": xyz, "edge": {"type": "integer"}, "box": {"type": "array"}, "end": {"type": "string", "enum": ["start", "end"]}}, ["op", "objects"]), draft_modify, changes=True),
         Tool("draft_layer", "A Draft layer (made if new) and objects put on it: name, objects, lineWidth.",
              obj({"name": {"type": "string"}, "objects": {"type": "array", "items": {"type": "string"}}, "lineWidth": {"type": "number"}}, ["name"]), draft_layer, changes=True),
         Tool("draft_hatch", "Hatch a face or a 2D view with a PAT pattern: object, pattern (default Diagonal4; FreeCAD's FCPAT.pat lists them, or file: your own .pat), scale, rotation.",
