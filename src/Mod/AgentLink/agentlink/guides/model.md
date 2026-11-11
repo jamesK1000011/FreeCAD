@@ -14,3 +14,11 @@
 - A refusal for "changed nothing" means the pieces do not overlap: move them (`part_transform move`) and try again.
 - Fillets bigger than a face beside the edge, or shells thinner than a fillet, fail: smaller sizes, or the shell before the fillet.
 - Loft profiles with different edge counts twist; start each at the matching corner.
+
+## Wires, splitting, repair
+- `part_wire` makes FreeCAD's own parametric curves: a helix as a sweep path (a spring, a thread), a spiral, a polygon, a plane to slice with, a B-spline through points.
+- `part_split { mode: "slice", bodies: [one], tools: [a plane or bodies] }` cuts a body into pieces; `explode: true` makes each its own body. `fragments` keeps every overlap region apart (for multi-material prints); `xor` keeps what is in an odd number.
+- `part_compound` groups bodies without fusing them, or `explode`s a multi-solid body.
+- `part_refine` merges faces split by booleans; `fix: true` also repairs tolerances and closes a shell into a solid.
+- `part_attach` makes a primitive follow a face. `part_face` is a face from closed wires, `part_ruled` a surface between two edges, `part_project` puts a wire onto a face.
+- `part_slices` gives a stack of cross-sections: outlines and areas. `part_from_mesh` turns a closed mesh into a solid. Curved areas stay faceted; for a clean model, fit features instead.

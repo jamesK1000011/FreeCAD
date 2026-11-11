@@ -6,8 +6,6 @@
 # ruled surfaces, projection onto a face, a stack of cross-sections, a
 # primitive attached to a face, and a mesh made a solid.
 
-import math
-
 import FreeCAD
 import Part
 
@@ -296,18 +294,26 @@ def tools(session):
         edges = src.Shape.Edges
         if not edges:
             raise bad(f"{src.Label} has no edges to project.")
-        try:
-            if d is not None:
-                res = face.makeParallelProjection(Part.Compound(edges), d)
-            else:
-                res = face.project(edges)
-        except Exception as e:
-            raise ToolError("failed", f"The projection failed: {e}")
+        # OCCT projects one edge or wire at a time
+        got, missed = [], 0
+        for w in (src.Shape.Wires or [Part.Wire([e]) for e in edges]):
+            try:
+                r = face.makeParallelProjection(w, d) if d is not None else face.project(w.Edges)
+                if not r.isNull() and r.Edges:
+                    got += r.Edges
+                else:
+                    missed += 1
+            except Exception:
+                missed += 1
+        res = Part.Compound(got) if got else Part.Shape()
         if res.isNull() or not res.Edges:
             raise ToolError("failed", "Nothing landed on the face: the shape misses it in that direction.")
         o = new_obj("Part::Feature", a.get("name") or f"{src.Label} on face")
         o.Shape = res
-        return added(o, "part_project", {"onto": ref, "how": "along " + str(geo.vec(d)) if d is not None else "along the face's normals"})
+        extra = {"onto": ref, "how": ("along " + str(geo.vec(d))) if d is not None else "along the face's normals"}
+        if missed:
+            extra["missed"] = f"{missed} wire(s) did not land on the face"
+        return added(o, "part_project", extra)
 
     def part_slices(a):
         o = picks.solid_body(s, a.get("body"))
