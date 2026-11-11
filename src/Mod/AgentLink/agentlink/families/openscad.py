@@ -94,16 +94,16 @@ def hull_here(shapes, tol=0.05):
         V, T = hull3d.hull(P)
     except hull3d.HullError as e:
         raise bad(f"objects: {e}.") from None
-    faces = []
-    for a, b, c in T:
-        pa, pb, pc = (FreeCAD.Vector(*V[i]) for i in (a, b, c))
-        if (pb - pa).cross(pc - pa).Length > 1e-12:
-            faces.append(Part.Face(Part.makePolygon([pa, pb, pc, pa])))
-    sol = Part.makeSolid(Part.makeShell(faces))
-    try:
-        sol = sol.removeSplitter()
-    except Exception:
-        pass
+    # built through a mesh (FreeCAD's own code, quick for thousands of
+    # triangles); flat sides are merged only when there are few faces
+    sh = Part.Shape()
+    sh.makeShapeFromMesh(([FreeCAD.Vector(*v) for v in V], [tuple(int(i) for i in tr) for tr in T]), 1e-6)
+    sol = Part.makeSolid(Part.Shell(sh.Faces))
+    if len(T) <= 400:
+        try:
+            sol = sol.removeSplitter()
+        except Exception:
+            pass
     return sol
 
 
