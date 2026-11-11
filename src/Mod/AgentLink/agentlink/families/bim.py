@@ -59,8 +59,8 @@ def headless_call(fn, *args, **kw):
 
     try:
         return fn(*args, **kw)
-    except AttributeError as e:
-        if "FreeCADGui" not in str(e):
+    except Exception as e:
+        if "Gui" not in str(e):
             where = traceback.extract_tb(e.__traceback__)[-1]
             raise ToolError("failed", f"{e} ({os.path.basename(where.filename)}:{where.lineno})") from None
         first = e
