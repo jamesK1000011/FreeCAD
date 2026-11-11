@@ -1209,7 +1209,15 @@ def tools(session):
         ln.X, ln.Y = p_from[0] / sc, -p_from[1] / sc
         start = V(0, 0, 0)
         end = V(to_page[0] - (vx + p_from[0]), to_page[1] - (vy - p_from[1]), 0)
-        ln.WayPoints = [start, end]
+        # a slanted run, then a short horizontal shoulder into the frame, as
+        # drawn by hand; TechDraw would flatten a two-point leader whole
+        shoulder = 5.0 if end.x >= 0 else -5.0
+        elbow = V(end.x - shoulder, end.y, 0) if abs(end.x) > 6 else V(end.x, end.y, 0)
+        ln.WayPoints = [start, elbow, end] if elbow != end else [start, end]
+        try:
+            ln.AutoHorizontal = False
+        except Exception:
+            pass
         for prop, want in (("StartSymbol", ("Filled Arrow", "FILLED_ARROW")), ("EndSymbol", ("None", "No Symbol", "NONE"))):
             for w in want:
                 try:
