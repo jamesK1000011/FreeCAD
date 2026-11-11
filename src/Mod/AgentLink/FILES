@@ -10,6 +10,7 @@ agentlink/__init__.py
 agentlink/boxes.py
 agentlink/ccx_io.py
 agentlink/cells.py
+agentlink/charts.py
 agentlink/data/slicer-minimal.json
 agentlink/embeds.py
 agentlink/facepick.py
@@ -125,6 +126,7 @@ tests/test_assembly_more.py
 tests/test_cam.py
 tests/test_ccx_io_more.py
 tests/test_cells.py
+tests/test_charts.py
 tests/test_cut.py
 tests/test_doc.py
 tests/test_draft.py

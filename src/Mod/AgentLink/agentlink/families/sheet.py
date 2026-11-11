@@ -734,6 +734,54 @@ def tools(session):
         raise bad("action: make, use, add or list.")
 
     cell_val = {"type": ["number", "string", "null"]}
+    def sheet_chart(a):
+        """A chart of a sheet's columns as SVG (the Plot workbench's job, headless)."""
+        from .. import charts
+
+        ss = find(doc(), a.get("sheet"))
+
+        def column(rng):
+            cells = C.cells_in(range_or_refuse(rng))
+            vals = []
+            for c in cells:
+                v, _u, err = value_of(ss, c)
+                vals.append(None if err or v in ("", None) else v)
+            return vals
+
+        kind = a.get("kind", "line")
+        ys = a.get("y") or []
+        if isinstance(ys, str):
+            ys = [ys]
+        if not ys:
+            raise bad("y: one or more ranges of values, \"B2:B20\".")
+        names = a.get("names") or []
+        x = column(a["x"]) if a.get("x") else None
+        series = []
+        for k, rng in enumerate(ys):
+            vals = column(rng)
+            num = [v if isinstance(v, (int, float)) and not isinstance(v, bool) else None for v in vals]
+            if all(v is None for v in num):
+                raise bad(f"y: {rng} holds no numbers.")
+            name = names[k] if k < len(names) else rng
+            if kind == "scatter":
+                if x is None:
+                    raise bad("x: a scatter needs x values too.")
+                series.append({"name": name, "points": [[xv, yv] for xv, yv in zip(x, num) if isinstance(xv, (int, float)) and yv is not None]})
+            else:
+                series.append({"name": name, "values": num})
+        try:
+            text = charts.svg(series, x=x, kind=kind, title=a.get("title", ""), xlabel=a.get("xlabel", ""), ylabel=a.get("ylabel", ""))
+        except ValueError as e:
+            raise bad(str(e)) from None
+        p = a.get("path") or f"{ss.Label.replace(' ', '_')}-chart.svg"
+        p = p if os.path.isabs(p) else os.path.join(s.out_dir, p)
+        if not p.lower().endswith(".svg"):
+            p += ".svg"
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(text)
+        return {"sheet": ss.Label, "path": p, "kind": kind, "series": [sr["name"] for sr in series], "points": max(len(sr.get("values") or sr.get("points")) for sr in series)}
+
     return [
         Tool("sheet_new", "Make an empty spreadsheet: name. Answers how expressions refer to its cells (Sheet.A1, Sheet.<alias>).", obj({"name": {"type": "string"}}), sheet_new, changes=True),
         Tool("sheet_list", "The spreadsheets: cells used, their range, aliases and what uses them, design tables. Changes nothing.", obj({}), sheet_list),
@@ -750,6 +798,9 @@ def tools(session):
              obj({"path": {"type": "string"}, "sheet": {"type": "string"}, "delimiter": {"type": "string"}, "replace": {"type": "boolean"}}, ["path"]), sheet_import, changes=True),
         Tool("sheet_export", "Write a sheet's computed values to a CSV / TSV file: path (default <sheet>.csv in the out folder), delimiter. Changes nothing in the document.",
              obj({"sheet": {"type": "string"}, "path": {"type": "string"}, "delimiter": {"type": "string"}}), sheet_export),
+        Tool("sheet_chart", "A chart of a sheet's columns, written as SVG: kind line | bar | scatter, x (a range of labels or numbers), y [ranges of values], names, title, xlabel, ylabel, path.",
+             obj({"sheet": {"type": "string"}, "kind": {"type": "string", "enum": ["line", "bar", "scatter"]}, "x": {"type": "string"}, "y": {}, "names": {"type": "array", "items": {"type": "string"}},
+                  "title": {"type": "string"}, "xlabel": {"type": "string"}, "ylabel": {"type": "string"}, "path": {"type": "string"}}, ["y"]), sheet_chart),
         Tool("sheet_table", "Design tables (configurations), FreeCAD's own kind: action make { params [names], configs [{ name, values [..] | { param: value } }], units { param: \"mm\" | \"deg\" | \"\" } (numbers default mm), sheet (else a new one), at, owner (the object carrying the switch; default the one Body, else a group holding the sheet), property (default Configuration), active } — then bind properties to <Sheet>.<param> with param_bind; use { config } switches and answers the bodies; add { config, values } adds a row; list.",
              obj({"action": {"type": "string", "enum": ["make", "use", "add", "list"]}, "sheet": {"type": "string"}, "name": {"type": "string"}, "at": {"type": "string"}, "params": {"type": "array", "items": {"type": "string"}},
                   "configs": {"type": "array", "items": {"type": "object"}}, "units": {"type": "object", "additionalProperties": {"type": "string"}}, "owner": {"type": "string"}, "property": {"type": "string"}, "active": {"type": "string"},
