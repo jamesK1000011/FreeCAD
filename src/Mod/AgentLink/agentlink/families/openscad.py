@@ -76,25 +76,22 @@ def hull_here(shapes, tol=0.05):
     """The convex hull of shapes' points (tessellated) as a solid."""
     import numpy as np
 
-    try:
-        from scipy.spatial import ConvexHull
-    except ImportError:
-        raise ToolError("unavailable", "A hull without OpenSCAD needs scipy in FreeCAD's Python.") from None
+    from .. import hull3d
+
     pts = []
     for sh in shapes:
         v, _f = sh.tessellate(tol)
         pts += [(p.x, p.y, p.z) for p in v]
         pts += [(p.Point.x, p.Point.y, p.Point.z) for p in sh.Vertexes]
-    P = np.unique(np.round(np.array(pts, float), 9), axis=0)
-    if len(P) < 4:
-        raise bad("objects: not enough points for a solid hull.")
-    h = ConvexHull(P)
+    try:
+        V, T = hull3d.hull(np.round(np.array(pts, float), 9))
+    except hull3d.HullError as e:
+        raise bad(f"objects: {e}.") from None
     faces = []
-    for simplex, eq in zip(h.simplices, h.equations):
-        a, b, c = (FreeCAD.Vector(*P[i]) for i in simplex)
-        if (b - a).cross(c - a).dot(FreeCAD.Vector(*eq[:3])) < 0:
-            b, c = c, b
-        faces.append(Part.Face(Part.makePolygon([a, b, c, a])))
+    for a, b, c in T:
+        pa, pb, pc = (FreeCAD.Vector(*V[i]) for i in (a, b, c))
+        if (pb - pa).cross(pc - pa).Length > 1e-12:
+            faces.append(Part.Face(Part.makePolygon([pa, pb, pc, pa])))
     sol = Part.makeSolid(Part.makeShell(faces))
     try:
         sol = sol.removeSplitter()

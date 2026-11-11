@@ -91,6 +91,7 @@ agentlink/guides/surface.md
 agentlink/guides/techdraw.md
 agentlink/guides/thread.md
 agentlink/guides/view.md
+agentlink/hull3d.py
 agentlink/iso286.py
 agentlink/kicad.py
 agentlink/launcher_check.py
@@ -136,6 +137,7 @@ tests/test_files.py
 tests/test_fitting.py
 tests/test_flat2d.py
 tests/test_guides.py
+tests/test_hull3d.py
 tests/test_inspection.py
 tests/test_iso286.py
 tests/test_mass.py
