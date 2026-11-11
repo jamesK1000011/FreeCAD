@@ -29,3 +29,4 @@
 - `td_centermarks` puts thin chain crosses on the holes and round edges of views; `extend` is how far past the circle they run.
 - A section's cut faces are hatched in exports by themselves. `td_hatch { view, faces, spacing, angle }` hatches other faces of the part; holes stay clear. A face seen edge-on has nothing to hatch, and the answer says so.
 - `td_weld` puts a weld symbol on a leader from a feature (fillet, V, bevel, square, U, J, plug, spot, seam, flare, backing, surfacing), with size, length or pitch, arrow or other side, all-around, field weld and a tail note.
+- `td_dimset` dimensions several points at once along one direction: `chain` (each to the next) or `baseline` (each from the first, in stacked lanes). A hole is dimensioned to its centre with `{ center: { diameter, near } }`, which also works in `td_dim`.
