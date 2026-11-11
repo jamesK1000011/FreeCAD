@@ -14,3 +14,6 @@ These tools work on FreeCAD's mesh objects: an imported STL, a body meshed with 
 - Each change replaces the mesh in place: `copy: true` keeps the original beside it.
 - A mesh boolean needs both meshes closed (`meshobj_info` → `solid: true`).
 - `meshobj_trim` leaves a hole where it cut: `close: true` fills it.
+
+## laid flat
+`meshobj_unwrap { of: "Body.Face3" }` lays a surface flat as a cutting pattern (sheet metal, fabric, leather). Cylinder and cone sides roll out exactly: a cone frustum gives the two radii and the angle of its fan. Other surfaces go through FreeCAD's unwrapping where it works, which reports how much they stretch. `path` writes the pattern as SVG or DXF.
