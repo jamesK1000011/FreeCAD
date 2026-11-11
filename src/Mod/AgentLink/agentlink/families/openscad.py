@@ -28,20 +28,40 @@ def console_mode():
     window is up (Agent Link's headless renderer loads FreeCADGui)."""
     up = FreeCAD.GuiUp
     FreeCAD.GuiUp = False
+    # A CSG file can call OpenSCAD (hull, minkowski, import): FreeCAD then
+    # searches for it through Finder on a Mac — kept to the plain search here.
+    try:
+        import OpenSCADUtils as U
+
+        search, U.searchforopenscadexe = U.searchforopenscadexe, (lambda: exe())
+    except ImportError:
+        U = None
     try:
         yield
     finally:
         FreeCAD.GuiUp = up
+        if U is not None:
+            U.searchforopenscadexe = search
+
+
+PREF = "User parameter:BaseApp/Preferences/Mod/OpenSCAD"
 
 
 def exe():
-    try:
-        import OpenSCADUtils as U
+    """The OpenSCAD program: FreeCAD's preference, the PATH, or the usual app
+    folders. Never FreeCAD's own search, which on a Mac asks Finder through
+    AppleScript and waits on a permission prompt."""
+    import shutil
 
-        p = U.getopenscadexe()
-    except Exception:
-        p = None
-    return p if p and os.path.isfile(p) else None
+    cands = [FreeCAD.ParamGet(PREF).GetString("openscadexecutable"), shutil.which("openscad"),
+             "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD", os.path.expanduser("~/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD"),
+             "/opt/homebrew/bin/openscad", "/usr/local/bin/openscad", "/usr/bin/openscad"]
+    for p in cands:
+        if p and os.path.isfile(p):
+            # FreeCAD's own calls then find it without searching.
+            FreeCAD.ParamGet(PREF).SetString("openscadexecutable", p)
+            return p
+    return None
 
 
 def need_exe(what):
@@ -142,7 +162,8 @@ def tools(session):
         import OpenSCADUtils as U
 
         try:
-            out = U.callopenscadstring(code, "csg")
+            with console_mode():
+                out = U.callopenscadstring(code, "csg")
         except Exception as e:
             raise ToolError("failed", f"OpenSCAD refused the code: {e}") from None
         if not out or not os.path.isfile(out):
@@ -227,7 +248,7 @@ def tools(session):
             try:
                 import OpenSCADUtils as U
 
-                out["version"] = U.getopenscadversion(p)
+                out["version"] = U.getopenscadversion(p)  # given the path: no search
             except Exception as e:
                 out["version"] = f"unknown ({e})"
         else:
