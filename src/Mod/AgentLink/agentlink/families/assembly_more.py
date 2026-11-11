@@ -469,6 +469,34 @@ def tools(session):
             out["note"] = "Parts with no material recorded have no mass: part_spec { material, bodies } records one."
         return out
 
+    # ---- sub-assemblies ----
+
+    def asm_sub(a):
+        parent = A._assembly(doc(), a.get("assembly"))
+        sub = A._assembly(doc(), a.get("sub"))
+        if sub is parent:
+            raise bad("sub: another assembly than the one it goes into.")
+        if any(getattr(o, "LinkedObject", None) is parent for o in sub.Group):
+            raise bad(f"{parent.Label} is already inside {sub.Label}: an assembly cannot hold itself.")
+        rigid = a.get("rigid", True)
+        kind = "Assembly::AssemblyLink"
+        try:
+            link = parent.newObject(kind, sub.Label)
+        except Exception:
+            kind = "App::Link"
+            link = parent.newObject(kind, sub.Label)
+        link.LinkedObject = sub
+        link.Label = s.unique(a.get("name") or sub.Label)
+        if "Rigid" in link.PropertiesList:
+            link.Rigid = bool(rigid)
+        elif not rigid:
+            raise ToolError("unavailable", "This FreeCAD links a sub-assembly as one rigid part only (flexible sub-assemblies came with the Assembly workbench's AssemblyLink).")
+        doc().recompute()
+        code, said = A._status(parent)
+        s.snapshot("asm_sub")
+        return {"assembly": parent.Label, "sub": sub.Label, "as": link.Label, "type": kind, "rigid": bool(getattr(link, "Rigid", True)), "solve": said, "step": len(s.steps),
+                "next": f"asm_joint {{ a: {{ part: \"<a part of {parent.Label}>\" }}, b: {{ part: \"{link.Label}\", element }} }} joins it."}
+
     asm_ref = {"type": "string", "description": "The assembly's label; may be left out when there is one."}
     end = {"type": "object"}
     return [
@@ -481,6 +509,8 @@ def tools(session):
              obj({"assembly": asm_ref, "joint": {"type": "string"}, "min": {"type": ["number", "null"]}, "max": {"type": ["number", "null"]}, "turn": {"type": "boolean"}}, ["joint"]), asm_limits, changes=True),
         Tool("asm_explode", "Spread an assembly's parts out to see how it goes together: factor (1.6: 60% further from the middle), or along an axis \"z\" | [x,y,z] stacked in order with gap mm; parts (default every one not grounded). collapse: true puts them back (kept in the file). Not solved while exploded.",
              obj({"assembly": asm_ref, "factor": {"type": "number"}, "axis": {"type": ["string", "array"]}, "gap": {"type": "number"}, "parts": {"type": "array", "items": {"type": "string"}}, "collapse": {"type": "boolean"}}), asm_explode, changes=True),
+        Tool("asm_sub", "Put an assembly into another as a sub-assembly: sub (the assembly to put in), assembly (the one it goes into), rigid (true: one part; false: its own joints still move, where this FreeCAD allows), name.",
+             obj({"assembly": asm_ref, "sub": {"type": "string"}, "rigid": {"type": "boolean"}, "name": {"type": "string"}}, ["assembly", "sub"]), asm_sub, changes=True),
         Tool("asm_bom", "The bill of materials: FreeCAD's own BOM object (a spreadsheet the Assembly workbench keeps up to date) with Index, Name, Quantity, and Material, mass and volume from part_spec's materials; columns adds more (\".Label2\" reads a property). td_table puts it on a drawing.",
              obj({"assembly": asm_ref, "columns": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}), asm_bom, changes=True),
     ]
