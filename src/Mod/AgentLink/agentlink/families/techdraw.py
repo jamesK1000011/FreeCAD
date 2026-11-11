@@ -958,6 +958,33 @@ def tools(session):
         recompute([v])
         return done("td_view", view_reading(v))
 
+    def td_bim(a):
+        """A BIM section plane drawn on a page (TechDraw's Arch view): a plan or section of the building."""
+        page = page_of(doc(), a.get("page"))
+        sec = obj_of(doc(), a.get("section"), what="section plane")
+        if type(getattr(sec, "Proxy", None)).__name__ != "_SectionPlane":
+            raise bad(f"section: {sec.Label} is not a BIM section plane (bim_section makes one).")
+        v = doc().addObject("TechDraw::DrawViewArch", "ArchView")
+        page.addView(v)
+        v.Label = s.unique(a.get("name") or f"{sec.Label} view", v)
+        v.Source = sec
+        for k, val in (("AllOn", True), ("RenderMode", a.get("render", "Wireframe")), ("ShowFill", bool(a.get("fill", True))),
+                       ("FillSpaces", bool(a.get("spaces", False))), ("ShowHidden", bool(a.get("hidden", False)))):
+            if hasattr(v, k):
+                try:
+                    setattr(v, k, val)
+                except Exception:
+                    pass
+        v.Scale = float(a.get("scale", 0.02))
+        W, H = paper_size(page)
+        v.X, v.Y = place_xy(page, a.get("at"), (W * 0.5, H * 0.55))
+        recompute([v])
+        sym = str(getattr(v, "Symbol", "") or "")
+        out = {"view": v.Label, "section": sec.Label, "scale": v.Scale, "svgBytes": len(sym)}
+        if not sym:
+            out["warning"] = "The view drew nothing here — the section cuts no BIM objects, or this FreeCAD draws Arch views only in its window."
+        return done("td_bim", out)
+
     def td_projection(a):
         page = page_of(doc(), a.get("page"))
         objs = bodies_for(a.get("bodies"))
@@ -1478,6 +1505,9 @@ def tools(session):
              obj({"page": {"type": "string"}, "fields": {"type": "object"}, "preset": {"type": "string"}, "save": {"type": "boolean"}, "delete": {"type": "boolean"}, "import": {"type": "string"}, "export": {"type": "string"}}), td_title, changes=True),
         Tool("td_view", "Put a view of bodies on a page: direction front|top|right|left|rear|bottom|iso or [x, y, z] (part toward viewer), scale, at [x, y] page mm (bottom-left origin), hidden (dashed hidden lines), name.",
              obj({"page": {"type": "string"}, "bodies": {"type": "array", "items": {"type": "string"}}, "direction": {"type": ["string", "array"]}, "scale": {"type": "number"}, "at": {"type": "array"}, "hidden": {"type": "boolean"}, "name": {"type": "string"}}), td_view, changes=True),
+        Tool("td_bim", "A BIM section plane drawn on a page (a building plan or section): section, scale (0.02 = 1:50), at, render Wireframe | Solid, fill (cut faces hatched), spaces, hidden.",
+             obj({"page": {"type": "string"}, "section": {"type": "string"}, "scale": {"type": "number"}, "at": {"type": "array"}, "render": {"type": "string"},
+                  "fill": {"type": "boolean"}, "spaces": {"type": "boolean"}, "hidden": {"type": "boolean"}, "name": {"type": "string"}}, ["section"]), td_bim, changes=True),
         Tool("td_projection", "A projection group (views kept aligned): views [front, top, right, left, rear, bottom, iso …], projection first|third (default the page's), front (which way is front: a direction), scale, at.",
              obj({"page": {"type": "string"}, "bodies": {"type": "array", "items": {"type": "string"}}, "views": {"type": "array", "items": {"type": "string"}}, "projection": {"type": "string"}, "front": {"type": ["string", "array"]}, "scale": {"type": "number"}, "at": {"type": "array"}}), td_projection, changes=True),
         Tool("td_section", "A section view cut from a view: normal of the cut plane, toward who looks at the section (\"x\" | \"-y\" | [x,y,z]; it lies across the base view), through [x, y, z] a point of the plane (default the part's middle), symbol (A …), at, hatch false.",
