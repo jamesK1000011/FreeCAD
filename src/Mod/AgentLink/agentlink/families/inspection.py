@@ -334,6 +334,55 @@ def tools(session):
     def insp_read(a):
         return reading(ins_of(a.get("inspection")), int(a.get("worst", 10)))
 
+    def insp_faces(a):
+        """An inspection split by the nominal body's faces: which faces are off, and by how much."""
+        from .. import meshdist
+
+        o = ins_of(a.get("inspection"))
+        d = np.asarray(o.Distances, dtype=float)
+        P = points_of(o.Actual)
+        if P is None or len(P) != len(d):
+            raise ToolError("invalid_state", f"{o.Label}: its points and distances do not line up — insp_update to measure again.")
+        noms = [x for x in (o.Nominals or []) if isinstance(getattr(x, "Shape", None), __import__("Part").Shape) and x.Shape.Faces]
+        if a.get("body"):
+            noms = [find(a["body"], "body")]
+        if not noms:
+            raise ToolError("invalid_input", "This inspection's nominals hold no body with faces: body names one.")
+        lo, hi = band(o)
+        V, F, owner = [], [], []
+        for nb in noms:
+            for k, fc in enumerate(nb.Shape.Faces, start=1):
+                vs, ts = fc.tessellate(float(a.get("deflection", 0.05)))
+                base = len(V)
+                V += [(p.x, p.y, p.z) for p in vs]
+                F += [(base + i, base + j, base + m) for i, j, m in ts]
+                owner += [f"{nb.Label}.Face{k}"] * len(ts)
+        ok = np.abs(d) < BIG
+        reach = float(a.get("reach", max(1.0, float(getattr(o, "SearchRadius", 1.0) or 1.0))))
+        tri, _dist, _sg = meshdist.nearest(P[ok], np.array(V), np.array(F), reach)
+        rows = {}
+        for pi, ti in zip(np.nonzero(ok)[0], tri):
+            if ti < 0:
+                continue
+            r = rows.setdefault(owner[ti], [])
+            r.append(d[pi])
+        out = []
+        for face, vals in rows.items():
+            v = np.array(vals)
+            row = {"face": face, "points": int(v.size), "mean": r4(v.mean()), "min": r4(v.min()), "max": r4(v.max()), "rms": r4(np.sqrt((v * v).mean()))}
+            if lo is not None:
+                bad_ = int(((v < lo) | (v > hi)).sum())
+                row["outOfTolerance"] = bad_
+                row["verdict"] = "pass" if bad_ == 0 else "fail"
+            out.append(row)
+        key = (lambda r: -r.get("outOfTolerance", 0) * 1e9 - abs(r["mean"])) if lo is not None else (lambda r: -abs(r["mean"]))
+        out.sort(key=key)
+        res = {"inspection": o.Label, "faces": out[: int(a.get("limit", 30))], "facesMeasured": len(out)}
+        if lo is not None:
+            res["failing"] = [r["face"] for r in out if r.get("verdict") == "fail"]
+        res["note"] = "mean is how far the face sits off (+ outside the nominal, - inside); a spread between min and max is its form error."
+        return res
+
     def insp_export(a):
         o = ins_of(a.get("inspection"))
         base = (a.get("name") or o.Label).replace(" ", "-")
@@ -369,6 +418,8 @@ def tools(session):
         Tool("insp_read", "One inspection's numbers: RMS, min, max, mean, spread, histogram, in/out of tolerance, out of reach, worst spots (worst: how many). Changes nothing.",
              obj({"inspection": {"type": "string"}, "worst": {"type": "integer"}}), insp_read),
         Tool("insp_list", "The inspections in the document, each in a line. Changes nothing.", obj({}), insp_list),
+        Tool("insp_faces", "An inspection split by the nominal body's faces: each face's points, mean offset, min, max, RMS and (with a tolerance) how many are out — the faces off first. Which face is the problem. Changes nothing.",
+             obj({"inspection": {"type": "string"}, "body": {"type": "string"}, "reach": {"type": "number"}, "deflection": {"type": "number"}, "limit": {"type": "integer"}}), insp_faces),
         Tool("insp_export", "Write an inspection out: a CSV of every point (x, y, z, distance, status) and a JSON report, to the out folder.",
              obj({"inspection": {"type": "string"}, "name": {"type": "string"}, "worst": {"type": "integer"}}), insp_export),
     ]
