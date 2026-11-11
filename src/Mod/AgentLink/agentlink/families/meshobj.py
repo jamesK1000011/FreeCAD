@@ -494,7 +494,9 @@ def tools(session):
         src, dst = os.path.join(d, "in.npz"), os.path.join(d, "out.npz")
         np.savez(src, P=P, F=F)
         code = (
-            "import sys, numpy as np, flatmesh\n"
+            "import sys, numpy as np\n"
+            "import FreeCAD, Part, Mesh  # flatmesh stands on them: loaded first\n"
+            "import flatmesh\n"
             "z = np.load(sys.argv[1])\n"
             "fl = flatmesh.FaceUnwrapper(np.ascontiguousarray(z['P'], dtype=np.float64), np.ascontiguousarray(z['F'], dtype=np.int64))\n"
             f"fl.findFlatNodes({iters}, {weight})\n"
