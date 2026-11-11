@@ -897,9 +897,18 @@ def tools(session):
             save_presets(data)
             return {"imported": sorted(got), "presets": sorted(data)}
         fields = dict(a.get("fields") or {})
-        if pre and a.get("save"):
+        if pre and a.get("delete"):
             data = load_presets()
-            data[pre] = {k: v for k, v in texts.items() if str(v).strip()} | {k: str(v) for k, v in fields.items()}
+            if pre not in data:
+                raise ToolError("not_found", f"preset {pre!r}: there are {', '.join(sorted(data)) or 'none'}.")
+            del data[pre]
+            save_presets(data)
+            return {"deleted": pre, "presets": sorted(data)}
+        if pre and a.get("save"):
+            # who and what, not this sheet's own number, scale or date
+            per_sheet = ("sheet", "scale", "date")
+            data = load_presets()
+            data[pre] = {k: v for k, v in texts.items() if str(v).strip() and not any(w in k.lower() for w in per_sheet)} | {k: str(v) for k, v in fields.items()}
             save_presets(data)
         elif pre:
             data = load_presets()
@@ -1465,8 +1474,8 @@ def tools(session):
         Tool("td_page", "TechDraw pages: action new { paper A4|A3|A2|A1|A0|Letter|ANSIB… , orientation landscape|portrait, standard iso|asme, blank, template (a path), projection first|third, scale, name } on the build's own templates; list; read (views and title-block fields); templates.",
              obj({"action": {"type": "string", "enum": ["new", "list", "read", "templates"]}, "page": {"type": "string"}, "paper": {"type": "string"}, "orientation": {"type": "string"}, "standard": {"type": "string"}, "blank": {"type": "boolean"},
                   "template": {"type": "string"}, "projection": {"type": "string"}, "scale": {"type": "number"}, "name": {"type": "string"}}), td_page, changes=True),
-        Tool("td_title", "The title block: fields { name: value } by the template's own field names (no fields: lists them); preset \"mine\" fills from a saved one, with save: true saves the page's as it; import / export a presets file (JSON).",
-             obj({"page": {"type": "string"}, "fields": {"type": "object"}, "preset": {"type": "string"}, "save": {"type": "boolean"}, "import": {"type": "string"}, "export": {"type": "string"}}), td_title, changes=True),
+        Tool("td_title", "The title block: fields { name: value } by the template's own field names (no fields: lists them); preset \"mine\" fills from a saved one, with save: true saves the page's as it (not its sheet number, scale or date), delete: true removes it; import / export a presets file (JSON).",
+             obj({"page": {"type": "string"}, "fields": {"type": "object"}, "preset": {"type": "string"}, "save": {"type": "boolean"}, "delete": {"type": "boolean"}, "import": {"type": "string"}, "export": {"type": "string"}}), td_title, changes=True),
         Tool("td_view", "Put a view of bodies on a page: direction front|top|right|left|rear|bottom|iso or [x, y, z] (part toward viewer), scale, at [x, y] page mm (bottom-left origin), hidden (dashed hidden lines), name.",
              obj({"page": {"type": "string"}, "bodies": {"type": "array", "items": {"type": "string"}}, "direction": {"type": ["string", "array"]}, "scale": {"type": "number"}, "at": {"type": "array"}, "hidden": {"type": "boolean"}, "name": {"type": "string"}}), td_view, changes=True),
         Tool("td_projection", "A projection group (views kept aligned): views [front, top, right, left, rear, bottom, iso …], projection first|third (default the page's), front (which way is front: a direction), scale, at.",
