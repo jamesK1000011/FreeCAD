@@ -584,6 +584,65 @@ def tools(session):
         d.recompute()
         return {"job": job.Label, "tool": tool_out(tc), "shape": shape, "tools": [x.Label for x in job.Tools.Group], "next": f"cam_op {{ …, tool: \"{tc.Label}\" }} uses it."}
 
+    def bit_of(tc):
+        """A tool controller's tool as the plain record cam_tool_add takes."""
+        b = tc.Tool
+        shape = None
+        for k in ("ShapeName", "ShapeFile", "BitShape"):
+            v = getattr(b, k, None)
+            if v:
+                shape = os.path.splitext(os.path.basename(str(v)))[0]
+                break
+        rec = {"name": tc.Label, "shape": shape or "endmill", "diameter": _q(b.Diameter, "mm"), "number": tc.ToolNumber,
+               "feed": _q(tc.HorizFeed, "mm/min"), "plunge": _q(tc.VertFeed, "mm/min"), "rpm": tc.SpindleSpeed}
+        for k, prop, unit in (("angle", "CuttingEdgeAngle", "°"), ("tipDiameter", "TipDiameter", "mm"), ("cornerRadius", "TorusRadius", "mm"),
+                              ("length", "Length", "mm"), ("cuttingLength", "CuttingEdgeHeight", "mm")):
+            if hasattr(b, prop):
+                try:
+                    rec[k] = _q(getattr(b, prop), unit)
+                except Exception:
+                    pass
+        if hasattr(b, "Flutes"):
+            rec["flutes"] = int(b.Flutes)
+        return rec
+
+    def cam_library(a):
+        """The job's tools out to a file, or a file's tools into the job: the
+        person's own tool set, kept outside any one document."""
+        import json
+
+        d = doc()
+        job = _job(d, a.get("job"))
+        act = a.get("action", "export")
+        p = a.get("path") or "cam-tools.json"
+        p = p if os.path.isabs(p) else os.path.join(s.out_dir, p)
+        if act == "export":
+            tools_ = [bit_of(tc) for tc in job.Tools.Group]
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"agentlink": "cam-tools", "version": 1, "tools": tools_}, f, indent=1)
+            return {"job": job.Label, "path": p, "tools": tools_}
+        if act == "import":
+            try:
+                with open(p, encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, ValueError) as e:
+                raise ToolError("invalid_input", f"path: {p} is not a tool file ({e}).") from None
+            recs = data.get("tools") if isinstance(data, dict) else data
+            if not isinstance(recs, list) or not recs:
+                raise ToolError("invalid_input", "path: a file of tools — { tools: [{ name, shape, diameter, feed, plunge, rpm, number … }] }.")
+            have = {x.Label for x in job.Tools.Group}
+            added, skipped = [], []
+            for r in recs:
+                if r.get("name") in have and not a.get("replace"):
+                    skipped.append(r.get("name"))
+                    continue
+                args = {k: v for k, v in r.items() if k in ("shape", "diameter", "angle", "tipDiameter", "cornerRadius", "flutes", "feed", "plunge", "rpm", "number", "name")}
+                args["job"] = job.Label
+                added.append(cam_tool_add(args)["tool"])
+            return {"job": job.Label, "path": p, "added": added, **({"skipped": skipped, "note": "Already in the job by name: replace: true adds them again."} if skipped else {})}
+        raise ToolError("invalid_input", "action: export (the job's tools to path) | import (path's tools into the job).")
+
     DRESSUPS = {"tags": "Path.Dressup.Tags", "dogbone": "Path.Dressup.DogboneII", "boundary": "Path.Dressup.Boundary", "array": "Path.Dressup.Array",
                 "ramp": "Path.Dressup.Gui.RampEntry", "leadinout": "Path.Dressup.Gui.LeadInOut"}
 
@@ -744,6 +803,8 @@ def tools(session):
         Tool("cam_tool_add", "Add a tool to the job: shape endmill | ballend | bullnose | v-bit | chamfer | drill | thread-mill | radius | dovetail | …, diameter mm, angle (V-bit, chamfer), tipDiameter, cornerRadius, flutes, feed, plunge (mm/min), rpm, number, name. Ask the person which tools they have.",
              obj({"job": jobref, "shape": {"type": "string"}, "diameter": {"type": "number"}, "angle": {"type": "number"}, "tipDiameter": {"type": "number"}, "cornerRadius": {"type": "number"}, "flutes": {"type": "integer"},
                   "length": {"type": "number"}, "cuttingLength": {"type": "number"}, "feed": {"type": "number"}, "plunge": {"type": "number"}, "rpm": {"type": "number"}, "number": {"type": "integer"}, "name": {"type": "string"}}, ["diameter"]), cam_tool_add, changes=True),
+        Tool("cam_library", "The person's tool set as a file: action export (the job's tools, feeds and speeds to path, JSON) | import (path's tools into the job; replace: true adds ones it already has by name).",
+             obj({"job": jobref, "action": {"type": "string", "enum": ["export", "import"]}, "path": {"type": "string"}, "replace": {"type": "boolean"}}), cam_library, changes=True),
         Tool("cam_dressup", "Dress an operation's path: kind tags (holding tabs so the part stays in the stock: count, width, height, angle), dogbone (inside corners cleared: style), boundary (moves kept within the stock, or margin mm round the part), array, ramp / leadinout (where this FreeCAD has them headless); props for the dressup's own.",
              obj({"job": jobref, "op": {"type": "string"}, "kind": {"type": "string"}, "count": {"type": "integer"}, "width": {"type": "number"}, "height": {"type": "number"}, "angle": {"type": "number"}, "style": {"type": "string"}, "margin": {"type": "number"}, "props": {"type": "object"}}, ["op", "kind"]), cam_dressup, changes=True),
         Tool("cam_setup", "The job's setup: fixtures [G54 …] (the job run in each offset), coolant none | flood | mist (every op), safeHeight / clearance offsets mm, order [op labels] to run them in.",
