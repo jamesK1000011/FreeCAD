@@ -7,6 +7,8 @@
 # Faces and edges are picked by what they are (shape_query's queries), so a
 # joint does not depend on FreeCAD's numbering.
 
+import math
+
 import FreeCAD
 import Part
 
@@ -423,7 +425,11 @@ def tools(session):
         # What moves with it: parts joined to it by other joints, short of
         # grounded parts and the part it turns on.
         group, todo = {moving.Name: moving}, [moving]
-        others = [x for x in _joints(asm).Group if x is not j and getattr(x, "ObjectToGround", None) is None]
+        COUPLE = ("gears", "belt", "rackpinion", "screw")
+        all_j = [x for x in _joints(asm).Group if x is not j and getattr(x, "ObjectToGround", None) is None]
+        couplings = [x for x in all_j if str(getattr(x, "JointType", "")).lower() in COUPLE]
+        # a coupling drives its other part, it does not carry it along
+        others = [x for x in all_j if x not in couplings]
         while todo:
             cur = todo.pop()
             for x in others:
@@ -433,6 +439,54 @@ def tools(session):
                     if here is not None and there is not None and here.Name == cur.Name and there.Name not in group and there not in grounded and there is not fixed_side:
                         group[there.Name] = there
                         todo.append(there)
+        # Parts driven through a coupling: each on its own joint (revolute or
+        # slider to something that stays), moved by the coupling's ratio.
+        driven = []
+        for c in couplings:
+            q1, _ = _ref_element(getattr(c, "Reference1", None))
+            q2, _ = _ref_element(getattr(c, "Reference2", None))
+            if q1 is None or q2 is None:
+                continue
+            if q1.Name in group and q2.Name not in group:
+                dvn, first = q2, True
+            elif q2.Name in group and q1.Name not in group:
+                dvn, first = q1, False
+            else:
+                continue
+            own = None
+            for x in others:
+                r1_, e1_ = _ref_element(getattr(x, "Reference1", None))
+                r2_, e2_ = _ref_element(getattr(x, "Reference2", None))
+                if str(getattr(x, "JointType", "")).lower() not in ("revolute", "slider", "cylindrical"):
+                    continue
+                if r1_ is not None and r1_.Name == dvn.Name and (r2_ is None or r2_.Name not in group):
+                    own = (x, e1_)
+                elif r2_ is not None and r2_.Name == dvn.Name and (r1_ is None or r1_.Name not in group):
+                    own = (x, e2_)
+                if own:
+                    break
+            if own is None or own[1] is None:
+                continue
+            dax = _axis(own[1])
+            if dax is None:
+                continue
+            ck = str(c.JointType).lower()
+            r1v, r2v = float(getattr(c, "Distance", 0) or 0), float(getattr(c, "Distance2", 0) or 0)
+            if ck in ("gears", "belt"):
+                if r1v <= 0 or r2v <= 0:
+                    continue
+                ratio = (r1v / r2v) if first else (r2v / r1v)
+                factor, how = (-ratio if ck == "gears" else ratio), "turn"
+            elif ck == "rackpinion":
+                factor, how = (r1v * math.pi / 180.0), "slide"  # mm a degree of the pinion
+            else:
+                factor, how = (r1v / 360.0), "slide"  # screw: mm a degree
+            if not turning and how == "turn":
+                continue
+            dc, dv = dax
+            dv = V(dv)
+            dv.normalize()
+            driven.append({"part": dvn, "how": how, "factor": factor, "centre": dc, "axis": dv, "via": c.Label})
         kept = {o.Name: o.Placement.copy() for o in _parts(asm)}
         out_steps = []
         try:
@@ -447,8 +501,17 @@ def tools(session):
                     move = FreeCAD.Placement(axis * (v - posed), FreeCAD.Rotation())
                 for o in group.values():
                     o.Placement = move.multiply(kept[o.Name])
-                doc().recompute()
                 row = {"at": round(v, 3)}
+                for d in driven:
+                    amount = (v - posed) * d["factor"]
+                    if d["how"] == "turn":
+                        r = FreeCAD.Rotation(d["axis"], amount)
+                        dm = FreeCAD.Placement(d["centre"] - r.multVec(d["centre"]), r)
+                    else:
+                        dm = FreeCAD.Placement(d["axis"] * amount, FreeCAD.Rotation())
+                    d["part"].Placement = dm.multiply(kept[d["part"].Name])
+                    row.setdefault("driven", {})[d["part"].Label] = round(amount, 3)
+                doc().recompute()
                 hits, near = _overlaps(_parts(asm), clearance)
                 if hits:
                     row["overlaps"] = [{"parts": h["parts"], "volume": h["volume"]} for h in hits]
@@ -469,6 +532,8 @@ def tools(session):
                 break
             clear_run.append(r["at"])
         out = {"joint": j.Label, "kind": kind, "unit": unit, "from": lo, "to": hi, "moves": sorted(o.Label for o in group.values()),
+               **({"driven": [{"part": d["part"].Label, "via": d["via"], d["how"] + "s": "degrees" if d["how"] == "turn" else "mm",
+                               "per": round(d["factor"], 5)} for d in driven]} if driven else {}),
                "axis": {"through": [round(c, 3) for c in centre], "along": [round(c, 4) for c in axis]}, "steps": out_steps,
                "verdict": "collides" if bad else "clear",
                "note": f"{' and '.join(sorted(o.Label for o in group.values()))} turned (or slid) about the joint's axis and put back after. Steps are {abs(hi - lo) / steps:g} {unit} apart: a collision between two steps is not seen — more steps to look closer. A chain of moving joints beyond this one is carried along rigidly, not solved."}
