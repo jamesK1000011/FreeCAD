@@ -1428,6 +1428,44 @@ def tools(session):
         recompute()
         return done("td_dim", dim_reading(d))
 
+    def td_dimset(a):
+        """Several dimensions at once along one direction: a chain (each to the
+        next) or a baseline (each from the first), stacked so they do not cross."""
+        refs = a.get("refs") or []
+        if len(refs) < 3:
+            raise bad("refs: three or more points along the part, in order (td_dim takes two).")
+        typ = a.get("type", "horizontal")
+        if typ not in ("horizontal", "vertical"):
+            raise bad("type: horizontal | vertical.")
+        style = a.get("style", "chain")
+        if style not in ("chain", "baseline"):
+            raise bad("style: chain (each to the next) | baseline (each from the first).")
+        v = view_of(doc(), a.get("view"))
+        X, Y = abs_xy(v)
+        off = float(a.get("offset", 10.0))  # page mm from the view's edge to the first line
+        gap = float(a.get("spacing", 7.0))
+        pairs = [(refs[i], refs[i + 1]) for i in range(len(refs) - 1)] if style == "chain" else [(refs[0], r) for r in refs[1:]]
+        es = edges_of(v)
+        import Part as _P
+
+        bb = _P.makeCompound(es).BoundBox if es else None
+        made = []
+        for k, (r1, r2) in enumerate(pairs):
+            lane = off + (k * gap if style == "baseline" else 0)
+            # the view's half size on the paper, then the lane past it (below for horizontal, right for vertical)
+            half_h = bb.YLength / 2 if bb is not None else 20
+            half_w = bb.XLength / 2 if bb is not None else 20
+            at = [0, -(half_h + lane)] if typ == "horizontal" else [half_w + lane, 0]
+            out = td_dim({"view": v.Label, "type": typ, "refs": [r1, r2], **{kk: a[kk] for kk in ("format",) if a.get(kk)}})
+            d = obj_of(doc(), out["dimension"], ["TechDraw::DrawViewDimension"], "dimension")
+            # text placed beside the view, each lane further out; along the line, between its ends
+            d.X, d.Y = at[0] if typ == "vertical" else d.X, at[1] if typ == "horizontal" else d.Y
+            made.append({**out, "lane": round(lane, 1)})
+        recompute()
+        total = sum(m.get("measured", 0) for m in made) if style == "chain" else (made[-1].get("measured") if made else None)
+        return done("td_dimset", {"view": v.Label, "style": style, "type": typ, "dimensions": made,
+                                  **({"overall": round(total, 3)} if isinstance(total, (int, float)) else {})})
+
     def apply_tol(d, a, raw):
         if a.get("format"):
             d.FormatSpec = str(a["format"])
@@ -1758,6 +1796,9 @@ def tools(session):
         Tool("td_dim", "A dimension on a view, measured by TechDraw so it follows the part: type distance | horizontal | vertical | radius | diameter | angle; refs [\"Vertex1\", \"Vertex4\"] or by the part: { point: [x,y,z] }, { circle: { diameter, near } }, { edge: { through: [p, q] } }; at [dx, dy] (its text from the view's centre, page mm); tolerance at once: plus/minus, fit \"H7\", basic, label, format \"%.1f\".",
              obj({"view": {"type": "string"}, "type": {"type": "string"}, "refs": {"type": "array", "items": ref_schema}, "at": {"type": "array"}, "plus": {"type": "number"}, "minus": {"type": "number"}, "fit": {"type": "string"},
                   "basic": {"type": "boolean"}, "label": {"type": "string"}, "format": {"type": "string"}}, ["view", "refs"]), td_dim, changes=True),
+        Tool("td_dimset", "Several dimensions along one direction at once: style chain (each point to the next) or baseline (each from the first, stacked lanes); type horizontal | vertical; refs three or more points in order (as td_dim takes them); offset mm off the view, spacing between lanes, format.",
+             obj({"view": {"type": "string"}, "refs": {"type": "array"}, "type": {"type": "string", "enum": ["horizontal", "vertical"]}, "style": {"type": "string", "enum": ["chain", "baseline"]},
+                  "offset": {"type": "number"}, "spacing": {"type": "number"}, "format": {"type": "string"}}, ["view", "refs"]), td_dimset, changes=True),
         Tool("td_tolerance", "Tolerance a dimension: plus/minus (mm; equal = ±), fit \"H7\" | \"g6\" (ISO 286 deviations for its measured size), basic: true (a boxed theoretically exact size, for GD&T), label (text instead of the value), format \"%.2f\"; clear: true first resets it.",
              obj({"dimension": {"type": "string"}, "plus": {"type": "number"}, "minus": {"type": "number"}, "fit": {"type": "string"}, "basic": {"type": "boolean"}, "label": {"type": "string"}, "format": {"type": "string"}, "clear": {"type": "boolean"}}, ["dimension"]), td_tolerance, changes=True),
         Tool("td_gdt", "A feature control frame (ISO 1101 / ASME Y14.5): frame [{ characteristic (flatness, straightness, circularity, cylindricity, profile_line, profile_surface, parallelism, perpendicularity, angularity, position, concentricity, symmetry, circular_runout, total_runout), tolerance mm, diameter (⌀ zone), modifier M|L|…, datums [\"A\", \"B|M\"] }] (rows stack: composite); with a leader to on (a view ref) or under dimension; at.",
