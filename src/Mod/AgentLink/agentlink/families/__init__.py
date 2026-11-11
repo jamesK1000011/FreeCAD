@@ -45,6 +45,7 @@ NAMES = [
     "surface",
     "points",
     "bim",
+    "openscad",
 ]
 
 
