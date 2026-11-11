@@ -5,7 +5,6 @@
 # (and a closed one made a solid), surfaces cut by one another, and blend
 # curves joining two edges smoothly. Each follows the edges it was made from.
 
-import FreeCAD
 import Part
 import Surface  # noqa: F401 — loads the Surface features; the family is left out without it
 
