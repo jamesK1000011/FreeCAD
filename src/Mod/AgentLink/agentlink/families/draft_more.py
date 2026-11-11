@@ -177,7 +177,18 @@ def tools(session):
         if show == "custom":
             kw["custom_text"] = str(a.get("text") or "Label").split("\n")
         o = Draft.make_label(**kw)
-        return finish(named(o, a.get("name"), "Label"), "draft_label", {"text": list(getattr(o, "Text", []) or [])})
+        doc().recompute()
+        text = [str(x) for x in (getattr(o, "Text", []) or []) if str(x)]
+        if not text and show in ("area", "length", "position", "name") and kw.get("target_object") is not None:
+            # Draft fills these in its window; here the same reading is written in.
+            t_o = kw["target_object"]
+            el = t_o.Shape.getElement(kw["subelements"]) if kw.get("subelements") else t_o.Shape
+            text = [{"area": lambda: f"{el.Area:.2f} mm²", "length": lambda: f"{el.Length:.2f} mm",
+                     "position": lambda: "{:.2f}, {:.2f}, {:.2f}".format(*el.BoundBox.Center),
+                     "name": lambda: t_o.Label}[show]()]
+            o.LabelType = "Custom"
+            o.CustomText = text
+        return finish(named(o, a.get("name"), "Label"), "draft_label", {"text": text})
 
     # ---- arrays and clones ----
 

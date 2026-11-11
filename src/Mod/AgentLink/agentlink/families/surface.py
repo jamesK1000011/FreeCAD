@@ -33,7 +33,7 @@ def reading(o):
     return out
 
 
-def chain(edges, refs, tol=1e-4):
+def chain(edges, refs, tol=1e-4, closed=True):
     """Which boundary edges run backwards, so that each starts where the one before ends
     (the feature takes them as given); refused where two do not meet."""
     def ends(e):
@@ -55,9 +55,11 @@ def chain(edges, refs, tol=1e-4):
                 ok = False
                 break
         if ok:
-            if (cur - start).Length > tol:
+            if closed and (cur - start).Length > tol:
                 raise bad("edges: the last does not come back to where the first starts — the boundary must close.")
             return flags
+    if not closed:
+        raise bad("edges: two curves must share an end (a corner); the surface spans between them.")
     raise bad(f"edges: they do not meet end to end in the order given ({', '.join(map(str, refs))}) — list them going round the boundary.")
 
 
@@ -109,8 +111,8 @@ def tools(session):
             raise bad("edges: two to four boundary curves that meet end to end.")
         bl = [edge_ref(r, "edges") for r in refs]
         edges = [ob.Shape.getElement(sub) for ob, subs in bl for sub in subs]
-        # Two curves face each other (the surface spans between them); three or four go round it.
-        flags = chain(edges, refs) if len(edges) > 2 else [False] * len(edges)
+        # Three or four curves go round the surface; two meet at a corner, the surface between them.
+        flags = chain(edges, refs, closed=len(edges) > 2)
         o = new("Surface::GeomFillSurface", a.get("name") or "Boundary surface")
         o.BoundaryList = bl
         o.ReversedList = flags

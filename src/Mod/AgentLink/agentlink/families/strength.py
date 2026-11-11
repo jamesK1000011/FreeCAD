@@ -685,7 +685,10 @@ def tools(session):
         an = ObjectsFem.makeAnalysis(doc, "Analysis")
         an.Label = s.unique(a.get("name") or f"{o.Label} analysis")
         made = []
-        mk_solver = getattr(ObjectsFem, "makeSolverCalculiX", None) or getattr(ObjectsFem, "makeSolverCalculixCcxTools")
+        names = ("makeSolverCalculiX", "makeSolverCalculix", "makeSolverCalculixCcxTools", "makeSolverCcxTools")
+        mk_solver = next((getattr(ObjectsFem, n) for n in names if hasattr(ObjectsFem, n)), None)
+        if mk_solver is None:
+            raise ToolError("unavailable", "This FreeCAD's FEM has no CalculiX solver object to add: " + ", ".join(n for n in dir(ObjectsFem) if n.startswith("makeSolver")))
         solver = mk_solver(doc)
         an.addObject(solver)
         made.append(solver.Label)
