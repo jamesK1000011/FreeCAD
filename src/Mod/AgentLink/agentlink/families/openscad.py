@@ -78,13 +78,20 @@ def hull_here(shapes, tol=0.05):
 
     from .. import hull3d
 
-    pts = []
+    diag = max(s_.BoundBox.DiagonalLength for s_ in shapes)
+    tol = max(tol, diag * 0.002)  # a chord error to the shapes' size: a few thousand points, not tens
+    pts, corners = [], []
     for sh in shapes:
         v, _f = sh.tessellate(tol)
         pts += [(p.x, p.y, p.z) for p in v]
-        pts += [(p.Point.x, p.Point.y, p.Point.z) for p in sh.Vertexes]
+        corners += [(p.Point.x, p.Point.y, p.Point.z) for p in sh.Vertexes]
+    P = np.unique(np.round(np.array(pts, float), 9), axis=0)
+    if len(P) > 6000:
+        P = P[np.random.default_rng(0).choice(len(P), 6000, replace=False)]
+    if corners:
+        P = np.vstack([P, np.array(corners, float)])
     try:
-        V, T = hull3d.hull(np.round(np.array(pts, float), 9))
+        V, T = hull3d.hull(P)
     except hull3d.HullError as e:
         raise bad(f"objects: {e}.") from None
     faces = []
