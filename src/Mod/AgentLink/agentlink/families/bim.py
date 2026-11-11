@@ -81,6 +81,11 @@ def is_bim(o):
     return hasattr(o, "IfcType") and not o.isDerivedFrom("Spreadsheet::Sheet")
 
 
+def contained(o):
+    """Whether a BIM container (level, building, site) holds o — not a window's host or a wall's subtraction."""
+    return any(is_bim(p) and o in (getattr(p, "Group", None) or []) for p in o.InList)
+
+
 def ifc_type(o):
     return str(getattr(o, "IfcType", "") or getattr(o, "IfcRole", "") or o.TypeId)
 
@@ -462,7 +467,7 @@ def tools(session):
             objs = [picks.find(doc(), n) for n in names]
         else:
             tops = [o for o in doc().Objects if ifc_type(o) in ("Site", "Building") or type(getattr(o, "Proxy", None)).__name__ in ("_Site", "_Building")]
-            objs = tops[:1] or [o for o in doc().Objects if is_bim(o) and not any(is_bim(p) for p in o.InList)]
+            objs = tops[:1] or [o for o in doc().Objects if is_bim(o) and not contained(o)]
             if not objs:
                 raise bad("Nothing to write: no BIM objects here (bim_wall …), or objects to name.")
         p = where(a.get("path"), (doc().Label or "model") + ".ifc")
@@ -732,7 +737,7 @@ def tools(session):
         mk = getattr(Arch, "makeSectionPlane", None)
         if mk is None:
             raise ToolError("unavailable", "This FreeCAD's BIM has no section plane.")
-        objs = [picks.find(doc(), r) for r in (a.get("objects") or [])] or [o for o in doc().Objects if is_bim(o) and not any(is_bim(p) for p in o.InList)]
+        objs = [picks.find(doc(), r) for r in (a.get("objects") or [])] or [o for o in doc().Objects if is_bim(o) and not contained(o)]
         o = headless_call(mk, objs)
         n = vec(a.get("normal", [0, 0, 1]), "normal")
         o.Placement = FreeCAD.Placement(vec(a.get("at", [0, 0, 1200]), "at"), FreeCAD.Rotation(V(0, 0, 1), n))
