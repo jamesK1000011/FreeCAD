@@ -284,14 +284,16 @@ def tools(session):
                     continue
                 if a.get("end", "end") == "start":
                     d = pts[0] - pts[1]
-                    if d.Length + by <= 0:
-                        raise bad("by: trims past the whole first segment.")
-                    pts[0] = pts[1] + d.normalize() * (d.Length + by)
+                    L = d.Length  # before normalize(), which changes d in place
+                    if L + by <= 0:
+                        raise bad("length: trims past the whole first segment.")
+                    pts[0] = pts[1] + d.normalize() * (L + by)
                 else:
                     d = pts[-1] - pts[-2]
-                    if d.Length + by <= 0:
-                        raise bad("by: trims past the whole last segment.")
-                    pts[-1] = pts[-2] + d.normalize() * (d.Length + by)
+                    L = d.Length
+                    if L + by <= 0:
+                        raise bad("length: trims past the whole last segment.")
+                    pts[-1] = pts[-2] + d.normalize() * (L + by)
                 set_points(o, pts, pl)
             return objs
         made = []
