@@ -584,10 +584,25 @@ def tools(session):
         for p in params:
             if ss.getCellFromAlias(p) if hasattr(ss, "getCellFromAlias") else None:
                 raise ToolError("invalid_state", f"{p} is already an alias in {ss.Label}: choose another name or another sheet.")
+        # The switch cannot sit on the sheet itself: its items come from the
+        # sheet's cells, and an object depending on itself is never filled.
+        # FreeCAD's dialog has the person name another object; here it is
+        # the part's Body when there is one, else a group holding the sheet.
         owner_ref = a.get("owner")
-        owner = ss if owner_ref is None else next((o for o in doc().Objects if owner_ref in (o.Label, o.Name)), None)
-        if owner is None:
-            raise ToolError("not_found", f"owner {owner_ref!r}: no such object.")
+        if owner_ref is None:
+            bodies = [o for o in doc().Objects if o.TypeId == "PartDesign::Body"]
+            if len(bodies) == 1:
+                owner = bodies[0]
+            else:
+                owner = doc().addObject("App::DocumentObjectGroup", "Configurations")
+                owner.Label = s.unique(f"{ss.Label} switch")
+                owner.addObject(ss)
+        else:
+            owner = next((o for o in doc().Objects if owner_ref in (o.Label, o.Name)), None)
+            if owner is None:
+                raise ToolError("not_found", f"owner {owner_ref!r}: no such object.")
+        if owner is ss:
+            raise bad("owner: another object than the sheet — the switch's names come from the sheet's cells.")
         prop = a.get("property") or CONF_PROP
         if not C.NAME.match(prop):
             raise bad("property: letters, digits and _.")
@@ -630,7 +645,10 @@ def tools(session):
         start = a.get("active") or names[0]
         if start not in names:
             raise bad(f"active: one of {', '.join(names)}.")
-        setattr(owner, prop, start)
+        try:
+            setattr(owner, prop, start)
+        except Exception as e:
+            raise ToolError("failed", f"The switch {owner.Label}.{prop} did not take the names from {conf_rng}: {e} — nothing was kept.")
         check("The design table")
         t = next(t for t in tables(doc(), ss) if t["at"] == C.name(r0 + 1, c0))
         out = table_reading(ss, t)
@@ -732,7 +750,7 @@ def tools(session):
              obj({"path": {"type": "string"}, "sheet": {"type": "string"}, "delimiter": {"type": "string"}, "replace": {"type": "boolean"}}, ["path"]), sheet_import, changes=True),
         Tool("sheet_export", "Write a sheet's computed values to a CSV / TSV file: path (default <sheet>.csv in the out folder), delimiter. Changes nothing in the document.",
              obj({"sheet": {"type": "string"}, "path": {"type": "string"}, "delimiter": {"type": "string"}}), sheet_export),
-        Tool("sheet_table", "Design tables (configurations), FreeCAD's own kind: action make { params [names], configs [{ name, values [..] | { param: value } }], units { param: \"mm\" | \"deg\" | \"\" } (numbers default mm), sheet (else a new one), at, owner (the object carrying the switch; default the sheet), property (default Configuration), active } — then bind properties to <Sheet>.<param> with param_bind; use { config } switches and answers the bodies; add { config, values } adds a row; list.",
+        Tool("sheet_table", "Design tables (configurations), FreeCAD's own kind: action make { params [names], configs [{ name, values [..] | { param: value } }], units { param: \"mm\" | \"deg\" | \"\" } (numbers default mm), sheet (else a new one), at, owner (the object carrying the switch; default the one Body, else a group holding the sheet), property (default Configuration), active } — then bind properties to <Sheet>.<param> with param_bind; use { config } switches and answers the bodies; add { config, values } adds a row; list.",
              obj({"action": {"type": "string", "enum": ["make", "use", "add", "list"]}, "sheet": {"type": "string"}, "name": {"type": "string"}, "at": {"type": "string"}, "params": {"type": "array", "items": {"type": "string"}},
                   "configs": {"type": "array", "items": {"type": "object"}}, "units": {"type": "object", "additionalProperties": {"type": "string"}}, "owner": {"type": "string"}, "property": {"type": "string"}, "active": {"type": "string"},
                   "config": {"type": "string"}, "values": {"type": ["array", "object"]}}), sheet_table, changes=True),

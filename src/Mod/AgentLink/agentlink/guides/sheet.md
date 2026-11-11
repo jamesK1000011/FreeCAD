@@ -11,7 +11,7 @@
 1. `sheet_table { action: "make", params: ["length", "width"], configs: [{ name: "S", values: [40, 20] }, { name: "L", values: [80, 40] }] }`. Numbers are mm unless `units` says otherwise (`"deg"`, `""`).
 2. Bind each property to `<Sheet>.<param>` with `param_bind`.
 3. Switch with `sheet_table { action: "use", config: "L" }`. Its answer gives the bodies. `add { config, values }` adds a variant.
-4. The table is FreeCAD's own configuration table. In FreeCAD, the person switches it by hand through the owner's `Configuration` property (the sheet's, unless `owner` names another object).
+4. The table is FreeCAD's own configuration table. In FreeCAD, the person switches it by hand through the owner's `Configuration` property (the part's Body when there is one, else a group holding the sheet, unless `owner` names another object).
 
 ## formatting and files
 - `sheet_format { range, style: ["bold"], background: "#eeeeee", align: ["center"], displayUnit: "in", width, merge }`.
