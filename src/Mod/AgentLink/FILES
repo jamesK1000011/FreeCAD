@@ -16,6 +16,7 @@ agentlink/facepick.py
 agentlink/families/__init__.py
 agentlink/families/assembly.py
 agentlink/families/assembly_more.py
+agentlink/families/bim.py
 agentlink/families/cam.py
 agentlink/families/cut.py
 agentlink/families/doc.py
@@ -58,6 +59,7 @@ agentlink/geometry.py
 agentlink/gridfinity.py
 agentlink/gui_link.py
 agentlink/guides/assembly.md
+agentlink/guides/bim.md
 agentlink/guides/cam.md
 agentlink/guides/cut.md
 agentlink/guides/doc.md

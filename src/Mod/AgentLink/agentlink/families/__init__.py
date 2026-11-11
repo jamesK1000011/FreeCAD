@@ -44,6 +44,7 @@ NAMES = [
     "draft_more",
     "surface",
     "points",
+    "bim",
 ]
 
 
