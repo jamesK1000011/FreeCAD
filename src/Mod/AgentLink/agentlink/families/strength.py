@@ -674,6 +674,74 @@ def tools(session):
         return {"body": r["body"], "files": files, "nodes": len(f["points"]), "elements": len(f.get("elements") or []),
                 "note": "The VTU opens in ParaView (and FreeCAD's FEM post-processing); the CSV has every node."}
 
+    def fea_probe(a):
+        """Values of the last solve where asked: points, along a line, or over faces."""
+        import numpy as np
+
+        r = _results(s)
+        if not r or "field" not in r:
+            raise ToolError("not_found", "No solve to read: fea_solve first.")
+        f = r["field"]
+        P = np.asarray(f["points"], float)
+        VM = np.asarray(f["vonMises"], float)
+        U = np.asarray(f["displacement"], float)
+        um = np.linalg.norm(U, axis=1)
+        m_ = r.get("mesh")
+        msize = float((m_.get("size") if isinstance(m_, dict) else m_) or 1.0)
+
+        def at(q):
+            d = np.linalg.norm(P - np.asarray(q, float), axis=1)
+            k = np.argsort(d)[:4]
+            w = 1.0 / np.maximum(d[k], 1e-9)
+            if d[k[0]] < 1e-6:
+                w = (d[k] < 1e-6).astype(float)
+            w = w / w.sum()
+            return {"at": [round(float(c), 3) for c in q], "vonMisesMPa": round(float(VM[k] @ w), 3),
+                    "displacementMm": round(float(um[k] @ w), 5), "nearestNodeMm": round(float(d[k[0]]), 3)}
+
+        out = {"body": r["body"]}
+        if a.get("points"):
+            out["points"] = [at(q) for q in a["points"]]
+        if a.get("line"):
+            ln = a["line"]
+            p0, p1 = np.asarray(ln.get("from"), float), np.asarray(ln.get("to"), float)
+            n = int(ln.get("samples", 11))
+            if not 2 <= n <= 500:
+                raise ToolError("invalid_input", "line.samples: 2 … 500.")
+            rows = [at(p0 + (p1 - p0) * i / (n - 1)) for i in range(n)]
+            far = max(x["nearestNodeMm"] for x in rows)
+            out["line"] = rows
+            if far > msize * 2 and far > 2:
+                out["warning"] = f"Some samples lie {far:.1f} mm from any node: the line leaves the part there."
+        if a.get("faces") is not None:
+            o = s.doc.getObject(r.get("bodyName", "")) if r.get("bodyName") else None
+            if o is None:
+                o = next((x for x in s.doc.Objects if x.Label == r["body"]), None)
+            if o is None:
+                raise ToolError("not_found", f"{r['body']}: the body solved is no longer here.")
+            picked = facepick.pick(o.Shape, a["faces"], "faces")
+            faces = [fc for _, fc in picked]
+            tol = max(0.05, 0.02 * msize)
+            on = np.zeros(len(P), bool)
+            for fc in faces:
+                bb = fc.BoundBox
+                cand = np.where((P[:, 0] >= bb.XMin - tol) & (P[:, 0] <= bb.XMax + tol) & (P[:, 1] >= bb.YMin - tol) & (P[:, 1] <= bb.YMax + tol)
+                                & (P[:, 2] >= bb.ZMin - tol) & (P[:, 2] <= bb.ZMax + tol))[0]
+                for i in cand:
+                    if not on[i] and fc.distToShape(Part.Vertex(FreeCAD.Vector(*P[i])))[0] <= tol:
+                        on[i] = True
+            if not on.any():
+                raise ToolError("failed", "No mesh nodes found on those faces.")
+            i_max = int(np.argmax(np.where(on, VM, -1)))
+            out["faces"] = {"faces": [n_ for n_, _ in picked], "nodes": int(on.sum()),
+                            "vonMisesMPa": {"max": round(float(VM[on].max()), 3), "mean": round(float(VM[on].mean()), 3), "maxAt": [round(float(c), 3) for c in P[i_max]]},
+                            "displacementMm": {"max": round(float(um[on].max()), 5), "mean": round(float(um[on].mean()), 5)}}
+        if len(out) == 1:
+            raise ToolError("invalid_input", "points [[x,y,z] …], line { from, to, samples }, and/or faces (a query as fea_hold takes).")
+        if r.get("stale"):
+            out["stale"] = True
+        return out
+
     def fea_native(a):
         st, o = _need_study(s)
         try:
@@ -800,6 +868,8 @@ def tools(session):
              obj({"count": {"type": "integer"}, "timeout": {"type": "number"}}), fea_buckle),
         Tool("fea_refine", "A finer mesh near faces (a fillet, a hole's edge, where the peak sits): faces (a query as fea_hold takes), size mm; clear: true drops every region. Kept in the study; the next solve uses it.",
              obj({"faces": {}, "size": {"type": "number"}, "clear": {"type": "boolean"}}), fea_refine, changes=True),
+        Tool("fea_probe", "Read the last solve where asked: points [[x,y,z] …] (von Mises and displacement there), line { from, to, samples } (a profile along it), faces (a query as fea_hold takes: max, mean and where on them). Changes nothing.",
+             obj({"points": {"type": "array"}, "line": {"type": "object"}, "faces": {}}), fea_probe),
         Tool("fea_export", "Write the last solve out: formats [vtu (ParaView, FreeCAD FEM post-processing), csv (every node: position, von Mises, displacement)], name.",
              obj({"formats": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}), fea_export),
         Tool("fea_native", "Build the study as FreeCAD's own FEM analysis (Analysis, CalculiX solver, material, Gmsh mesh, fixed / force / pressure / self-weight constraints), to open and run in the FEM workbench.",
