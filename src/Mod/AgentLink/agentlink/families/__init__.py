@@ -15,6 +15,7 @@ NAMES = [
     "model_more",
     "measure",
     "sketch",
+    "sketch_more",
     "feature",
     "feature_more",
     "param",

@@ -1,0 +1,333 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# More Sketcher, beside sketch.py: copy, move, rotate and scale geometry,
+# rectangular and polar arrays, extend a curve, join two, a carbon copy of
+# another sketch, edges projected from binders and other sketches, B-spline
+# conversion, and validate — the Sketcher's own repair: missing
+# coincidences, degenerate geometry, redundant and invalid constraints,
+# and its auto-constrainer.
+
+import math
+
+import FreeCAD
+import Part
+
+from ..protocol import Tool, ToolError
+from . import pd_common as pc
+
+GROUP = "sketch"
+INFO = ("Sketches: bodies, sketches on planes and faces, geometry and constraints, offset, external edges, fillet/trim/split/mirror, "
+        "copy/move/rotate/scale, arrays, extend, join, carbon copy, projection from binders, B-spline conversion, validate and repair, the solver's state.")
+
+V = FreeCAD.Vector
+
+
+def obj(props, required=()):
+    return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
+
+
+def bad(msg):
+    return ToolError("invalid_input", msg)
+
+
+def ids_of(sk, geos, what="geometry"):
+    n = len(sk.Geometry)
+    if geos is None:
+        return [i for i in range(n) if not sk.getConstruction(i)]
+    if not isinstance(geos, list) or not geos or not all(isinstance(g, int) and not isinstance(g, bool) for g in geos):
+        raise bad(f"{what}: [geometry ids] — sketch_state lists them.")
+    out = [g for g in geos if 0 <= g < n]
+    if len(out) != len(geos):
+        raise bad(f"{what}: ids 0 … {n - 1} in {sk.Label}.")
+    return out
+
+
+def state(sk):
+    try:
+        code = sk.solve()
+    except Exception:
+        code = -1
+    out = {"sketch": sk.Label, "geometry": len(sk.Geometry), "constraints": len(sk.Constraints), "solver": "solved" if code == 0 else f"code {code}"}
+    for k, p in (("dof", "DoF"), ("conflicting", "Conflicting"), ("redundant", "Redundant"), ("malformed", "MalformedConstraints")):
+        v = getattr(sk, p, None)
+        if v not in (None, [], ()):
+            out[k] = list(v) if isinstance(v, (list, tuple)) else v
+    try:
+        w = sk.Shape.Wires
+        out["wires"] = len(w)
+        out["closedWires"] = sum(1 for x in w if x.isClosed())
+    except Exception:
+        pass
+    return out
+
+
+def tools(session):
+    s = session
+    doc = lambda: s.doc  # noqa: E731
+
+    def sketch(a):
+        return pc.sketch_of(doc(), a.get("sketch"), None)
+
+    def done(sk, tool, extra=None):
+        doc().recompute()
+        b = pc.broken(doc())
+        if b:
+            raise ToolError("failed", f"That breaks {b[0]['object']}: {b[0]['error']} — nothing was kept.")
+        s.snapshot(tool)
+        return {**state(sk), **(extra or {}), "step": len(s.steps)}
+
+    def new_ids(sk, before):
+        return list(range(before, len(sk.Geometry)))
+
+    # ---- copy, move, rotate, scale ----
+
+    def transformed_copies(sk, geos, m):
+        out = []
+        for g in geos:
+            gg = sk.Geometry[g].copy()
+            gg.transform(m)
+            out.append(gg)
+        return out
+
+    def sketch_copy(a):
+        sk = sketch(a)
+        geos = ids_of(sk, a.get("geometry"))
+        before = len(sk.Geometry)
+        keep = not a.get("move")
+        if a.get("by") is not None:
+            d = pc.vec2(a["by"], "by")
+            v = V(d[0], d[1], 0)
+            if keep:
+                sk.addCopy(geos, v, bool(a.get("clone")))
+            else:
+                sk.addMove(geos, v)
+            what = f"by {[d.x, d.y]}"
+        elif a.get("rotate") is not None or a.get("scale") is not None:
+            if a.get("rotate") is not None:
+                r = a["rotate"]
+                c = pc.vec2(r.get("center", [0, 0]), "rotate.center")
+                ang = float(r.get("angle", 90))
+                m = FreeCAD.Placement(V(), FreeCAD.Rotation(V(0, 0, 1), ang), V(c[0], c[1], 0)).toMatrix()
+                what = f"rotated {ang:g}° about {[c.x, c.y]}"
+            else:
+                sc = a["scale"]
+                c = pc.vec2(sc.get("center", [0, 0]), "scale.center")
+                f = float(sc.get("factor", 2))
+                if f <= 0:
+                    raise bad("scale.factor: above 0.")
+                m = FreeCAD.Matrix()
+                m.move(V(-c[0], -c[1], 0))
+                m2 = FreeCAD.Matrix()
+                m2.scale(f, f, 1)
+                m = m2.multiply(m)
+                m3 = FreeCAD.Matrix()
+                m3.move(V(c[0], c[1], 0))
+                m = m3.multiply(m)
+                what = f"scaled ×{f:g} about {[c.x, c.y]}"
+            copies = transformed_copies(sk, geos, m)
+            sk.addGeometry(copies, False)
+            if not keep:
+                sk.delGeometries(sorted(geos))
+                before -= len(geos)
+        else:
+            raise bad("by [dx, dy], rotate { center, angle }, or scale { center, factor }.")
+        made = new_ids(sk, before) if keep else "the originals, moved (ids renumbered when rotated or scaled)"
+        return done(sk, "sketch_copy", {"did": ("copied " if keep else "moved ") + what, "new": made})
+
+    def sketch_array(a):
+        sk = sketch(a)
+        geos = ids_of(sk, a.get("geometry"))
+        before = len(sk.Geometry)
+        if a.get("polar"):
+            p = a["polar"]
+            c = pc.vec2(p.get("center", [0, 0]), "polar.center")
+            n = int(p.get("count", 6))
+            span = float(p.get("angle", 360))
+            if n < 2:
+                raise bad("polar.count: 2 or more, the original counted.")
+            step = span / n if abs(span - 360) < 1e-9 else span / (n - 1)
+            for k in range(1, n):
+                m = FreeCAD.Placement(V(), FreeCAD.Rotation(V(0, 0, 1), step * k), V(c[0], c[1], 0)).toMatrix()
+                sk.addGeometry(transformed_copies(sk, geos, m), False)
+            what = f"{n} round {[c.x, c.y]} over {span:g}°"
+        else:
+            rows, cols = int(a.get("rows", 1)), int(a.get("cols", 2))
+            if rows < 1 or cols < 1 or rows * cols < 2:
+                raise bad("rows and cols: at least two copies in all.")
+            d = pc.vec2(a.get("spacing", [10, 10]), "spacing")
+            # FreeCAD's rows run along the vector's perpendicular, scaled by perpscale
+            ratio = (d[1] / d[0]) if abs(d[0]) > 1e-9 else 1.0
+            sk.addRectangularArray(geos, V(d[0], 0, 0) if abs(d[0]) > 1e-9 else V(0, d[1], 0), bool(a.get("clone")), rows, cols, bool(a.get("constrain")), ratio if abs(d[0]) > 1e-9 else 1.0)
+            what = f"{rows} × {cols} at {[d.x, d.y]}"
+        return done(sk, "sketch_array", {"did": what, "new": new_ids(sk, before)})
+
+    # ---- extend, join ----
+
+    def sketch_extend(a):
+        sk = sketch(a)
+        g = a.get("geo")
+        if not isinstance(g, int) or not 0 <= g < len(sk.Geometry):
+            raise bad("geo: a line's or arc's id.")
+        end = int(a.get("end", 2))
+        if end not in (1, 2):
+            raise bad("end: 1 (start) or 2 (end).")
+        if a.get("to") is not None:
+            # as far as another curve: measured along the line to where it meets it
+            tgt = sk.Geometry[int(a["to"])].toShape()
+            p = sk.getPoint(g, end)
+            other = sk.getPoint(g, 1 if end == 2 else 2)
+            dvec = p - other
+            dvec.normalize()
+            far = Part.LineSegment(p, p + dvec * 10000).toShape()
+            dist, pts, _ = far.distToShape(tgt)
+            if dist > 1e-6:
+                raise ToolError("not_found", f"geometry {g} does not reach {a['to']} going that way.")
+            inc = (pts[0][0] - p).Length
+        else:
+            inc = float(a.get("by", 0))
+            if inc == 0:
+                raise bad("by (mm, negative shortens) or to: the id of a curve to reach.")
+        sk.extend(g, inc, end)
+        return done(sk, "sketch_extend", {"extended": g, "by": round(inc, 4)})
+
+    def sketch_join(a):
+        sk = sketch(a)
+        x, y = a.get("a"), a.get("b")
+        if not (isinstance(x, list) and isinstance(y, list) and len(x) == len(y) == 2):
+            raise bad("a and b: [geo, vertex] each — the two ends to join into one B-spline.")
+        try:
+            sk.join(int(x[0]), int(x[1]), int(y[0]), int(y[1]), int(a.get("continuity", 0)))
+        except Exception as e:
+            raise ToolError("failed", f"The join failed: {e} — both ends must be curves' ends that meet.")
+        return done(sk, "sketch_join", {"joined": [x, y]})
+
+    # ---- carbon copy, projection ----
+
+    def sketch_carbon(a):
+        sk = sketch(a)
+        src = pc.sketch_of(doc(), a.get("from"), None)
+        if src is sk:
+            raise bad("from: another sketch.")
+        before = len(sk.Geometry)
+        try:
+            sk.carbonCopy(src.Name, bool(a.get("construction", False)))
+        except Exception as e:
+            raise ToolError("failed", f"No carbon copy from {src.Label}: {e} — the sketches must be parallel, in the same body (or allow cross-links).")
+        return done(sk, "sketch_carbon", {"from": src.Label, "new": new_ids(sk, before), "note": "Geometry and constraints copied; the copy stays linked to its source's values by expression."})
+
+    def sketch_project(a):
+        sk = sketch(a)
+        src = next((o for o in doc().Objects if a.get("from") in (o.Label, o.Name)), None)
+        if src is None or not hasattr(src, "Shape"):
+            raise ToolError("not_found", f"from {a.get('from')!r}: a binder (pd_binder), a datum or another sketch in this body.")
+        edges = a.get("edges")
+        names = []
+        if edges:
+            for e in edges:
+                if isinstance(e, str) and e.startswith(("Edge", "Vertex")):
+                    names.append(e)
+                elif isinstance(e, dict) and "near" in e:
+                    names += pc.find_edges(src.Shape, [e])
+                else:
+                    raise bad("edges: \"Edge3\" or { near: [x, y, z], kind } each; left out, every edge.")
+        else:
+            names = [f"Edge{i + 1}" for i in range(len(src.Shape.Edges))]
+        if not names:
+            raise bad(f"{src.Label} has no edges.")
+        before = len(sk.ExternalGeometry) if hasattr(sk, "ExternalGeometry") else 0
+        added = 0
+        for n in names:
+            try:
+                if a.get("defining"):
+                    sk.addExternal(src.Name, n, True)
+                else:
+                    sk.addExternal(src.Name, n)
+                added += 1
+            except Exception as e:
+                raise ToolError("failed", f"{src.Label}.{n} would not come in: {e} — from another body, bring it in with pd_binder first.")
+        out = done(sk, "sketch_project", {"from": src.Label, "edges": added, "ids": [-(3 + before + i) for i in range(added)],
+                                          "note": "External ids count down from -3; constrain to them with sketch_constrain. defining: true makes them part of the profile (where this FreeCAD allows)."})
+        return out
+
+    def sketch_to_bspline(a):
+        sk = sketch(a)
+        geos = ids_of(sk, a.get("geometry"))
+        for g in sorted(geos, reverse=True):
+            try:
+                sk.convertToNURBS(g)
+            except Exception as e:
+                raise ToolError("failed", f"geometry {g} would not convert: {e}")
+        return done(sk, "sketch_to_bspline", {"converted": geos})
+
+    # ---- validate and repair ----
+
+    def sketch_validate(a):
+        sk = sketch(a)
+        prec = float(a.get("precision", 0.01))
+        found = {}
+        try:
+            found["degenerate"] = int(sk.detectDegeneratedGeometries(prec))
+        except Exception:
+            pass
+        try:
+            found["missingCoincidences"] = int(sk.detectMissingPointOnPointConstraints(prec, False) or 0)
+        except Exception:
+            try:
+                sk.detectMissingPointOnPointConstraints(prec)
+                found["missingCoincidences"] = len(sk.MissingPointOnPointConstraints) if hasattr(sk, "MissingPointOnPointConstraints") else None
+            except Exception:
+                pass
+        try:
+            found["invalidConstraints"] = bool(sk.evaluateConstraints())
+        except Exception:
+            pass
+        st = state(sk)
+        for k in ("redundant", "conflicting", "malformed"):
+            if st.get(k):
+                found[k] = st[k]
+        fixed = []
+        if a.get("fix"):
+            if found.get("degenerate"):
+                sk.removeDegeneratedGeometries(prec)
+                fixed.append("degenerate geometry removed")
+            if found.get("missingCoincidences"):
+                try:
+                    sk.makeMissingPointOnPointCoincident(False)
+                    fixed.append("missing coincidences added")
+                except Exception as e:
+                    fixed.append(f"coincidences not added: {e}")
+            if found.get("invalidConstraints"):
+                sk.validateConstraints()
+                fixed.append("invalid constraints removed")
+            if st.get("redundant"):
+                sk.autoRemoveRedundants(True)
+                fixed.append("redundant constraints removed")
+            if a.get("autoconstrain"):
+                n0 = len(sk.Constraints)
+                sk.autoconstraint(prec, math.radians(float(a.get("angle", 1))), False)
+                fixed.append(f"{len(sk.Constraints) - n0} constraints added by the auto-constrainer")
+            if st.get("conflicting"):
+                fixed.append(f"conflicting {st['conflicting']} left: say which to drop (sketch_edit deleteConstraints)")
+            out = done(sk, "sketch_validate", {"found": found, "fixed": fixed})
+        else:
+            out = {**st, "found": found, "next": "fix: true repairs what can be (autoconstrain: true adds coincident/horizontal/vertical where the geometry already is)."}
+        return out
+
+    geo_ids = {"type": "array", "items": {"type": "integer"}}
+    sk_ref = {"type": "string", "description": "The sketch's name; may be left out when there is one."}
+    return [
+        Tool("sketch_copy", "Copy geometry in a sketch (move: true moves it instead): geometry [ids] (default every non-construction one), and by [dx, dy] (clone: true keeps copies equal to the originals), rotate { center, angle } or scale { center, factor }.",
+             obj({"sketch": sk_ref, "geometry": geo_ids, "by": {"type": "array"}, "rotate": {"type": "object"}, "scale": {"type": "object"}, "move": {"type": "boolean"}, "clone": {"type": "boolean"}}), sketch_copy, changes=True),
+        Tool("sketch_array", "An array of geometry in a sketch: rows, cols and spacing [dx, dy] (constrain: true keeps the spacing as constraints; clone: true keeps copies equal), or polar { center, count, angle }.",
+             obj({"sketch": sk_ref, "geometry": geo_ids, "rows": {"type": "integer"}, "cols": {"type": "integer"}, "spacing": {"type": "array"}, "constrain": {"type": "boolean"}, "clone": {"type": "boolean"}, "polar": {"type": "object"}}), sketch_array, changes=True),
+        Tool("sketch_extend", "Lengthen (or shorten) a line or arc at one end: geo, end 1 | 2, by mm, or to: another curve's id it should reach.",
+             obj({"sketch": sk_ref, "geo": {"type": "integer"}, "end": {"type": "integer"}, "by": {"type": "number"}, "to": {"type": "integer"}}, ["geo"]), sketch_extend, changes=True),
+        Tool("sketch_join", "Join two curves' ends into one B-spline: a [geo, vertex], b [geo, vertex], continuity 0 (corner) or 1 (smooth).",
+             obj({"sketch": sk_ref, "a": {"type": "array"}, "b": {"type": "array"}, "continuity": {"type": "integer"}}, ["a", "b"]), sketch_join, changes=True),
+        Tool("sketch_carbon", "Copy another sketch's geometry and constraints into this one (Sketcher's carbon copy): from, construction: true brings it as construction.",
+             obj({"sketch": sk_ref, "from": {"type": "string"}, "construction": {"type": "boolean"}}, ["from"]), sketch_carbon, changes=True),
+        Tool("sketch_project", "Bring edges of a binder, datum or another sketch into this sketch as external geometry: from, edges [\"Edge3\" | { near, kind }] (default all), defining: true makes them part of the profile.",
+             obj({"sketch": sk_ref, "from": {"type": "string"}, "edges": {"type": "array"}, "defining": {"type": "boolean"}}, ["from"]), sketch_project, changes=True),
+        Tool("sketch_to_bspline", "Convert geometry to B-splines (to reshape by poles, or join): geometry [ids].", obj({"sketch": sk_ref, "geometry": geo_ids}), sketch_to_bspline, changes=True),
+        Tool("sketch_validate", "Check a sketch the way Sketcher's Validate does: degenerate geometry, ends that touch with no coincidence, invalid, redundant and conflicting constraints (precision mm). fix: true repairs what it can; autoconstrain: true also adds the obvious constraints.",
+             obj({"sketch": sk_ref, "precision": {"type": "number"}, "fix": {"type": "boolean"}, "autoconstrain": {"type": "boolean"}, "angle": {"type": "number"}}), sketch_validate, changes=True),
+    ]

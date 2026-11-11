@@ -24,3 +24,9 @@
 - `trim { geo, at: [x, y] }` cuts off the piece of a curve between the crossings round that point; `split { geo, at }` breaks it in two there.
 - `mirror { geos, about }` adds symmetric copies about `"x"`, `"y"`, `"origin"` or a line's id, kept symmetric by constraints — draw one side, mirror the other.
 - Ids shift after a delete or a trim: read `sketch_state` before using ids again.
+
+## More sketch tools
+- `sketch_copy { geometry, by }` copies (or moves) geometry; `rotate { center, angle }` and `scale { center, factor }` likewise. `sketch_array` makes a grid (`rows`, `cols`, `spacing`) or a `polar` ring.
+- `sketch_extend { geo, end, by | to }` lengthens a line to a length or to another curve; `sketch_join` turns two ends into one B-spline.
+- `sketch_carbon { from }` copies another sketch in. `sketch_project { from: "<binder>" }` brings a binder's or datum's edges in to constrain to (another body: pd_binder first).
+- `sketch_validate` is Sketcher's Validate. Run it when a pad says the profile is open: `fix: true` closes gaps that should be coincident and drops degenerate or redundant pieces; `autoconstrain: true` adds the obvious constraints.
