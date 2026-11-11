@@ -1173,9 +1173,17 @@ def tools(session):
         setattr(v, HATCH_PROP, json.dumps(spec) if faces else "")
         X, Y = abs_xy(v)
         H = paper_size(page_holding(v))[1] if page_holding(v) is not None else 210.0
-        polys = paper_polys(v, [src.getElement(f) for f in faces], X, Y, H)
-        return done("td_hatch", {"view": v.Label, "faces": faces, "regions": len(polys), **{k: spec[k] for k in ("spacing", "angle")},
-                                 "note": "Drawn by td_export; a face seen edge-on has no area to hatch." if faces else "Hatching taken off."})
+        flat = []
+        for f in faces:
+            ps = paper_polys(v, [src.getElement(f)], X, Y, H)
+            area = sum(abs(sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(p, p[1:] + p[:1]))) / 2 for p in ps)
+            if area < 0.01:
+                flat.append(f)
+        out = {"view": v.Label, "faces": faces, **{k: spec[k] for k in ("spacing", "angle")},
+               "note": "Drawn by td_export." if faces else "Hatching taken off."}
+        if flat:
+            out["warning"] = f"{', '.join(flat)} {'is' if len(flat) == 1 else 'are'} seen edge-on in {v.Label}: nothing to hatch there — shape_query {{ normal }} finds the faces facing this view."
+        return done("td_hatch", out)
 
     def td_projection(a):
         page = page_of(doc(), a.get("page"))
