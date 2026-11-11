@@ -127,7 +127,7 @@ def tools(session):
                 # The sprocket's own object asks its dialog for the chain table;
                 # its outline is drawn with the same builder.
                 import Part
-                import fcsprocket
+                from fcsprocket import fcsprocket
                 from fcsprocket import sprocket as S
 
                 pitch = float(a.get("pitch", 9.525))
