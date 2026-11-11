@@ -92,6 +92,80 @@ def tools(session):
         return pc.settle(s, b, f, "pd_primitive", before, "cut" if sub else "add",
                          hint="at and rotate place it from the body's origin; a subtractive one must overlap the body.")
 
+    # ---- gears and sprockets ----
+
+    def pd_gear(a):
+        """An involute gear or a chain sprocket: PartDesign's own profile
+        (parametric: edit its teeth later), padded to a thickness."""
+        b = pc.pd_body(doc(), a.get("body"))
+        kind = a.get("kind", "gear")
+        teeth = int(a.get("teeth", 20))
+        if teeth < 3:
+            raise bad("teeth: 3 or more.")
+        thick = float(a.get("thickness", 5))
+        if thick <= 0:
+            raise bad("thickness: above 0 mm.")
+        before = pc.volume(b)
+        up = FreeCAD.GuiUp
+        FreeCAD.GuiUp = False  # their makers reach for the active view otherwise
+        try:
+            if kind == "gear":
+                import InvoluteGearFeature as G
+
+                prof = G.makeInvoluteGear("InvoluteGear")
+                m = float(a.get("module", 1))
+                if m <= 0:
+                    raise bad("module: above 0 mm (pitch diameter = module × teeth).")
+                prof.NumberOfTeeth, prof.Modules = teeth, f"{m} mm"
+                prof.PressureAngle = f"{float(a.get('pressureAngle', 20))} deg"
+                prof.ExternalGear = not a.get("internal", False)
+                prof.HighPrecision = bool(a.get("highPrecision", True))
+                if a.get("shift") is not None and hasattr(prof, "ProfileShiftCoefficient"):
+                    prof.ProfileShiftCoefficient = float(a["shift"])
+                info = {"pitchDiameter": round(m * teeth, 3), "outsideDiameter": round(m * (teeth + 2), 3) if not a.get("internal") else None}
+            elif kind == "sprocket":
+                # The sprocket's own object asks its dialog for the chain table;
+                # its outline is drawn with the same builder.
+                import Part
+                import fcsprocket
+                from fcsprocket import sprocket as S
+
+                pitch = float(a.get("pitch", 9.525))
+                roller = float(a.get("roller", 0.53 * pitch))
+                w = fcsprocket.FCWireBuilder()
+                S.CreateSprocket(w, pitch, teeth, roller)
+                prof = doc().addObject("Part::Feature", "Sprocket")
+                prof.Shape = Part.Wire([o.toShape() for o in w.wire])
+                b.addObject(prof)
+                import math
+
+                info = {"pitchDiameter": round(pitch / math.sin(math.pi / teeth), 3), "chainPitch": pitch, "roller": roller}
+            else:
+                raise bad("kind: gear (involute) | sprocket (roller chain).")
+        finally:
+            FreeCAD.GuiUp = up
+        if prof not in b.Group:
+            b.addObject(prof)
+        prof.Label = s.unique(a.get("name") and a["name"] + " profile" or f"{kind.capitalize()} {teeth}T", prof)
+        if kind == "gear":
+            attach_origin(b, prof, placement(a))
+        else:
+            prof.Placement = placement(a)
+        doc().recompute()
+        pad = new(b, "PartDesign::Pad", a.get("name") or f"{kind.capitalize()} {teeth}T pad")
+        pad.Profile = prof
+        pad.Length = thick
+        if a.get("bore"):
+            info["bore"] = float(a["bore"])
+        out = pc.settle(s, b, pad, "pd_gear", before, "add", hint="the gear lies on the body's XY plane at at; a body with a solid already needs the gear beside it, not inside.")
+        if a.get("bore"):
+            hole = new(b, "PartDesign::SubtractiveCylinder", f"{pad.Label} bore")
+            hole.Radius, hole.Height = float(a["bore"]) / 2, thick + 2
+            pl = placement(a)
+            attach_origin(b, hole, FreeCAD.Placement(pl.Base + V(0, 0, -1), pl.Rotation))
+            out = pc.settle(s, b, hole, "pd_gear", None)
+        return {**out, "teeth": teeth, "kind": kind, "profile": prof.Label, **{k: v for k, v in info.items() if v is not None}}
+
     # ---- helix ----
 
     def pd_helix(a):
@@ -304,6 +378,10 @@ def tools(session):
     return [
         Tool("pd_primitive", "A PartDesign primitive: kind box | cylinder | sphere | cone | ellipsoid | torus | prism | wedge, size { … } (mm), at [x, y, z] and rotate { axis, angle } from the body's origin; subtractive: true cuts it out. Parametric, attached to the body's XY plane.",
              obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": list(PRIMS)}, "size": size_schema, "subtractive": {"type": "boolean"}, "name": {"type": "string"}, **place}, ["kind"]), pd_primitive, changes=True),
+        Tool("pd_gear", "An involute gear (kind gear: teeth, module, pressureAngle 20, internal, shift) or a roller-chain sprocket (kind sprocket: teeth, pitch 9.525 for #35 / 12.7 for #40, roller diameter) as a padded PartDesign feature on the body's XY plane: thickness, bore mm, at. Answers the pitch diameter.",
+             obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": ["gear", "sprocket"]}, "teeth": {"type": "integer"}, "module": {"type": "number"}, "pressureAngle": {"type": "number"},
+                  "internal": {"type": "boolean"}, "shift": {"type": "number"}, "highPrecision": {"type": "boolean"}, "pitch": {"type": "number"}, "roller": {"type": "number"},
+                  "thickness": {"type": "number"}, "bore": {"type": "number"}, "at": {"type": "array"}, "name": {"type": "string"}}), pd_gear, changes=True),
         Tool("pd_helix", "Sweep a sketch's profile in a helix about an axis (default the sketch's V_Axis; x | y | z, H_Axis, a line's id): two of pitch (mm per turn), height (mm), turns; taper (degrees), growth (mm per turn: a spiral), leftHanded, reversed; subtractive: true cuts it (a thread, a groove). Springs, coils, worm threads.",
              obj({"body": {"type": "string"}, "profile": {"type": "string"}, "axis": {"type": ["string", "integer"]}, "pitch": {"type": "number"}, "height": {"type": "number"}, "turns": {"type": "number"},
                   "taper": {"type": "number"}, "growth": {"type": "number"}, "leftHanded": {"type": "boolean"}, "reversed": {"type": "boolean"}, "subtractive": {"type": "boolean"}, "name": {"type": "string"}}, ["profile"]), pd_helix, changes=True),
