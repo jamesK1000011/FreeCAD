@@ -144,35 +144,6 @@ def tools(session):
         length = sum(e.Length for e in base.Shape.Edges)
         return finish(w, "bim_wall", {"length": round(length, 1), "width": width, "height": height, "align": align.lower(), "base": base.Label})
 
-    def sketched_window(width, height, frame_w, depth, pl, door):
-        import Sketcher
-
-        sk = doc().addObject("Sketcher::SketchObject", "WindowSketch")
-        sk.Label = s.unique("Window outline")
-        # The sketch on the wall's centre plane, pushed back half the frame's depth.
-        n = pl.Rotation.multVec(UP)
-        sk.Placement = FreeCAD.Placement(pl.Base - n * (depth / 2), pl.Rotation)
-
-        def rect(x0, y0, x1, y1):
-            pts = [V(x0, y0, 0), V(x1, y0, 0), V(x1, y1, 0), V(x0, y1, 0)]
-            first = sk.GeometryCount
-            for i in range(4):
-                sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]), False)
-            for i in range(4):
-                sk.addConstraint(Sketcher.Constraint("Coincident", first + i, 2, first + (i + 1) % 4, 1))
-
-        f = frame_w
-        rect(0, 0, width, height)
-        rect(f, 0 if door else f, width - f, height - f)
-        doc().recompute()
-        pane = 40.0 if door else 10.0
-        parts = ["Frame", "Frame", "Wire0,Wire1", str(depth), "0",
-                 "Pane", "Solid panel" if door else "Glass panel", "Wire1", str(pane), str((depth - pane) / 2)]
-        win = headless_call(Arch.makeWindow, sk, width=width, height=height, parts=parts)
-        if win is None:
-            raise ToolError("failed", "FreeCAD could not make the window.")
-        return win
-
     def bim_opening(a):
         wall = picks.find(doc(), a.get("wall"), "wall")
         kind = a.get("kind", "window")
@@ -204,29 +175,56 @@ def tools(session):
         if left + width > run.Length + 1e-6:
             raise bad(f"The opening runs past the end of that stretch of wall ({run.Length:.0f} mm long, the opening {left:.0f} … {left + width:.0f}).")
         d.normalize()
-        pl = FreeCAD.Placement(p0 + d * left + V(0, 0, sill), frame(d, UP))
-        # Frame sizes the window commands use: frame 50, its depth 100, glass inset.
-        h1 = h2 = h3 = float(a.get("frame", 50))
-        w1, w2 = float(a.get("depth", 100)), float(a.get("frame", 50))
-        built = preset
-        try:
-            win = headless_call(Arch.makeWindowPreset, preset, width=width, height=height, h1=h1, h2=h2, h3=h3, w1=w1, w2=w2, o1=0.0, o2=w2, placement=pl)
-        except ToolError:
-            # The presets reach for the window's dialogs in some FreeCAD builds:
-            # the same window drawn here — a frame round a pane (a door's panel).
-            win = None
+        # Across the wall: where its middle sits off the line (align), and how thick it is.
+        n = UP.cross(d)
+        n.normalize()
+        W = float(getattr(wall, "Width", 200))
+        off = {"Left": W / 2, "Right": -W / 2}.get(str(getattr(wall, "Align", "Center")), 0.0)
+        pl = FreeCAD.Placement(p0 + d * left + n * off + V(0, 0, sill), frame(d, n))
+        fw, depth = float(a.get("frame", 50)), float(a.get("depth", 100))
+        door = preset in DOORS
+        if 2 * fw >= min(width, height):
+            raise bad("frame: narrower than half the opening.")
+        # The opening, cut out of the wall (the wall's Subtractions), a little deeper than it.
+        hole = doc().addObject("Part::Feature", "Opening")
+        hole.Label = s.unique(f"{a.get('name') or ('Door' if door else 'Window')} opening")
+        hole.Shape = Part.makeBox(width, W + 20, height, V(0, -(W + 20) / 2, 0))
+        hole.Placement = pl
+        wall.Subtractions = list(wall.Subtractions) + [hole]
+        # The window itself: a frame round a pane (a door's panel), as an Arch component typed Window or Door.
+        outer = Part.makeBox(width, depth, height, V(0, -depth / 2, 0))
+        inner = Part.makeBox(width - 2 * fw, depth + 2, height - (fw if door else 2 * fw), V(fw, -depth / 2 - 1, 0 if door else fw))
+        pane_t = 40.0 if door else 10.0
+        pane = Part.makeBox(width - 2 * fw, pane_t, height - (fw if door else 2 * fw), V(fw, -pane_t / 2, 0 if door else fw))
+        shape = Part.makeCompound([outer.cut(inner), pane])
+        base = doc().addObject("Part::Feature", "WindowShape")
+        base.Label = s.unique(f"{a.get('name') or ('Door' if door else 'Window')} shape")
+        base.Shape = shape
+        base.Placement = pl
+        mk = getattr(Arch, "makeComponent", None)
+        win = headless_call(mk, base) if mk else None
         if win is None:
-            win = sketched_window(width, height, h1, w1, pl, preset in DOORS)
-            built = "frame and " + ("panel" if preset in DOORS else "glass") + f" (the {preset} preset needs the FreeCAD window here)"
-        named(win, a.get("name") or ("Door" if preset in DOORS else "Window"))
+            win = base
+            win.addProperty("App::PropertyString", "IfcType", "IFC", "IFC type")
+        named(win, a.get("name") or ("Door" if door else "Window"))
+        try:
+            win.IfcType = "Door" if door else "Window"
+        except Exception:
+            pass
+        for k, v in (("Width", width), ("Height", height)):
+            if not hasattr(win, k):
+                win.addProperty("App::PropertyLength", k, "Window", "")
+            setattr(win, k, v)
+        if not hasattr(win, "Hosts"):
+            win.addProperty("App::PropertyLinkList", "Hosts", "Window", "The wall it is set into")
         win.Hosts = [wall]
-        if preset in DOORS and hasattr(win, "IfcType"):
-            win.IfcType = "Door"
+        built = f"{'door' if door else 'window'}: a {fw:g} mm frame round a {'panel' if door else 'pane'} (FreeCAD's window presets need its window)"
         before = wall.Shape.Volume if wall.Shape.Solids else 0
         doc().recompute()
         after = wall.Shape.Volume if wall.Shape.Solids else 0
         out = finish(win, "bim_opening", {"wall": wall.Label, "preset": built, "width": width, "height": height, "sill": sill, "at": at})
         out["wallCut_m3"] = round((before - after) / 1e9, 4)
+        out["opening"] = hole.Label
         if before - after <= 0:
             out["warning"] = "The wall was not cut — the opening may be outside it."
         return out
@@ -479,24 +477,72 @@ def tools(session):
         counts = {k: len(f.by_type(k)) for k in ("IfcWall", "IfcWindow", "IfcDoor", "IfcSlab", "IfcColumn", "IfcBeam", "IfcSpace", "IfcBuildingStorey", "IfcRoof", "IfcStair")}
         return {"path": p, "bytes": os.path.getsize(p), "schema": f.schema, "objects": [o.Label for o in objs], "readBack": {k: v for k, v in counts.items() if v}}
 
+    def ifc_bodies(p):
+        import ifcopenshell
+        import ifcopenshell.geom
+
+        f = ifcopenshell.open(p)
+        st = ifcopenshell.geom.settings()
+        st.set("use-world-coords", True)
+        unit = 1000.0  # IfcOpenShell gives metres
+        n = 0
+        for el in f.by_type("IfcProduct"):
+            if not getattr(el, "Representation", None) or el.is_a("IfcOpeningElement") or el.is_a("IfcSpatialStructureElement") and not el.is_a("IfcSpace"):
+                continue
+            try:
+                g = ifcopenshell.geom.create_shape(st, el).geometry
+            except Exception:
+                continue
+            vs, fs = list(g.verts), list(g.faces)
+            if not fs:
+                continue
+            P = [V(vs[i] * unit, vs[i + 1] * unit, vs[i + 2] * unit) for i in range(0, len(vs), 3)]
+            faces = []
+            for i in range(0, len(fs), 3):
+                a_, b_, c_ = P[fs[i]], P[fs[i + 1]], P[fs[i + 2]]
+                if (b_ - a_).cross(c_ - a_).Length > 1e-9:
+                    faces.append(Part.Face(Part.makePolygon([a_, b_, c_, a_])))
+            if not faces:
+                continue
+            sh = Part.makeShell(faces)
+            try:
+                sol = Part.makeSolid(sh)
+                sh = sol.removeSplitter() if sol.isValid() else sh
+            except Exception:
+                pass
+            o = doc().addObject("Part::Feature", "Ifc")
+            o.Shape = sh
+            o.Label = s.unique(el.Name or el.is_a()[3:])
+            o.addProperty("App::PropertyString", "IfcType", "IFC", "IFC class")
+            o.IfcType = el.is_a()[3:]
+            n += 1
+        if not n:
+            raise ToolError("failed", "IFC import: no product geometry could be read.")
+
     def bim_import(a):
         need_ifc()
         p = where(a.get("path"), "")
         if not os.path.isfile(p):
             raise ToolError("not_found", f"{p}: no such file.")
         before = {o.Name for o in doc().Objects}
-        im = ifc_module("importIFC")
+        how = "FreeCAD's IFC importer"
         try:
+            im = ifc_module("importIFC")
             im.insert(p, doc().Name)
         except Exception as e:
-            raise ToolError("failed", f"IFC import failed: {e}")
+            # FreeCAD's importer and the IfcOpenShell installed can disagree on
+            # settings: each product's geometry read here instead, as a body.
+            for o in [o for o in doc().Objects if o.Name not in before]:
+                doc().removeObject(o.Name)
+            how = f"each product's geometry, read with IfcOpenShell (FreeCAD's importer: {e})"
+            ifc_bodies(p)
         doc().recompute()
         made = [o for o in doc().Objects if o.Name not in before]
         kinds = {}
         for o in made:
             kinds[ifc_type(o)] = kinds.get(ifc_type(o), 0) + 1
         s.snapshot("bim_import")
-        return {"path": p, "objects": len(made), "byType": kinds, "step": len(s.steps)}
+        return {"path": p, "objects": len(made), "byType": kinds, "read": how, "step": len(s.steps)}
 
     def bim_list(a):
         out = []
@@ -518,7 +564,7 @@ def tools(session):
         Tool("bim_wall", "A wall along points [[x, y(, z)] …] (closed: true joins the last to the first) or a base sketch/wire: width (200), height (3000) mm, align center | left | right of the line.",
              obj({"points": pts, "closed": {"type": "boolean"}, "base": {"type": "string"}, "width": {"type": "number"}, "height": {"type": "number"},
                   "align": {"type": "string", "enum": ["center", "left", "right"]}, "name": {"type": "string"}}), bim_wall, changes=True),
-        Tool("bim_opening", f"A window or door set into a wall, its opening cut through: kind window | door, preset ({', '.join(WINDOWS + DOORS)}), width, height, at (its left edge, mm along the wall from its start), sill (mm above the wall's foot: 900 window, 0 door), frame and depth mm.",
+        Tool("bim_opening", "A window or door set into a wall, its opening cut through (the wall's subtraction): kind window | door — a frame (frame mm wide, depth mm deep) round a glass pane or a door panel — width, height, at (its left edge, mm along the wall from its start), sill (mm above the wall's foot: 900 window, 0 door), frame and depth mm.",
              obj({"wall": {"type": "string"}, "kind": {"type": "string", "enum": ["window", "door"]}, "preset": {"type": "string"}, "width": {"type": "number"}, "height": {"type": "number"},
                   "at": {"type": "number"}, "sill": {"type": "number"}, "frame": {"type": "number"}, "depth": {"type": "number"}, "name": {"type": "string"}}, ["wall"]), bim_opening, changes=True),
         Tool("bim_structure", "Structure: column { at, width, depth, height }, beam { from, to, width, depth }, slab or footing { points outline or base, thickness (slab on top of the outline, footing below it) }.",
