@@ -17,5 +17,5 @@ FreeCAD's own Inspection feature measures an actual against nominals, point by p
 
 ## traps
 - `search_radius` must reach past the tolerance, or points out of tolerance read as out of reach. A refusal says so.
-- A body as the actual is measured at its mesh's vertices: `deflection` sets how fine that is. Coarse mesh, few points.
+- A body as the actual is sampled every `spacing` mm (default 1% of its size). Finer finds smaller faults and takes longer.
 - Comparing two versions of a design works the same way: the new body as the actual, the old one as the nominal.

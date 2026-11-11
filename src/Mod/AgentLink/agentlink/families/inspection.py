@@ -194,10 +194,12 @@ def tools(session):
             return float(t[0]), float(t[1])
         raise bad("tolerance: ±t (a number) or [low, high] mm, low < high.")
 
-    def mesh_of_body(o, deflection):
-        import MeshPart
-
-        m = MeshPart.meshFromShape(Shape=o.Shape, LinearDeflection=deflection, AngularDeflection=0.35, Relative=False)
+    def mesh_of_body(o, deflection, spacing, cap):
+        # Tessellated, then split until no edge is over spacing: a flat face
+        # is measured across it, not only at its corners.
+        L = render.body_layer(o, 0, tol=deflection)
+        T, F = render.subdivide(L["V"], L["F"], spacing, cap=cap)
+        m = Mesh.Mesh([[tuple(T[i]) for i in tri] for tri in F])
         f = doc().addObject("Mesh::Feature", "Inspected")
         f.Label = s.unique(f"{o.Label} as inspected")
         f.Mesh = m
@@ -253,7 +255,12 @@ def tools(session):
             defl = float(a.get("deflection", 0.1))
             if not 0.001 <= defl <= 5:
                 raise bad("deflection: how closely the body's mesh follows it, 0.001 … 5 mm.")
-            meshed = mesh_of_body(act, defl)
+            diag = act.Shape.BoundBox.DiagonalLength
+            spacing = float(a.get("spacing") or max(diag / 100.0, 0.2))
+            if spacing <= 0:
+                raise bad("spacing: mm between measured points on the body, over 0.")
+            cap = int(a.get("cap", 60000))
+            meshed = mesh_of_body(act, defl, spacing, max(1000, min(cap, 400000)))
             act_used = meshed
         else:
             act_used = act
@@ -288,7 +295,7 @@ def tools(session):
         s.snapshot("insp_run")
         out = reading(f, int(a.get("worst", 5)))
         if meshed is not None:
-            out["measuredOn"] = f"{meshed.Label} ({len(meshed.Mesh.Points)} points, deflection {a.get('deflection', 0.1)} mm), hidden"
+            out["measuredOn"] = f"{meshed.Label}: {len(meshed.Mesh.Points)} points about {spacing:.3g} mm apart (spacing), hidden"
         out["next"] = "view_render { map: \"inspection\" } to see it; insp_export for a report."
         out["step"] = len(s.steps)
         return out
@@ -354,9 +361,9 @@ def tools(session):
                 "summary": {k: rep[k] for k in ("rms", "min", "max", "inTolerancePercent", "verdict") if k in rep}}
 
     return [
-        Tool("insp_run", "Inspect: actual (a mesh, points or a body — a body is meshed at deflection mm, kept hidden) or file (a scan: stl, obj, ply, asc, pcd …) against nominals [bodies, meshes, points]; search_radius mm (further reads out of reach), thickness, tolerance ±t or [low, high]. FreeCAD's own Inspection feature, left in the document. Answers RMS, spread, % in tolerance and the worst spots.",
+        Tool("insp_run", "Inspect: actual (a mesh, points or a body — a body is sampled every spacing mm (default 1% of its size), kept hidden as a mesh) or file (a scan: stl, obj, ply, asc, pcd …) against nominals [bodies, meshes, points]; search_radius mm (further reads out of reach), thickness, tolerance ±t or [low, high]. FreeCAD's own Inspection feature, left in the document. Answers RMS, spread, % in tolerance and the worst spots.",
              obj({"actual": {"type": "string"}, "file": {"type": "string"}, "nominals": {"type": "array", "items": {"type": "string"}}, "search_radius": {"type": "number"}, "thickness": {"type": "number"},
-                  "tolerance": {"type": ["number", "array"]}, "deflection": {"type": "number"}, "name": {"type": "string"}, "worst": {"type": "integer"}}, ["nominals"]), insp_run, changes=True),
+                  "tolerance": {"type": ["number", "array"]}, "deflection": {"type": "number"}, "spacing": {"type": "number"}, "cap": {"type": "integer"}, "name": {"type": "string"}, "worst": {"type": "integer"}}, ["nominals"]), insp_run, changes=True),
         Tool("insp_update", "Change an inspection and measure again: search_radius, thickness, tolerance (null clears), nominals.",
              obj({"inspection": {"type": "string"}, "search_radius": {"type": "number"}, "thickness": {"type": "number"}, "tolerance": {"type": ["number", "array", "null"]}, "nominals": {"type": "array", "items": {"type": "string"}}, "worst": {"type": "integer"}}), insp_update, changes=True),
         Tool("insp_read", "One inspection's numbers: RMS, min, max, mean, spread, histogram, in/out of tolerance, out of reach, worst spots (worst: how many). Changes nothing.",
