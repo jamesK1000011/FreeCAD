@@ -188,7 +188,8 @@ def tools(session):
             e = {"name": o.Name, "label": o.Label, "type": o.TypeId}
             if hasattr(o, "Visibility"):
                 e["visible"] = bool(o.Visibility)
-            parents = [p.Label for p in o.InList]
+            # an object linked twice (a group that also binds to it) once
+            parents = list(dict.fromkeys(p.Label for p in o.InList))
             if parents:
                 e["parents"] = parents
             sh = getattr(o, "Shape", None)

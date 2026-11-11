@@ -180,7 +180,7 @@ def tools(session):
         try:
             o.evalExpression(str(expr))
         except Exception as e:
-            raise ToolError("invalid_input", f"{expr!r} does not evaluate: {e} — refer to a parameter as {SHEET}.<name> (param_list).")
+            raise ToolError("invalid_input", f"{expr!r} does not evaluate: {e} — refer to a parameter as {SHEET}.<name> (param_list), or to any sheet's cell as <Sheet>.<alias> or <Sheet>.A1 (sheet_list).")
         try:
             o.setExpression(path, str(expr))
         except Exception as e:
