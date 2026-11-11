@@ -22,3 +22,6 @@
 - `pd_multitransform { features, steps }` chains patterns. A grid is two linear steps; `scale` steps grow the copies.
 - `pd_datum` makes a line, point or coordinate system: placed from the origin, or `on: { near }` a round edge (its axis or centre), which then follows the model. A datum line serves as an axis by name.
 - `pd_binder { from: "Other body", faces }` brings another body's faces in to sketch on (sketch_external). `pd_boolean { op, with }` fuses, cuts or keeps the common part of other bodies.
+
+## gears and sprockets
+`pd_gear` makes an involute gear (`teeth`, `module`, `pressureAngle`; `internal: true` gives a ring gear with a `rim`) or a roller-chain sprocket (`kind: "sprocket"`, chain `pitch`: 9.525 for #35, 12.7 for #40). It is padded to `thickness` on the body's XY plane at `at`, with an optional `bore`. It answers the pitch diameter; two gears mesh at centres (d1 + d2) / 2 apart.
