@@ -84,8 +84,13 @@ def _curv_map(s, a):
     c = np.array([(k[0], k[1]) for k in m.getCurvaturePerVertex()], dtype=float)  # k1, k2 (and their directions) per point
     kind = a.get("curvature", "mean")
     vals = {"mean": (c[:, 0] + c[:, 1]) / 2, "gauss": c[:, 0] * c[:, 1], "max": np.max(np.abs(c), axis=1)}.get(kind, (c[:, 0] + c[:, 1]) / 2)
-    hi = float(np.percentile(np.abs(vals), 95)) or 1.0
-    return {"layers": [{"name": o.Label, "V": V_, "F": F_, "values": vals, "creases": True}], "unit": "1/mm", "cmap": "jet", "range": [-hi, hi] if kind != "max" else [0, hi],
+    lo5, hi95 = float(np.percentile(vals, 5)), float(np.percentile(vals, 95))
+    if lo5 < 0 < hi95:  # concave and convex: zero in the middle
+        m_ = max(-lo5, hi95) or 1.0
+        rng = [-m_, m_]
+    else:  # all one way: the colours spent on its own spread
+        rng = [lo5, hi95] if hi95 > lo5 else [lo5 - 1e-6, hi95 + 1e-6]
+    return {"layers": [{"name": o.Label, "V": V_, "F": F_, "values": vals, "creases": True}], "unit": "1/mm", "cmap": "jet", "range": rng,
             "worst": "abs", "label": f"CURVATURE ({kind.upper()})", "note": f"{o.Label}: {kind} curvature at each point (1 / radius); 5% beyond the colours' ends."}
 
 
@@ -443,7 +448,7 @@ def tools(session):
         return {"mesh": o.Label, "points": int(len(c)), "flatPercent": round(flat, 2),
                 "tightestRadius": round(float(np.min(r)), 4), "medianRadius": round(float(np.median(r[kmax > 1e-6])) if (kmax > 1e-6).any() else math.inf, 3),
                 "meanCurvature": {"min": round(float(mean.min()), 5), "max": round(float(mean.max()), 5)},
-                "next": "view_render { map: \"curvature\", mesh } colours it."}
+                "next": "view_render { map: \"curvature\", objects: [the mesh] } colours it."}
 
     def meshobj_project(a):
         import MeshPart
