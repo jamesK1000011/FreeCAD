@@ -52,8 +52,9 @@ def tools(session):
     doc = lambda: s.doc  # noqa: E731
 
     def new(b, kind, label):
+        label = s.unique(label)  # before the object exists, or it clashes with itself
         f = b.newObject(kind, kind.split("::")[-1])
-        f.Label = s.unique(label)
+        f.Label = label
         return f
 
     def attach_origin(b, f, pl):
@@ -197,8 +198,10 @@ def tools(session):
         types = {"line": "PartDesign::Line", "point": "PartDesign::Point", "lcs": "PartDesign::CoordinateSystem"}
         if kind not in types:
             raise bad("kind: line, point or lcs (a coordinate system).")
-        f = b.newObject(types[kind], {"line": "DatumLine", "point": "DatumPoint", "lcs": "LCS"}[kind])
-        f.Label = s.unique(a.get("name") or f.Name)
+        default = {"line": "DatumLine", "point": "DatumPoint", "lcs": "LCS"}[kind]
+        label = s.unique(a.get("name") or default)
+        f = b.newObject(types[kind], default)
+        f.Label = label
         how = "placed"
         on = a.get("on")
         if on is not None:
@@ -256,8 +259,9 @@ def tools(session):
         for q in a.get("faces") or []:
             i, _ = pc.find_face(src.Shape, q)
             subs.append(f"Face{i + 1}")
+        label = s.unique(a.get("name") or f"{src.Label} binder")
         f = b.newObject("PartDesign::SubShapeBinder", "Binder")
-        f.Label = s.unique(a.get("name") or f"{src.Label} binder")
+        f.Label = label
         f.Support = [(src, tuple(subs) if subs else ("",))]
         if "BindMode" in f.PropertiesList and a.get("frozen"):
             f.BindMode = "Frozen"
