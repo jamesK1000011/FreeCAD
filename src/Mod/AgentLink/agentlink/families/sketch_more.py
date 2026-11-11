@@ -277,7 +277,8 @@ def tools(session):
             except Exception:
                 pass
         try:
-            found["invalidConstraints"] = bool(sk.evaluateConstraints())
+            # True when they are all valid, whatever its doc string says
+            found["invalidConstraints"] = not bool(sk.evaluateConstraints())
         except Exception:
             pass
         st = state(sk)
