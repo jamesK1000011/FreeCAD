@@ -27,6 +27,7 @@
 | What it weighs as printed, ballast to a target | `mass_properties`, `mass_target`, `mass_ballast` | `mass` |
 | A drawing to send (dims, fits, holes, a section) | `drawing_make`, `drawing_exploded` | `drawing` |
 | A TechDraw page built piece by piece: sections, details, tolerances, GD&T, title block | `td_page`, `td_view`, `td_section`, `td_dim`, `td_gdt`, `td_export` | `techdraw` |
+| How far a made part or a scan is from the design, in tolerance or not | `insp_run`, `insp_read`, `view_render { map: "inspection" }`, `insp_export` | `inspection` |
 | Parts put together, a lid on its box | `asm_new`, `asm_joint`, `asm_check` | `assembly` |
 | Toolpaths and G-code for a mill | `cam_job`, `cam_op`, `cam_sim`, `cam_post` | `cam` |
 | A print: slice it, pause for magnets | `setup`, `slice`, `slice_with` | `slice` |

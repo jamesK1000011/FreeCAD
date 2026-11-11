@@ -29,6 +29,7 @@ NAMES = [
     "parts",
     "drawing",
     "techdraw",
+    "inspection",
     "electronics",
     "share",
     "view",
