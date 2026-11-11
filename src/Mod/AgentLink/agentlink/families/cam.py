@@ -227,7 +227,31 @@ def tools(session):
             names += [d["ref"] for _, _, d in hits]
         return names
 
+    HINTS = {"helix": "helix bores round holes: give the hole's wall (a cylinder face), with a tool smaller than the hole",
+             "thread": "thread milling needs a round hole's wall and a thread-mill tool",
+             "drill": "drilling needs round holes, upright",
+             "deburr": "deburr follows edges: a chamfer or V tool (cam_tool_add)",
+             "vcarve": "V-carving follows letters or a sketch (base) with a V-bit (cam_tool_add)",
+             "engrave": "engraving follows letters, a sketch or a wire (base)"}
+
     def cam_op(a):
+        d = doc()
+        before = {o.Name for o in d.Objects}
+        try:
+            return cam_op_(a)
+        except ToolError:
+            raise
+        except Exception as e:
+            job = _job(d, a.get("job"))
+            for o in [o for o in d.Objects if o.Name not in before]:
+                if o in job.Operations.Group:
+                    job.Operations.removeObject(o)
+                d.removeObject(o.Name)
+            d.recompute()
+            kind = str(a.get("kind", "")).lower()
+            raise ToolError("failed", f"The {kind} would not compute: {e}" + (f" — {HINTS[kind]}." if kind in HINTS else ".") + " Nothing was kept.") from None
+
+    def cam_op_(a):
         d = doc()
         job = _job(d, a.get("job"))
         kind = str(a.get("kind", "")).lower()
@@ -309,7 +333,7 @@ def tools(session):
         ops = []
         for op in job.Operations.Group:
             cmds = list(op.Path.Commands) if getattr(op, "Path", None) is not None else []
-            ops.append({"op": op.Label, "type": op.Proxy.__class__.__name__ if hasattr(op, "Proxy") else op.TypeId, "active": bool(getattr(op, "Active", True)), **path_stats(cmds, getattr(op, "ToolController", None))})
+            ops.append({"op": op.Label, "type": op.Proxy.__class__.__name__ if hasattr(op, "Proxy") else op.TypeId, "active": bool(getattr(op, "Active", True)), **path_stats(cmds, tc_for(op))})
         total = round(sum(o["minutes"] for o in ops), 2)
         return {"job": job.Label, "stock": stock_out(job), "tool": tool_out(tc_of(job)), "ops": ops, "minutes": total}
 
@@ -344,7 +368,7 @@ def tools(session):
         sb = job.Stock.Shape.BoundBox
         tools_of = []
         for op in ops:
-            tc = getattr(op, "ToolController", None) or tc_of(job)
+            tc = tc_for(op) or tc_of(job)
             tool = tc.Tool
             d = float(_q(tool.Diameter, "mm"))
             shape = str(getattr(tool, "ShapeName", "") or getattr(tool, "ShapeType", "") or getattr(tool, "BitShape", "") or tool.Label).lower()
@@ -439,7 +463,7 @@ def tools(session):
         postables = []
         last_tc = None
         for op in ops:
-            tc = getattr(op, "ToolController", None)
+            tc = tc_for(op)
             if tc is not None and tc is not last_tc:
                 postables.append(tc)
                 last_tc = tc
@@ -491,7 +515,13 @@ def tools(session):
         """A tool bit of a shape from CAM's shape library, across the tool
         systems of 1.0 and later."""
         shape_file = None
-        for root in (os.path.join(FreeCAD.getResourceDir(), "Mod", "CAM", "Tools", "Shape"), os.path.join(FreeCAD.getResourceDir(), "Mod", "Path", "Tools", "Shape")):
+        import Path as _P
+
+        mod_dir = os.path.dirname(os.path.dirname(os.path.abspath(_P.__file__)))  # …/Mod/CAM
+        roots = [os.path.join(mod_dir, "Tools", "Shape")]
+        for base in (FreeCAD.getResourceDir(), FreeCAD.getHomePath(), os.path.join(FreeCAD.getHomePath(), "share")):
+            roots += [os.path.join(base, "Mod", m, "Tools", "Shape") for m in ("CAM", "Path")]
+        for root in roots:
             f = os.path.join(root, f"{shape}.fcstd")
             if os.path.isfile(f):
                 shape_file = f
@@ -536,12 +566,33 @@ def tools(session):
     DRESSUPS = {"tags": "Path.Dressup.Tags", "dogbone": "Path.Dressup.DogboneII", "boundary": "Path.Dressup.Boundary", "array": "Path.Dressup.Array",
                 "ramp": "Path.Dressup.Gui.RampEntry", "leadinout": "Path.Dressup.Gui.LeadInOut"}
 
+    def base_op(x):
+        """The operation under a stack of dressups."""
+        seen = 0
+        while getattr(x, "Base", None) is not None and not isinstance(x.Base, list) and hasattr(x.Base, "Path") and seen < 20:
+            x, seen = x.Base, seen + 1
+        return x
+
+    def tc_for(x):
+        return getattr(base_op(x), "ToolController", None) or getattr(x, "ToolController", None)
+
     def cam_dressup(a):
         d = doc()
         job = _job(d, a.get("job"))
-        op = next((x for x in job.Operations.Group if a.get("op") in (x.Label, x.Name)), None)
-        if op is None:
-            raise ToolError("not_found", f"op {a.get('op')!r}: cam_list lists them.")
+        want = a.get("op")
+        # The job lists the outermost of each stack: a dressup goes on top of any already there.
+        top = None
+        for x in job.Operations.Group:
+            y, chain = x, [x]
+            while getattr(y, "Base", None) is not None and not isinstance(y.Base, list) and hasattr(y.Base, "Path"):
+                y = y.Base
+                chain.append(y)
+            if any(want in (c.Label, c.Name) for c in chain):
+                top = x
+                break
+        if top is None:
+            raise ToolError("not_found", f"op {want!r}: cam_list lists them.")
+        op = top
         kind = a.get("kind")
         if kind not in DRESSUPS:
             raise ToolError("invalid_input", f"kind: {', '.join(DRESSUPS)} — tags (holding tabs: count, width, height), dogbone (inside corners cleared), boundary (moves kept inside the stock), array (copies), ramp (entry instead of plunging), leadinout.")
@@ -549,11 +600,32 @@ def tools(session):
             mod = importlib.import_module(DRESSUPS[kind])
         except ImportError as e:
             raise ToolError("unavailable", f"The {kind} dressup lives in FreeCAD's GUI and is not there headless ({e}) — add it in the CAM workbench (adaptive ops enter helically anyway).")
-        before = path_stats(list(op.Path.Commands), op.ToolController)
+        before = path_stats(list(op.Path.Commands), tc_for(op))
         try:
-            dr = mod.Create(op)
+            if hasattr(mod, "Create"):
+                dr = mod.Create(op)
+            elif hasattr(mod, "ObjectDressup"):
+                # Ramp entry and lead in/out keep their Create with their commands; made as those do.
+                dr = d.addObject("Path::FeaturePython", f"{kind.capitalize()}Dressup")
+                proxy = mod.ObjectDressup(dr)
+                dr.Base = op
+                job.Proxy.addOperation(dr, op)
+                if hasattr(proxy, "setup"):
+                    try:
+                        proxy.setup(dr)
+                    except TypeError:
+                        proxy.setup(dr, True)
+            else:
+                raise AttributeError("no way to make it here")
         except Exception as e:
             raise ToolError("failed", f"The {kind} dressup would not go on {op.Label}: {e}")
+        if dr not in job.Operations.Group:
+            try:
+                job.Proxy.addOperation(dr, op, True)
+            except TypeError:
+                job.Proxy.addOperation(dr, op)
+        if op in job.Operations.Group:
+            job.Operations.removeObject(op)
         if kind == "tags":
             for k, prop, unit in (("width", "Width", "mm"), ("height", "Height", "mm"), ("angle", "Angle", "°")):
                 if a.get(k) is not None and prop in dr.PropertiesList:
@@ -570,9 +642,20 @@ def tools(session):
                 setattr(dr, k, v)
         d.recompute()
         cmds = list(dr.Path.Commands) if getattr(dr, "Path", None) is not None else []
+        after = path_stats(cmds, tc_for(dr))
+
+        def undo(why):
+            job.Operations.removeObject(dr)
+            if op not in job.Operations.Group:
+                job.Proxy.addOperation(op)
+            d.removeObject(dr.Name)
+            d.recompute()
+            raise ToolError("failed", why + " Nothing was kept.")
+
         if not cmds:
-            raise ToolError("failed", f"The {kind} dressup made no path from {op.Label}.")
-        after = path_stats(cmds, op.ToolController)
+            undo(f"The {kind} dressup made no path from {op.Label}.")
+        if before["cutMm"] > 0 and after["cutMm"] <= 0:
+            undo(f"The {kind} dressup left no cutting at all on {op.Label}" + (" — every move is outside its boundary (the stock): the path runs past the stock's edge; give the stock more margin (cam_job stock.margin) or a boundary of your own (props)." if kind == "boundary" else "."))
         out = {"dressup": dr.Label, "kind": kind, "on": op.Label, "before": {k: before[k] for k in ("cutMm", "minutes")}, "after": {k: after[k] for k in ("cutMm", "minutes")}}
         if kind == "tags" and hasattr(dr, "Positions"):
             out["tags"] = len(dr.Positions)

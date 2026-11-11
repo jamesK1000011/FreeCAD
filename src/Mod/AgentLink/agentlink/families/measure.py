@@ -135,6 +135,9 @@ def query(session, a, default_kind="face"):
         if not (isinstance(box, dict) and "min" in box and "max" in box):
             raise ToolError("invalid_input", "inside: { min: [x,y,z], max: [x,y,z] } — the element's centre in that box.")
         lo, hi = picks.vec3(box["min"], "inside.min"), picks.vec3(box["max"], "inside.max")
+    # x / y / z: the element's centre at that coordinate (a face's plane, say), within tol mm.
+    at_xyz = {k: picks.num(a[k], k) for k in ("x", "y", "z") if a.get(k) is not None}
+    tol = picks.num(a.get("tol", 0.01), "tol")
     cos_w = math.cos(math.radians(within))
     pool = getattr(shape, KIND_ATTR[kind])
     if of:
@@ -170,6 +173,8 @@ def query(session, a, default_kind="face"):
         if area and not ("area" in d and area[0] <= d["area"] <= area[1]):
             continue
         if length and not ("length" in d and length[0] <= d["length"] <= length[1]):
+            continue
+        if at_xyz and any(abs(getattr(centre, k) - v) > tol for k, v in at_xyz.items()):
             continue
         if box is not None and not (lo.x <= centre.x <= hi.x and lo.y <= centre.y <= hi.y and lo.z <= centre.z <= hi.z):
             continue
@@ -386,7 +391,7 @@ def tools(session):
         Tool(
             "shape_query",
             "Find a body's faces, edges or vertices by what they are, as references other tools take (\"Face12\", \"Edge3\"): kind face|edge|vertex; type plane, cylinder, cone, sphere, torus, bspline (faces) or line, circle, ellipse, bspline (edges); normal [x,y,z] (faces, outward) or axis (a line's direction or a circle's axis, either way) within degrees (1 by default); radius, area, length as a number or [least, most]; near [x,y,z] or { point, within } (sorted nearest first); inside { min, max } (the centre); of \"Face6\" takes that face's edges. sort area|radius|length|distance|x|y|z, -key for largest first; limit (20). Trap: numbers change after any modelling step — query again rather than reuse old ones.",
-            obj({"body": body, "kind": {"type": "string", "enum": ["face", "edge", "vertex"]}, "type": {}, "normal": {}, "axis": {}, "within": {"type": "number"}, "radius": {}, "area": {}, "length": {}, "near": {}, "inside": {"type": "object"}, "of": {"type": "string"}, "sort": {"type": "string"}, "limit": {"type": "integer"}}),
+            obj({"body": body, "kind": {"type": "string", "enum": ["face", "edge", "vertex"]}, "type": {}, "normal": {}, "axis": {}, "within": {"type": "number"}, "radius": {}, "area": {}, "length": {}, "near": {}, "inside": {"type": "object"}, "x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}, "tol": {"type": "number"}, "of": {"type": "string"}, "sort": {"type": "string"}, "limit": {"type": "integer"}}),
             shape_query,
         ),
         Tool(
