@@ -66,6 +66,81 @@ def read_text(path):
     return np.array(rows, float).reshape(-1, 3)
 
 
+PLY_TYPES = {"char": "i1", "int8": "i1", "uchar": "u1", "uint8": "u1", "short": "i2", "int16": "i2", "ushort": "u2", "uint16": "u2",
+             "int": "i4", "int32": "i4", "uint": "u4", "uint32": "u4", "float": "f4", "float32": "f4", "double": "f8", "float64": "f8"}
+
+
+def read_ply(path):
+    """A PLY's vertices (ascii or binary), x y z of whatever other properties it has."""
+    with open(path, "rb") as f:
+        data = f.read()
+    end = data.find(b"end_header")
+    if not data.startswith(b"ply") or end < 0:
+        raise ValueError("not a PLY file")
+    head = data[:end].decode("ascii", "replace").splitlines()
+    body = data[data.index(b"\n", end) + 1:]
+    fmt, n, props, cur = "ascii", 0, [], None
+    for line in head:
+        w = line.split()
+        if not w:
+            continue
+        if w[0] == "format":
+            fmt = w[1]
+        elif w[0] == "element":
+            cur = w[1]
+            if cur == "vertex":
+                n = int(w[2])
+        elif w[0] == "property" and cur == "vertex":
+            if w[1] == "list":
+                raise ValueError("a vertex with list properties")
+            props.append((w[2], PLY_TYPES[w[1]]))
+    names = [p[0] for p in props]
+    if not all(k in names for k in "xyz"):
+        raise ValueError("vertices without x, y, z")
+    if fmt == "ascii":
+        rows = body.decode("ascii", "replace").split()
+        A = np.array(rows[: n * len(props)], float).reshape(n, len(props))
+        return A[:, [names.index(k) for k in "xyz"]]
+    order = "<" if fmt == "binary_little_endian" else ">"
+    dt = np.dtype([(k, order + v) for k, v in props])
+    A = np.frombuffer(body[: n * dt.itemsize], dtype=dt, count=n)
+    return np.column_stack([A["x"], A["y"], A["z"]]).astype(float)
+
+
+def read_pcd(path):
+    """A PCD's points (ascii or binary), x y z."""
+    with open(path, "rb") as f:
+        data = f.read()
+    meta, off = {}, 0
+    while off < len(data):
+        nl = data.index(b"\n", off)
+        line = data[off:nl].decode("ascii", "replace").strip()
+        off = nl + 1
+        if not line or line.startswith("#"):
+            continue
+        k, _, v = line.partition(" ")
+        meta[k.upper()] = v.split()
+        if k.upper() == "DATA":
+            break
+    fields, sizes, types = meta["FIELDS"], [int(x) for x in meta["SIZE"]], meta["TYPE"]
+    counts = [int(x) for x in meta.get("COUNT", ["1"] * len(fields))]
+    n = int(meta["POINTS"][0])
+    if meta["DATA"][0] == "ascii":
+        cols = sum(counts)
+        A = np.array(data[off:].decode("ascii", "replace").split(), float)[: n * cols].reshape(-1, cols)
+    elif meta["DATA"][0] == "binary":
+        dt = np.dtype([(f"{fl}{i}" if c > 1 else fl, {"F": "f", "I": "i", "U": "u"}[ty] + str(sz)) for fl, sz, ty, c in zip(fields, sizes, types, counts) for i in range(c)])
+        A = np.frombuffer(data[off: off + n * dt.itemsize], dtype=dt, count=n)
+        return np.column_stack([A["x"], A["y"], A["z"]]).astype(float)
+    else:
+        raise ValueError("compressed PCD: save it as ascii or binary")
+    idx, col = {}, 0
+    for fl, c in zip(fields, counts):
+        idx[fl] = col
+        col += c
+    return A[:, [idx["x"], idx["y"], idx["z"]]]
+
+
 def write_points(path, P):
     ext = os.path.splitext(path)[1].lower().lstrip(".")
     if ext in ("asc", "xyz"):
@@ -141,19 +216,23 @@ def tools(session):
         ext = os.path.splitext(p)[1].lower().lstrip(".")
         if ext not in READS:
             raise bad(f"path: .{ext} — one of {', '.join(READS)}.")
-        if ext in ("xyz", "txt", "csv"):
-            P = read_text(p)
-        else:
-            pk = Points.Points()
-            try:
-                pk.read(p)
-            except Exception as e:
-                if ext == "asc":
-                    P = read_text(p)
-                else:
-                    raise ToolError("failed", f"{os.path.basename(p)} could not be read: {e}")
+        try:
+            if ext in ("xyz", "txt", "csv", "asc"):
+                P = read_text(p)
+            elif ext == "ply":
+                P = read_ply(p)
+            elif ext == "pcd":
+                P = read_pcd(p)
             else:
-                P = np.array([(q.x, q.y, q.z) for q in pk.Points], float).reshape(-1, 3)
+                # E57: FreeCAD's own reader makes the cloud an object; its points are taken.
+                before = {o.Name for o in doc().Objects}
+                Points.insert(p, doc().Name)
+                new = [o for o in doc().Objects if o.Name not in before]
+                P = np.concatenate([array_of(o) for o in new if o.isDerivedFrom("Points::Feature")] or [np.zeros((0, 3))])
+                for o in new:
+                    doc().removeObject(o.Name)
+        except Exception as e:
+            raise ToolError("failed", f"{os.path.basename(p)} could not be read: {e}")
         if not len(P):
             raise ToolError("failed", f"{os.path.basename(p)}: no points read.")
         total = len(P)

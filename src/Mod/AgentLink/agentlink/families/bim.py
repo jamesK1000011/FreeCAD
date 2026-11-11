@@ -51,6 +51,10 @@ def frame(x, y):
     return FreeCAD.Rotation(m)
 
 
+def is_bim(o):
+    return hasattr(o, "IfcType") and not o.isDerivedFrom("Spreadsheet::Sheet")
+
+
 def ifc_type(o):
     return str(getattr(o, "IfcType", "") or getattr(o, "IfcRole", "") or o.TypeId)
 
@@ -78,7 +82,7 @@ def tools(session):
         return {**out, **(extra or {}), "step": len(s.steps)}
 
     def named(o, label):
-        o.Label = s.unique(label)
+        o.Label = s.unique(label, o)
         return o
 
     def baseline(points, label, closed=False):
@@ -115,6 +119,35 @@ def tools(session):
         length = sum(e.Length for e in base.Shape.Edges)
         return finish(w, "bim_wall", {"length": round(length, 1), "width": width, "height": height, "align": align.lower(), "base": base.Label})
 
+    def sketched_window(width, height, frame_w, depth, pl, door):
+        import Sketcher
+
+        sk = doc().addObject("Sketcher::SketchObject", "WindowSketch")
+        sk.Label = s.unique("Window outline")
+        # The sketch on the wall's centre plane, pushed back half the frame's depth.
+        n = pl.Rotation.multVec(UP)
+        sk.Placement = FreeCAD.Placement(pl.Base - n * (depth / 2), pl.Rotation)
+
+        def rect(x0, y0, x1, y1):
+            pts = [V(x0, y0, 0), V(x1, y0, 0), V(x1, y1, 0), V(x0, y1, 0)]
+            first = sk.GeometryCount
+            for i in range(4):
+                sk.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]), False)
+            for i in range(4):
+                sk.addConstraint(Sketcher.Constraint("Coincident", first + i, 2, first + (i + 1) % 4, 1))
+
+        f = frame_w
+        rect(0, 0, width, height)
+        rect(f, 0 if door else f, width - f, height - f)
+        doc().recompute()
+        pane = 40.0 if door else 10.0
+        parts = ["Frame", "Frame", "Wire0,Wire1", str(depth), "0",
+                 "Pane", "Solid panel" if door else "Glass panel", "Wire1", str(pane), str((depth - pane) / 2)]
+        win = Arch.makeWindow(sk, width=width, height=height, parts=parts)
+        if win is None:
+            raise ToolError("failed", "FreeCAD could not make the window.")
+        return win
+
     def bim_opening(a):
         wall = picks.find(doc(), a.get("wall"), "wall")
         kind = a.get("kind", "window")
@@ -150,12 +183,16 @@ def tools(session):
         # Frame sizes the window commands use: frame 50, its depth 100, glass inset.
         h1 = h2 = h3 = float(a.get("frame", 50))
         w1, w2 = float(a.get("depth", 100)), float(a.get("frame", 50))
+        built = preset
         try:
             win = Arch.makeWindowPreset(preset, width=width, height=height, h1=h1, h2=h2, h3=h3, w1=w1, w2=w2, o1=0.0, o2=w2, placement=pl)
-        except Exception as e:
-            raise ToolError("failed", f"FreeCAD could not make a {preset}: {e}")
+        except Exception:
+            # The presets reach for the window's dialogs in some FreeCAD builds:
+            # the same window drawn here — a frame round a pane (a door's panel).
+            win = None
         if win is None:
-            raise ToolError("failed", f"FreeCAD could not make a {preset}.")
+            win = sketched_window(width, height, h1, w1, pl, preset in DOORS)
+            built = "frame and " + ("panel" if preset in DOORS else "glass") + f" (the {preset} preset needs the FreeCAD window here)"
         named(win, a.get("name") or ("Door" if preset in DOORS else "Window"))
         win.Hosts = [wall]
         if preset in DOORS and hasattr(win, "IfcType"):
@@ -163,7 +200,7 @@ def tools(session):
         before = wall.Shape.Volume if wall.Shape.Solids else 0
         doc().recompute()
         after = wall.Shape.Volume if wall.Shape.Solids else 0
-        out = finish(win, "bim_opening", {"wall": wall.Label, "preset": preset, "width": width, "height": height, "sill": sill, "at": at})
+        out = finish(win, "bim_opening", {"wall": wall.Label, "preset": built, "width": width, "height": height, "sill": sill, "at": at})
         out["wallCut_m3"] = round((before - after) / 1e9, 4)
         if before - after <= 0:
             out["warning"] = "The wall was not cut — the opening may be outside it."
@@ -228,13 +265,22 @@ def tools(session):
             raise bad(f"angle: one number, or one per edge ({n}); 90 makes a gable.")
         t = pos(a, "thickness", 150)
         over = picks.num(a.get("overhang", 300), "overhang")
-        try:
-            o = Arch.makeRoof(base, 0, [float(x) for x in angles], [0.0] * n, [-1] * n, [t] * n, [over] * n)
-        except TypeError:
-            o = Arch.makeRoof(base)
-            o.Angles, o.Thickness, o.Overhang = [float(x) for x in angles], [t] * n, [over] * n
+        # Each slope's run: half the outline's depth away from its edge — the ridge midway.
+        verts = [v.Point for v in base.Shape.Vertexes]
+        runs = []
+        for e in base.Shape.Edges:
+            p0, p1 = e.Vertexes[0].Point, e.Vertexes[-1].Point
+            d = V(p1 - p0)
+            d.z = 0
+            d.normalize()
+            far = max(abs((q - p0).x * d.y - (q - p0).y * d.x) for q in verts)
+            runs.append(round(far / 2, 3))
+        if a.get("run") is not None:
+            r = a["run"]
+            runs = [float(x) for x in r] if isinstance(r, list) else [float(r)] * n
+        o = Arch.makeRoof(base, 0, [float(x) for x in angles], runs, [-1] * n, [t] * n, [over] * n)
         named(o, name)
-        return finish(o, "bim_roof", {"edges": n, "angles": angles})
+        return finish(o, "bim_roof", {"edges": n, "angles": angles, "runs": runs})
 
     def bim_stairs(a):
         length, width, height = pos(a, "length", 4500), pos(a, "width", 1000), pos(a, "height", 3000)
@@ -390,7 +436,9 @@ def tools(session):
             objs = [picks.find(doc(), n) for n in names]
         else:
             tops = [o for o in doc().Objects if ifc_type(o) in ("Site", "Building") or type(getattr(o, "Proxy", None)).__name__ in ("_Site", "_Building")]
-            objs = tops[:1] or [o for o in doc().Objects if not o.InList and ifc_type(o) not in ("Part::Feature",)]
+            objs = tops[:1] or [o for o in doc().Objects if is_bim(o) and not any(is_bim(p) for p in o.InList)]
+            if not objs:
+                raise bad("Nothing to write: no BIM objects here (bim_wall …), or objects to name.")
         p = where(a.get("path"), (doc().Label or "model") + ".ifc")
         if not p.lower().endswith(".ifc"):
             p += ".ifc"
@@ -429,7 +477,7 @@ def tools(session):
         out = []
         for o in doc().Objects:
             t = ifc_type(o)
-            if not hasattr(o, "IfcType") and t == o.TypeId:
+            if not is_bim(o):
                 continue
             e = {"object": o.Label, "ifc": t}
             if getattr(o, "Group", None):
@@ -452,8 +500,8 @@ def tools(session):
              obj({"kind": {"type": "string", "enum": list(ROLES)}, "at": pt, "from": pt, "to": pt, "points": pts, "base": {"type": "string"}, "width": {"type": "number"}, "depth": {"type": "number"},
                   "height": {"type": "number"}, "thickness": {"type": "number"}, "name": {"type": "string"}}), bim_structure, changes=True),
         Tool("bim_roof", "A roof over a closed outline (points, at the eaves' height, or base): angle degrees (one, or one per edge; 90 makes a gable end), thickness, overhang mm.",
-             obj({"points": pts, "base": {"type": "string"}, "angle": {}, "thickness": {"type": "number"}, "overhang": {"type": "number"}, "name": {"type": "string"}}), bim_roof, changes=True),
-        Tool("bim_stairs", "A straight flight: at (the foot), direction [x, y] it climbs, length (its run), width, height (floor to floor), steps (height / 175 by default). Answers riser, going and 2R + G.",
+             obj({"points": pts, "base": {"type": "string"}, "angle": {}, "run": {}, "thickness": {"type": "number"}, "overhang": {"type": "number"}, "name": {"type": "string"}}), bim_roof, changes=True),
+        Tool("bim_stairs", "A straight flight: at (the foot, on its left side going up), direction [x, y] it climbs, length (its run), width, height (floor to floor), steps (height / 175 by default). Answers riser, going and 2R + G.",
              obj({"at": pt, "direction": pt, "length": {"type": "number"}, "width": {"type": "number"}, "height": {"type": "number"}, "steps": {"type": "integer"}, "name": {"type": "string"}}), bim_stairs, changes=True),
         Tool("bim_space", "A space (a room) from its floor outline (points, height) or a base solid: its floor area; use the space's purpose.",
              obj({"points": pts, "base": {"type": "string"}, "height": {"type": "number"}, "use": {"type": "string"}, "name": {"type": "string"}}), bim_space, changes=True),

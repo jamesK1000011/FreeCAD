@@ -24,10 +24,10 @@ MESH_FORMATS = {"stl": ("stl",), "obj": ("obj",), "3mf": ("3mf",), "ply": ("ply"
                 # read by meshformats, not FreeCAD's Mesh module
                 "gltf": ("gltf", "glb"), "dae": ("dae",), "wrl": ("wrl", "vrml"), "3ds": ("3ds",)}
 MORE_MESH = ("gltf", "dae", "wrl", "3ds")
-EXPORTS = ("step", "iges", "brep", "stl", "obj", "3mf", "ply", "off", "amf", "wrl", "x3d", "glb", "gltf", "dae", "dxf", "svg")
+EXPORTS = ("step", "iges", "brep", "stl", "obj", "3mf", "ply", "off", "wrl", "x3d", "glb", "gltf", "dae", "dxf", "svg")
 # Written by FreeCAD's Mesh module as one mesh; by meshformats a mesh (and
 # colour) per object; by flat2d a 2D projection.
-FC_MESH_OUT = {"stl": ".stl", "obj": ".obj", "3mf": ".3mf", "ply": ".ply", "off": ".off", "amf": ".amf", "wrl": ".wrl", "x3d": ".x3d"}
+FC_MESH_OUT = {"stl": ".stl", "obj": ".obj", "3mf": ".3mf", "ply": ".ply", "off": ".off", "wrl": ".wrl", "x3d": ".x3d"}
 SCENE_OUT = {"glb": ".glb", "gltf": ".gltf", "dae": ".dae"}
 FLAT_OUT = {"dxf": ".dxf", "svg": ".svg"}
 # The 2D views: the shape turned so the view looks down -Z; X right, Y up.
@@ -603,14 +603,14 @@ def tools(session):
                     if fmt == "wrl":
                         from .. import meshformats
 
-                        V, F, _info = meshformats.read(p)
+                        V, F, _info = meshformats.read(p, "mm", "z")  # FreeCAD writes it as the document has it
                         back = Mesh.Mesh()
                         back.addFacets([[tuple(V[i]) for i in tr] for tr in F.tolist()])
                     else:
                         back = Mesh.Mesh(p)
                     verify = {"triangles": back.CountFacets, "volume": round(back.Volume, 2), "volumeDiff": round(abs(back.Volume - vol), 2), "closed": back.isSolid()}
-                except Exception as e:
-                    verify = {"triangles": m.CountFacets, "readBack": f"not read back here ({e})"}
+                except Exception:
+                    verify = {"triangles": m.CountFacets, "readBack": f"written; FreeCAD does not read {fmt.upper()} back to check it"}
         return {"objects": [o.Label for o in objs], "format": fmt, "path": p, "bytes": os.path.getsize(p), "verify": verify}
 
     objref = {"type": "string", "description": "An object's name or label."}
@@ -625,5 +625,5 @@ def tools(session):
         Tool("object_rename", "Give an object a new label (its internal name stays). Trap: setups, specs and waivers keep the old label.", obj({"object": objref, "label": {"type": "string"}}, ["object", "label"]), object_rename, changes=True),
         Tool("recompute", "Recompute the document (force: true recomputes everything) and list each object that failed, with FreeCAD's reason.", obj({"force": {"type": "boolean"}}), recompute, changes=True),
         Tool("import_file", "Bring a file into the document: STEP, IGES, BREP as bodies (split: true makes a body of each solid); STL, OBJ, 3MF, PLY, OFF, AMF — and glTF/GLB, Collada, VRML 2, 3DS, every mesh node flattened into one in mm, Z up (units and up override what the format says; read says what was taken) — as a body made of its triangles when closed and up to 20000 triangles (solid: false keeps a mesh, solid: true forces a body up to 200000); DXF and SVG as Draft geometry; PNG, JPG, BMP as an image plane width mm wide on XY, to trace over. PDF, DWG, IFC need the FreeCAD window; FBX: export it as glTF. .FCStd: doc_open.", obj({"path": {"type": "string"}, "name": {"type": "string"}, "split": {"type": "boolean"}, "solid": {"type": "boolean"}, "units": {"type": "string", "enum": ["mm", "cm", "m", "in"]}, "up": {"type": "string", "enum": ["x", "y", "z"]}, "width": {"type": "number"}}, ["path"]), import_file, changes=True),
-        Tool("export", "Write objects (the one body when left out; several go as one compound) and read it back (verify). Solids: STEP, IGES, BREP. One mesh: STL, OBJ, 3MF, PLY, OFF, AMF, VRML (wrl), X3D. A scene, a mesh per object with colors {label: \"#rrggbb\"}: glTF (glb, gltf), Collada (dae) — metres, Y up. 2D: DXF (R12) or SVG of a view (top | bottom | front | back | right | left | iso; hidden: true adds hidden lines on their own layer) or of a section at z mm (section) — circles and arcs kept as such, for laser and plasma cutting. format, or from path's extension; tolerance: the chord error, 0.01 mm.", obj({"objects": {}, "format": {"type": "string", "enum": list(EXPORTS)}, "path": {"type": "string"}, "tolerance": {"type": "number"}, "colors": {"type": "object"}, "view": {"type": "string", "enum": list(VIEWS)}, "hidden": {"type": "boolean"}, "section": {"type": "number"}}), export),
+        Tool("export", "Write objects (the one body when left out; several go as one compound) and read it back (verify). Solids: STEP, IGES, BREP. One mesh: STL, OBJ, 3MF, PLY, OFF, VRML (wrl), X3D. A scene, a mesh per object with colors {label: \"#rrggbb\"}: glTF (glb, gltf), Collada (dae) — metres, Y up. 2D: DXF (R12) or SVG of a view (top | bottom | front | back | right | left | iso; hidden: true adds hidden lines on their own layer) or of a section at z mm (section) — circles and arcs kept as such, for laser and plasma cutting. format, or from path's extension; tolerance: the chord error, 0.01 mm.", obj({"objects": {}, "format": {"type": "string", "enum": list(EXPORTS)}, "path": {"type": "string"}, "tolerance": {"type": "number"}, "colors": {"type": "object"}, "view": {"type": "string", "enum": list(VIEWS)}, "hidden": {"type": "boolean"}, "section": {"type": "number"}}), export),
     ]

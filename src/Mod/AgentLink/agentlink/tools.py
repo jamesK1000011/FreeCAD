@@ -131,8 +131,9 @@ class Session:
                 return o
         raise ToolError("not_found", f"body {ref!r}: not here — the bodies: {', '.join(o.Label for o in bs)}.")
 
-    def unique(self, label):
-        taken = {o.Label for o in self.doc.Objects}
+    def unique(self, label, own=None):
+        """label, or "label 2" … when another object has it (own: the object being named, which does not count)."""
+        taken = {o.Label for o in self.doc.Objects if o is not own}
         if label not in taken:
             return label
         n = 2

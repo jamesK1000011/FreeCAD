@@ -33,6 +33,34 @@ def reading(o):
     return out
 
 
+def chain(edges, refs, tol=1e-4):
+    """Which boundary edges run backwards, so that each starts where the one before ends
+    (the feature takes them as given); refused where two do not meet."""
+    def ends(e):
+        return e.Vertexes[0].Point, e.Vertexes[-1].Point
+
+    for first in (False, True):
+        a0, a1 = ends(edges[0])
+        start, cur = (a1, a0) if first else (a0, a1)
+        flags, ok = [first], True
+        for e in edges[1:]:
+            b0, b1 = ends(e)
+            if (b0 - cur).Length <= tol:
+                flags.append(False)
+                cur = b1
+            elif (b1 - cur).Length <= tol:
+                flags.append(True)
+                cur = b0
+            else:
+                ok = False
+                break
+        if ok:
+            if (cur - start).Length > tol:
+                raise bad("edges: the last does not come back to where the first starts — the boundary must close.")
+            return flags
+    raise bad(f"edges: they do not meet end to end in the order given ({', '.join(map(str, refs))}) — list them going round the boundary.")
+
+
 def tools(session):
     s = session
     doc = lambda: s.doc
@@ -79,8 +107,11 @@ def tools(session):
         refs = a.get("edges") or []
         if not 2 <= len(refs) <= 4:
             raise bad("edges: two to four boundary curves that meet end to end.")
+        bl = [edge_ref(r, "edges") for r in refs]
+        flags = chain([ob.Shape.getElement(sub) for ob, subs in bl for sub in subs], refs)
         o = new("Surface::GeomFillSurface", a.get("name") or "Boundary surface")
-        o.BoundaryList = [edge_ref(r, "edges") for r in refs]
+        o.BoundaryList = bl
+        o.ReversedList = flags
         ft = {"stretched": "Stretched", "coons": "Coons", "curved": "Curved"}.get(a.get("fill", "stretched"))
         if ft is None:
             raise bad("fill: stretched (flattest), coons (smooth across), curved (round).")
