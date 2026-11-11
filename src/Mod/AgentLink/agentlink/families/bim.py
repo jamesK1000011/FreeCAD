@@ -636,10 +636,29 @@ def tools(session):
         bar = doc().addObject("Part::Feature", "RebarLine")
         bar.Label = s.unique(f"{a.get('name') or 'Rebar'} line")
         bar.Shape = Part.makePolygon([p0, p1])
-        o = headless_call(mk, host, bar, diameter=dia, amount=n, offset=cover + dia / 2)
+        try:
+            o = headless_call(mk, host, bar, diameter=dia, amount=n, offset=cover + dia / 2)
+            setprops(o, {"Direction": spread})
+            how = "FreeCAD's rebar"
+        except ToolError:
+            # FreeCAD's rebar loads its GUI here: the same bars made as solids,
+            # an Arch component typed Reinforcing Bar.
+            d = p1 - p0
+            first = cover + dia / 2
+            step = span / (n - 1) if n > 1 else 0
+            bars = [Part.makeCylinder(dia / 2, d.Length, p0 + spread * (first + i * step), d) for i in range(n)]
+            bar.Shape = Part.makeCompound(bars)
+            mkc = getattr(Arch, "makeComponent", None)
+            o = headless_call(mkc, bar) if mkc else bar
+            if not hasattr(o, "IfcType"):
+                o.addProperty("App::PropertyString", "IfcType", "IFC", "IFC type")
+            try:
+                o.IfcType = "Reinforcing Bar"
+            except Exception:
+                pass
+            how = "bars made here (FreeCAD's rebar needs its window)"
         named(o, a.get("name") or "Rebar")
-        setprops(o, {"Direction": spread})
-        out = finish(o, "bim_rebar", {"structure": host.Label, "bars": n, "diameter": dia, "along": along, "layer": layer,
+        out = finish(o, "bim_rebar", {"made": how, "structure": host.Label, "bars": n, "diameter": dia, "along": along, "layer": layer,
                                        "spacing": round(span / (n - 1), 1) if n > 1 else None})
         length = (p1 - p0).Length
         out["totalLength_m"] = round(n * length / 1000, 3)
