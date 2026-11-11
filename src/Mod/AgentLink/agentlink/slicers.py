@@ -97,7 +97,9 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900):
         args += ["--export-3mf", three_mf]
         kinds = nozzle_volume_types(profiles["machine"])
         if kinds:
-            args += ["--nozzle-volume-type", ",".join(kinds)]
+            # Each filament put on a nozzle by hand: left to itself the
+            # command line reads past the end of its extruder list.
+            args += ["--nozzle-volume-type", ",".join(kinds), "--filament-map-mode", "Manual", "--filament-map", "1"]
     args.append(stl)
     run = _run(args, timeout)
     found = sorted(glob.glob(os.path.join(out_dir, "*.gcode")))
