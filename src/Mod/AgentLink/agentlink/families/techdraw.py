@@ -559,8 +559,8 @@ def hatch_regions(v, X, Y, H):
             polys = paper_polys(v, faces, X, Y, H)
             if polys:
                 out.append((polys, float(spec.get("spacing", 2.5)), float(spec.get("angle", 45))))
-        except Exception:
-            pass
+        except Exception as e:
+            raise ValueError(f"its hatching could not be drawn ({e})") from None
     return out
 
 
