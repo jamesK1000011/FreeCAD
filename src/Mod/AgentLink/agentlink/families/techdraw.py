@@ -503,6 +503,29 @@ def draw_arch(sh, v, H):
     sh.text(X, H - Y + (max(ys) - min(ys)) * float(v.Scale) / 2 + 6, 3.0, f"{v.Label.upper()}  SCALE {sheets.scale_text(float(v.Scale))}", "middle")
 
 
+MARKS_PROP = "AgentLinkCenterMarks"
+
+
+def circle_centres(v):
+    """The view's whole circles (and arcs past a half turn), on the paper: [((x, y), r)], one per centre and size."""
+    import Part
+
+    seen, out = set(), []
+    for e in v.getVisibleEdges() or []:
+        c = getattr(e, "Curve", None)
+        if not isinstance(c, Part.Circle):
+            continue
+        span = abs(e.LastParameter - e.FirstParameter)
+        if span < math.pi * 1.01:
+            continue
+        key = (round(c.Center.x, 2), round(c.Center.y, 2), round(c.Radius, 2))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(((c.Center.x, c.Center.y), c.Radius))
+    return out
+
+
 def abs_xy(v):
     """A view's centre on the page (mm, y up), through a group it sits in."""
     x, y = float(v.X), float(v.Y)
@@ -526,6 +549,12 @@ def draw_item(doc, sh, v, H):
                 pts = [(X + p.x, H - Y + p.y) for p in e.discretize(Deflection=0.05)] if e.Length > 1e-6 else []
                 if len(pts) >= 2:
                     sh.line(pts, kind)
+        ext = float(getattr(v, MARKS_PROP, 0) or 0) if MARKS_PROP in v.PropertiesList else 0
+        if ext > 0:
+            for c, r in circle_centres(v):
+                cx, cy = X + c[0], H - Y + c[1]
+                sh.line([(cx - r - ext, cy), (cx + r + ext, cy)], "center")
+                sh.line([(cx, cy - r - ext), (cx, cy + r + ext)], "center")
         for o in v.InList:
             try:
                 if o.isDerivedFrom("TechDraw::DrawViewSection") and o.BaseView == v:
@@ -1044,6 +1073,20 @@ def tools(session):
         if not sym:
             out["warning"] = "The view drew nothing here — the section cuts no BIM objects, or this FreeCAD draws Arch views only in its window."
         return done("td_bim", out)
+
+    def td_centermarks(a):
+        """Centre marks on a view's holes and round edges, drawn into the exported page."""
+        names = a.get("views")
+        views = [view_of(doc(), n) for n in (names if isinstance(names, list) else [names])] if names else \
+            [o for o in doc().Objects if o.isDerivedFrom("TechDraw::DrawViewPart")]
+        ext = float(a.get("extend", 2.0)) if a.get("on", True) else 0.0
+        out = []
+        for v in views:
+            if MARKS_PROP not in v.PropertiesList:
+                v.addProperty("App::PropertyFloat", MARKS_PROP, "AgentLink", "Centre marks on its circles: how far past each, mm (0: none)")
+            setattr(v, MARKS_PROP, ext)
+            out.append({"view": v.Label, "circles": len(circle_centres(v))})
+        return done("td_centermarks", {"views": out, "extend": ext, "note": "Drawn as thin chain lines by td_export."})
 
     def td_projection(a):
         page = page_of(doc(), a.get("page"))
@@ -1565,6 +1608,8 @@ def tools(session):
              obj({"page": {"type": "string"}, "fields": {"type": "object"}, "preset": {"type": "string"}, "save": {"type": "boolean"}, "delete": {"type": "boolean"}, "import": {"type": "string"}, "export": {"type": "string"}}), td_title, changes=True),
         Tool("td_view", "Put a view of bodies on a page: direction front|top|right|left|rear|bottom|iso or [x, y, z] (part toward viewer), scale, at [x, y] page mm (bottom-left origin), hidden (dashed hidden lines), name.",
              obj({"page": {"type": "string"}, "bodies": {"type": "array", "items": {"type": "string"}}, "direction": {"type": ["string", "array"]}, "scale": {"type": "number"}, "at": {"type": "array"}, "hidden": {"type": "boolean"}, "name": {"type": "string"}}), td_view, changes=True),
+        Tool("td_centermarks", "Centre marks (thin chain crosses) on the holes and round edges of views (all part views when left out): extend mm past each circle (2); on: false takes them off.",
+             obj({"views": {}, "extend": {"type": "number"}, "on": {"type": "boolean"}}), td_centermarks, changes=True),
         Tool("td_bim", "A BIM section plane drawn on a page (a building plan or section): section, scale (0.02 = 1:50), at, render Wireframe | Solid, fill (cut faces hatched), spaces, hidden.",
              obj({"page": {"type": "string"}, "section": {"type": "string"}, "scale": {"type": "number"}, "at": {"type": "array"}, "render": {"type": "string"},
                   "fill": {"type": "boolean"}, "spaces": {"type": "boolean"}, "hidden": {"type": "boolean"}, "name": {"type": "string"}}, ["section"]), td_bim, changes=True),

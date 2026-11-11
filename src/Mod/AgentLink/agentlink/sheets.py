@@ -8,8 +8,8 @@ import zlib
 
 PAPER = {"A4": (297.0, 210.0), "A3": (420.0, 297.0), "A4P": (210.0, 297.0)}
 # Line weights, mm, by kind (ISO 128: thick 0.5, thin 0.25).
-WEIGHT = {"visible": 0.5, "hidden": 0.25, "thin": 0.25, "dim": 0.18, "frame": 0.7, "cut": 0.7}
-DASH = {"hidden": (3.0, 1.5), "trail": (6.0, 1.5, 1.0, 1.5)}
+WEIGHT = {"visible": 0.5, "hidden": 0.25, "thin": 0.25, "dim": 0.18, "frame": 0.7, "cut": 0.7, "center": 0.18}
+DASH = {"hidden": (3.0, 1.5), "trail": (6.0, 1.5, 1.0, 1.5), "center": (8.0, 1.5, 1.5, 1.5)}
 SCALES = [10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01]
 
 

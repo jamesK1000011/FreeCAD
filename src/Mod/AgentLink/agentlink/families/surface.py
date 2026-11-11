@@ -136,7 +136,7 @@ def tools(session):
             out = done(f, "surface_boundary")
         except ToolError:
             raise ToolError("failed", f"{why} — and a filling through the edges failed too; fill: stretched joins them.") from None
-        out["note"] = f"Made as Surface Filling (smooth through the edges): FreeCAD's {ft.lower()} fill refused these curves ({why.split(':')[-1].strip()})."
+        out["note"] = f"Made as Surface Filling (smooth through the edges): FreeCAD's {ft.lower()} fill refused these curves."
         return out
 
     def surface_extend(a):
