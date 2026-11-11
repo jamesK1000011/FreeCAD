@@ -302,6 +302,20 @@ def frame_of(v, cache):
     return best[1]
 
 
+def gscale(v, cache):
+    """Geometry units per mm on the part, as the view's indexed geometry
+    holds them: some releases keep it scaled to the paper, some not (the
+    visible edges are always on the paper)."""
+    fr = frame_of(v, cache)
+    return fr[0] if fr else view_scale(v)
+
+
+def to_paper(v, cache, xy):
+    """A point of the view's indexed geometry in paper mm from its centre."""
+    k = view_scale(v) / gscale(v, cache)
+    return xy[0] * k, xy[1] * k
+
+
 def to_view(fr, v, p3):
     p = v.projectPoint(p3)
     s, sy, tx, ty = fr
@@ -347,7 +361,7 @@ def resolve_ref(v, r, cache, want="any"):
     fr = frame_of(v, cache)
     if fr is None:
         raise ToolError("unavailable", f"{v.Label} has no geometry yet (recompute, or a hidden view).")
-    sc = view_scale(v)
+    sc = fr[0]
     if "point" in r:
         q = to_view(fr, v, vec(r["point"], "point"))
         verts = vertices_of(v)
@@ -546,8 +560,9 @@ def cut_line(sh, base, sv, X, Y, H):
         return
     o = V(sv.SectionOrigin)
     n = V(sv.SectionNormal)
-    a0 = to_view(fr, base, o)
-    a1 = to_view(fr, base, o + n * 10)
+    k = view_scale(base) / fr[0]
+    a0 = [c * k for c in to_view(fr, base, o)]
+    a1 = [c * k for c in to_view(fr, base, o + n * 10)]
     nx, ny = a1[0] - a0[0], a1[1] - a0[1]
     ln = math.hypot(nx, ny)
     if ln < 1e-9:
@@ -599,8 +614,16 @@ def draw_dim(sh, d, H):
     # the label's place: the dimension's X, Y (paper mm, y up) from the view's centre
     L = (X + float(d.X), H - (Y + float(d.Y)))
     typ = d.Type
+    sc = view_scale(v)
+    k = sc / gscale(v, {})
     if typ in ("Distance", "DistanceX", "DistanceY"):
-        a, b = [P(p) for p in d.getLinearPoints()[:2]]
+        lp = d.getLinearPoints()[:2]
+        # on the paper, or the part's mm in some releases: told by length
+        dx_, dy_ = abs(lp[1].x - lp[0].x), abs(lp[1].y - lp[0].y)
+        span = dx_ if typ == "DistanceX" else dy_ if typ == "DistanceY" else math.hypot(dx_, dy_)
+        raw = float(d.getRawValue())
+        f = sc if (abs(span - raw) < 1e-3 * max(1, raw) and abs(sc - 1) > 1e-9) else 1.0
+        a, b = [P(V(p.x * f, p.y * f, 0)) for p in lp]
         if typ == "DistanceX":
             a2, b2 = (a[0], L[1]), (b[0], L[1])
         elif typ == "DistanceY":
@@ -622,8 +645,8 @@ def draw_dim(sh, d, H):
         e = v.getEdgeBySelection(ref_names(d)[0]) if hasattr(v, "getEdgeBySelection") else None
         cu = getattr(e, "Curve", None)
         if cu is not None and hasattr(cu, "Center"):
-            c = P(cu.Center)
-            r = cu.Radius
+            c = P(V(cu.Center.x * k, cu.Center.y * k, 0))
+            r = cu.Radius * k
             dx, dy = L[0] - c[0], L[1] - c[1]
             n = math.hypot(dx, dy) or 1
             ux, uy = dx / n, dy / n
@@ -790,6 +813,9 @@ def tools(session):
             if paper not in PAPERS:
                 raise bad(f"paper: one of {', '.join(PAPERS)}.")
             p = find_template(paper, a.get("orientation") == "portrait", bool(a.get("blank")), a.get("standard"))
+            std_note = None
+            if p and a.get("standard") and f"{os.sep}{a['standard'].upper()}{os.sep}" not in p:
+                std_note = f"No {a['standard'].upper()} template for {paper}: the {os.path.basename(os.path.dirname(p))} one is used (ASME papers: Letter, ANSIB … ANSIE)."
             if p is None:
                 raise ToolError("not_found", f"No {paper} {a.get('orientation', 'landscape')} template in this build — td_page {{ action: \"templates\" }} lists them; pass template.")
         page = doc().addObject("TechDraw::DrawPage", "Page")
@@ -817,6 +843,8 @@ def tools(session):
         out = page_reading(page, full=True)
         if cleared:
             out["cleared"] = cleared
+        if not tpl and std_note:
+            out["note"] = std_note
         out["next"] = "td_title { fields } fills the title block (ask the person for names and numbers); td_view or td_projection puts the part on."
         return done("td_page", out)
 
@@ -1042,7 +1070,7 @@ def tools(session):
                 recompute([base])
                 fr = frame_of(base, frames)
             q = to_view(fr, base, p3)
-            sc = view_scale(base)
+            sc = fr[0]
             # AnchorPoint: the base view's own, unscaled, y up
             anchor = V(q[0] / sc, -q[1] / sc if fr[1] < 0 else q[1] / sc, 0)
         else:
@@ -1067,7 +1095,7 @@ def tools(session):
         if not edges_of(v):
             recompute([v])
         kind = a.get("kind", "edges")
-        sc = view_scale(v)
+        sc = gscale(v, frames)
         cap = int(a.get("limit", 120))
         if kind == "vertices":
             vs = vertices_of(v)
@@ -1083,7 +1111,7 @@ def tools(session):
                 items.append({"ref": f"Edge{i}", **info})
         else:
             raise bad("kind: edges, circles, lines or vertices.")
-        out = {"view": v.Label, "scale": num(sc), "units": "mm on the part, in the view's plane (x right, y as TechDraw keeps it)", "items": items[:cap]}
+        out = {"view": v.Label, "scale": num(view_scale(v)), "units": "mm on the part, in the view's plane (x right, y as TechDraw keeps it)", "items": items[:cap]}
         if len(items) > cap:
             out["more"] = f"{len(items) - cap} more: kind narrows, or limit."
         out["byPoint"] = "Or name geometry by the part instead: { point: [x,y,z] }, { circle: { diameter, near } }, { edge: { through: [p, q] } }."
@@ -1233,10 +1261,10 @@ def tools(session):
         n = resolve_ref(v, r, frames)
         if n.startswith("Vertex"):
             p = vertices_of(v)[int(n[6:])]
-            return n, (p.x, p.y)
+            return n, to_paper(v, frames, (p.x, p.y))
         e = edges_of(v)[int(n[4:])]
         m = e.valueAt((e.FirstParameter + e.LastParameter) / 2)
-        return n, (m.x, m.y)
+        return n, to_paper(v, frames, (m.x, m.y))
 
     def symbol(page, fig, data, at, label):
         sym = doc().addObject("TechDraw::DrawViewSymbol", "Symbol")
