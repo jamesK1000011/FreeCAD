@@ -251,6 +251,17 @@ def tools(session):
             kind = str(a.get("kind", "")).lower()
             raise ToolError("failed", f"The {kind} would not compute: {e}" + (f" — {HINTS[kind]}." if kind in HINTS else ".") + " Nothing was kept.") from None
 
+    def make_op(d, mod, kind, a, job):
+        if kind == "drill":
+            # FreeCAD 1.0's Drilling.Create looks for holes before the op knows
+            # its model and fails; build it the way newer releases do.
+            op = d.addObject("Path::FeaturePython", a.get("name") or "Drill")
+            op.Proxy = mod.ObjectDrilling(op, a.get("name") or "Drill", job)
+            if getattr(op.Proxy, "model", None) is None:
+                op.Proxy.job, op.Proxy.model = job, job.Model.Group
+            return op
+        return mod.Create(a.get("name") or kind.capitalize(), None, job)
+
     def cam_op_(a):
         d = doc()
         job = _job(d, a.get("job"))
@@ -264,22 +275,26 @@ def tools(session):
         model = job.Model.Group[0]
         base_body = s.body(a.get("body")) if a.get("body") else None
         src = base_body or model
-        if kind == "drill":
-            # FreeCAD 1.0's Drilling.Create looks for holes before the op knows
-            # its model and fails; build it the way newer releases do.
-            op = d.addObject("Path::FeaturePython", a.get("name") or "Drill")
-            op.Proxy = mod.ObjectDrilling(op, a.get("name") or "Drill", job)
-            if getattr(op.Proxy, "model", None) is None:
-                op.Proxy.job, op.Proxy.model = job, job.Model.Group
-        else:
-            op = mod.Create(a.get("name") or kind.capitalize(), None, job)
+        want_tc = None
+        if a.get("tool"):
+            want_tc = next((x for x in job.Tools.Group if a["tool"] in (x.Label, x.Name)), None)
+            if want_tc is None:
+                raise ToolError("not_found", f"tool {a['tool']!r}: the job's tools are {', '.join(x.Label for x in job.Tools.Group)} (cam_tool_add adds one).")
+        # With more than one tool FreeCAD asks which in a dialog (and headless
+        # fails): the op is made with the one asked for, else the job's first.
+        import PathScripts.PathUtils as PathUtils
+
+        chosen = want_tc or job.Tools.Group[0]
+        orig_find = PathUtils.findToolController
+        PathUtils.findToolController = lambda *args, **kw: chosen
+        try:
+            op = make_op(d, mod, kind, a, job)
+        finally:
+            PathUtils.findToolController = orig_find
         if a.get("name"):
             op.Label = a["name"]
-        if a.get("tool"):
-            tc = next((x for x in job.Tools.Group if a["tool"] in (x.Label, x.Name)), None)
-            if tc is None:
-                raise ToolError("not_found", f"tool {a['tool']!r}: the job's tools are {', '.join(x.Label for x in job.Tools.Group)} (cam_tool_add adds one).")
-            op.ToolController = tc
+        if want_tc is not None:
+            op.ToolController = want_tc
         if a.get("base"):
             # what an engraving or V-carve follows: letters (draft_text's ShapeString), a sketch, a wire
             objs = [picks.find(d, r) for r in a["base"]]
