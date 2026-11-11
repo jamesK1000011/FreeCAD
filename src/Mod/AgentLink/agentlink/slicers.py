@@ -137,8 +137,12 @@ def nozzle_volume_types(machine_path):
 
 
 def _tail(run):
-    tail = (run.stderr or run.stdout or "").strip().splitlines()[-3:]
-    return f"The slicer stopped (code {run.returncode}): {' / '.join(tail) or 'no G-code written'}"
+    lines = ((run.stderr or "") + "\n" + (run.stdout or "")).strip().splitlines()
+    tail = [l for l in lines if l.strip()][-3:]
+    # Which build stopped matters: the slicers' command lines change a lot
+    # between releases (Bambu Studio's for two-nozzle printers above all).
+    version = next((l.split("]")[-1].strip() for l in lines if re.search(r"version", l, re.I) and re.search(r"\d+\.\d+\.\d+", l)), None)
+    return f"The slicer stopped (code {run.returncode}): {' / '.join(tail) or 'no G-code written'}" + (f" [{version}]" if version else "")
 
 
 # ---- reading and pausing any of them ------------------------------------------------------
