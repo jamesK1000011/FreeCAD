@@ -281,6 +281,64 @@ def tools(session):
                 pass
         return finish(o, "bim_structure", {"kind": kind})
 
+    def presets():
+        try:
+            import ArchProfile
+        except ImportError:
+            raise ToolError("unavailable", "This FreeCAD's BIM has no profile library.") from None
+        return headless_call(ArchProfile.readPresets)
+
+    def bim_profiles(a):
+        """FreeCAD's steel and timber section library: names to give bim_member."""
+        q = str(a.get("search", "")).lower()
+        cat = str(a.get("category", "")).lower()
+        rows = [r for r in presets() if (not q or q in str(r[2]).lower()) and (not cat or cat == str(r[1]).lower())]
+        cats = sorted({str(r[1]) for r in presets()})
+        lim = int(a.get("limit", 40))
+        return {"count": len(rows), "categories": cats,
+                "profiles": [{"name": r[2], "category": r[1], "type": r[3], "dims": r[4:]} for r in rows[:lim]],
+                **({"more": len(rows) - lim} if len(rows) > lim else {})}
+
+    def bim_member(a):
+        """A steel or timber member of a library section (HEB200, IPE300, RHS …) from one point to another."""
+        name = str(a.get("profile", ""))
+        rows = presets()
+        row = next((r for r in rows if str(r[2]).lower() == name.lower()), None)
+        if row is None:
+            near = [r[2] for r in rows if name.lower()[:3] and str(r[2]).lower().startswith(name.lower()[:3])][:8]
+            raise bad(f"profile: {name!r} is not in the library" + (f" — near: {', '.join(near)}" if near else "") + " (bim_profiles lists them).")
+        p0, p1 = vec(a.get("from"), "from"), vec(a.get("to"), "to")
+        d = p1 - p0
+        if d.Length < 1e-6:
+            raise bad("from and to: the member's two ends, apart.")
+        prof = headless_call(Arch.makeProfile, row)
+        if prof is None:
+            raise ToolError("failed", f"FreeCAD could not make the {name} section.")
+        prof.Label = s.unique(f"{name} section", prof)
+        o = headless_call(Arch.makeStructure, prof, height=d.Length)
+        dn = V(d).normalize()
+        side = UP.cross(dn)
+        if side.Length < 1e-9:
+            side = V(1, 0, 0)  # upright: the section's X along world X
+        side.normalize()
+        rot = frame(side, dn.cross(side))
+        if a.get("rotate"):
+            rot = rot.multiply(FreeCAD.Rotation(V(0, 0, 1), float(a["rotate"])))
+        o.Placement = FreeCAD.Placement(p0, rot)
+        upright = abs(dn.z) > 0.99
+        named(o, a.get("name") or f"{name} {'column' if upright else 'beam'}")
+        if hasattr(o, "IfcType"):
+            try:
+                o.IfcType = "Column" if upright else "Beam"
+            except Exception:
+                pass
+        out = finish(o, "bim_member", {"profile": name, "category": row[1], "length": round(d.Length, 1)})
+        if o.Shape.Solids:
+            dens = float(a.get("density", 7850 if str(row[1]).upper() not in ("TIMBER", "WOOD") else 500))
+            out["mass_kg"] = round(o.Shape.Volume / 1e9 * dens, 1)
+            out["kgPerM"] = round(out["mass_kg"] / (d.Length / 1000), 1)
+        return out
+
     def bim_roof(a):
         name = a.get("name") or "Roof"
         if a.get("base"):
@@ -780,6 +838,10 @@ def tools(session):
         Tool("bim_structure", "Structure: column { at, width, depth, height }, beam { from, to, width, depth }, slab or footing { points outline or base, thickness (slab on top of the outline, footing below it) }.",
              obj({"kind": {"type": "string", "enum": list(ROLES)}, "at": pt, "from": pt, "to": pt, "points": pts, "base": {"type": "string"}, "width": {"type": "number"}, "depth": {"type": "number"},
                   "height": {"type": "number"}, "thickness": {"type": "number"}, "name": {"type": "string"}}), bim_structure, changes=True),
+        Tool("bim_profiles", "FreeCAD's section library (steel HEA/HEB/IPE/UPN/RHS/CHS …, timber): search a name, category. Changes nothing.",
+             obj({"search": {"type": "string"}, "category": {"type": "string"}, "limit": {"type": "integer"}}), bim_profiles),
+        Tool("bim_member", "A structural member of a library section from one point to another (a beam across, a column upright): profile (\"HEB200\", \"IPE300\"; bim_profiles lists them), from, to, rotate degrees about its length, density kg/m³ (steel 7850). Answers mass and kg/m.",
+             obj({"profile": {"type": "string"}, "from": pt, "to": pt, "rotate": {"type": "number"}, "density": {"type": "number"}, "name": {"type": "string"}}, ["profile", "from", "to"]), bim_member, changes=True),
         Tool("bim_roof", "A roof over a closed outline (points, at the eaves' height, or base): angle degrees (one, or one per edge; 90 makes a gable end), thickness, overhang mm.",
              obj({"points": pts, "base": {"type": "string"}, "angle": {}, "run": {}, "thickness": {"type": "number"}, "overhang": {"type": "number"}, "name": {"type": "string"}}), bim_roof, changes=True),
         Tool("bim_stairs", "A straight flight: at (the foot, on its left side going up), direction [x, y] it climbs, length (its run), width, height (floor to floor), steps (height / 175 by default). Answers riser, going and 2R + G.",
