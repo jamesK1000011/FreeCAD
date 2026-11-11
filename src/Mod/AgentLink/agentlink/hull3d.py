@@ -43,8 +43,6 @@ def hull(P, eps=1e-9):
     if abs(d3[i3]) <= tol * np.linalg.norm(n):
         raise HullError("the points lie in one plane")
     faces = [[i0, i1, i2], [i0, i3, i1], [i1, i3, i2], [i2, i3, i0]]
-    if d3[i3] > 0:
-        faces = [[f[0], f[2], f[1]] for f in faces]
     centre = P[[i0, i1, i2, i3]].mean(axis=0)
 
     def plane(f):
@@ -57,14 +55,22 @@ def hull(P, eps=1e-9):
             f[1], f[2] = f[2], f[1]
         return nn, nn @ a
 
-    planes = [plane(f) for f in faces]
+    # faces kept in arrays, so which a point sees is one product
+    N = np.zeros((0, 3))
+    D = np.zeros(0)
+    alive = []
+    for f in faces:
+        nn, d = plane(f)
+        N, D = np.vstack([N, nn]), np.append(D, d)
+        alive.append(True)
+    alive = np.array(alive)
     rest = [i for i in range(len(P)) if i not in (i0, i1, i2, i3)]
     # farthest points first: fewer faces made and unmade
     rest.sort(key=lambda i: -np.linalg.norm(P[i] - centre))
     for i in rest:
         p = P[i]
-        seen = [k for k, (nn, d) in enumerate(planes) if nn @ p - d > tol]
-        if not seen:
+        seen = np.nonzero(alive & ((N @ p - D) > tol))[0]
+        if not len(seen):
             continue
         edges = {}
         for k in seen:
@@ -74,13 +80,22 @@ def hull(P, eps=1e-9):
                     del edges[(e[1], e[0])]
                 else:
                     edges[e] = True
-        keep = [k for k in range(len(faces)) if k not in set(seen)]
-        faces = [faces[k] for k in keep]
-        planes = [planes[k] for k in keep]
+        alive[seen] = False
+        new_n, new_d = [], []
         for a, b in edges:
             f = [a, b, i]
+            nn, d = plane(f)
             faces.append(f)
-            planes.append(plane(f))
+            new_n.append(nn)
+            new_d.append(d)
+        N = np.vstack([N, new_n])
+        D = np.append(D, new_d)
+        alive = np.append(alive, np.ones(len(new_n), bool))
+        if len(faces) > 4 * len(np.nonzero(alive)[0]) + 64:  # drop the dead now and then
+            keep = np.nonzero(alive)[0]
+            faces = [faces[k] for k in keep]
+            N, D, alive = N[keep], D[keep], np.ones(len(keep), bool)
+    faces = [f for f, al in zip(faces, alive) if al]
     return _compact(P, np.array(faces))
 
 
