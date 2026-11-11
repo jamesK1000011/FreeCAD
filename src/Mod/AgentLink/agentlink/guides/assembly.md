@@ -34,3 +34,16 @@ FreeCAD's own Assembly workbench, its solver and its joints. Parts are bodies al
 ## Moving it through its range
 - `asm_sweep { joint, from, to, steps }` turns a revolute joint through degrees (a slider or cylindrical one along its axis, mm), solving and checking for overlaps at each step, then puts every part back. `collidesAt` lists where parts run into each other; `clearFromStart` the range that is clear from the start.
 - Does a lid open to 110°, does an arm swing past a post, does a drawer slide out: sweep it before printing. Steps are a sample — a thin part can pass between two: more steps to look closer, `clearance` to list near misses too.
+
+## Fits
+- `asm_fits` reads the hole and the shaft each joint puts together: both diameters, the clearance (minus is interference), how far they engage, and how far their axes are apart. Pass `joint` for one, or `pairs: [{ a, b }]` for parts with no joint.
+- `fit: "H7/g6"` holds them to ISO 286, giving the fit's type and clearance range and whether each part is in its band. The nominal is read off the parts unless `size` says it.
+- A model drawn at nominal sizes fails a shaft band like g6 (it wants the shaft a little under). Say so, then size the part into the band, or keep the fit as a callout for the drawing (`td_dim { fit }`).
+
+## Poses and limits
+- `asm_limits { joint, min, max }` sets FreeCAD's own limits on a joint. `asm_sweep` then sweeps between them by default.
+- `asm_pose { joint, to }` moves a joint and leaves it there: the lid open at 90° for a render or a drawing. Values count from where the joint was made, as in `asm_sweep`. `home: true` returns it.
+
+## Exploded layout and parts list
+- `asm_explode { factor }` spreads the parts out from the middle; `axis: "z"` stacks them along an axis in the order they sit. Then render it, or make `drawing_exploded`, and `asm_explode { collapse: true }` puts them back. Don't solve or add joints while exploded: the solver pulls the parts home.
+- `asm_bom` is FreeCAD's own bill of materials, with material, mass and volume from `part_spec`. `td_table { sheet }` puts it on a drawing.

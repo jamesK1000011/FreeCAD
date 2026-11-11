@@ -374,8 +374,12 @@ def tools(session):
         if kind not in ("revolute", "slider", "cylindrical"):
             raise ToolError("invalid_input", f"{j.Label} is {kind}: a sweep moves a revolute (turning, degrees), slider or cylindrical (sliding, mm) joint.")
         turning = kind == "revolute" or (kind == "cylindrical" and a.get("turn"))
-        lo = float(a.get("from", 0))
-        hi = float(a.get("to", 90 if turning else 10))
+        # left out, the joint's own limits (asm_limits) bound the sweep
+        pre = "Angle" if turning else "Length"
+        lim_lo = getattr(j, f"{pre}Min", None) if getattr(j, f"Enable{pre}Min", False) else None
+        lim_hi = getattr(j, f"{pre}Max", None) if getattr(j, f"Enable{pre}Max", False) else None
+        lo = float(a.get("from", lim_lo if lim_lo is not None else 0))
+        hi = float(a.get("to", lim_hi if lim_hi is not None else (90 if turning else 10)))
         steps = int(a.get("steps", 12))
         if not 1 <= steps <= 72:
             raise ToolError("invalid_input", "steps: 1 to 72.")
@@ -407,13 +411,15 @@ def tools(session):
         kept = {o.Name: o.Placement.copy() for o in _parts(asm)}
         out_steps = []
         try:
+            # values from where the joint was made: an asm_pose since is taken off
+            posed = float(getattr(j, "AgentLinkPose", 0.0) or 0.0)
             for k in range(steps + 1):
                 v = lo + (hi - lo) * k / steps
                 if turning:
-                    r = FreeCAD.Rotation(axis, v)
+                    r = FreeCAD.Rotation(axis, v - posed)
                     move = FreeCAD.Placement(centre - r.multVec(centre), r)
                 else:
-                    move = FreeCAD.Placement(axis * v, FreeCAD.Rotation())
+                    move = FreeCAD.Placement(axis * (v - posed), FreeCAD.Rotation())
                 for o in group.values():
                     o.Placement = move.multiply(kept[o.Name])
                 doc().recompute()
