@@ -108,7 +108,9 @@ def tools(session):
         if not 2 <= len(refs) <= 4:
             raise bad("edges: two to four boundary curves that meet end to end.")
         bl = [edge_ref(r, "edges") for r in refs]
-        flags = chain([ob.Shape.getElement(sub) for ob, subs in bl for sub in subs], refs)
+        edges = [ob.Shape.getElement(sub) for ob, subs in bl for sub in subs]
+        # Two curves face each other (the surface spans between them); three or four go round it.
+        flags = chain(edges, refs) if len(edges) > 2 else [False] * len(edges)
         o = new("Surface::GeomFillSurface", a.get("name") or "Boundary surface")
         o.BoundaryList = bl
         o.ReversedList = flags
@@ -116,7 +118,12 @@ def tools(session):
         if ft is None:
             raise bad("fill: stretched (flattest), coons (smooth across), curved (round).")
         o.FillType = ft
-        return done(o, "surface_boundary")
+        try:
+            return done(o, "surface_boundary")
+        except ToolError as e:
+            if ft != "Stretched" and "disjoint" in str(e):
+                raise ToolError("failed", f"{e.message if hasattr(e, 'message') else e} The {ft} fill could not join these curves; fill: stretched does.") from None
+            raise
 
     def surface_extend(a):
         ref = a.get("face")

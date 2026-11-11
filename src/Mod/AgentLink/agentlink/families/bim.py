@@ -483,17 +483,24 @@ def tools(session):
 
         f = ifcopenshell.open(p)
         st = ifcopenshell.geom.settings()
-        st.set("use-world-coords", True)
+        for key in ("use-world-coords", getattr(st, "USE_WORLD_COORDS", None)):
+            try:
+                st.set(key, True)
+                break
+            except Exception:
+                continue
         unit = 1000.0  # IfcOpenShell gives metres
-        n = 0
+        n, first = 0, None
         for el in f.by_type("IfcProduct"):
             if not getattr(el, "Representation", None) or el.is_a("IfcOpeningElement") or el.is_a("IfcSpatialStructureElement") and not el.is_a("IfcSpace"):
                 continue
             try:
-                g = ifcopenshell.geom.create_shape(st, el).geometry
-            except Exception:
+                sh_ = ifcopenshell.geom.create_shape(st, el)
+                g = getattr(sh_, "geometry", sh_)
+                vs, fs = list(g.verts), list(g.faces)
+            except Exception as e:
+                first = first or f"{el.is_a()}: {e}"
                 continue
-            vs, fs = list(g.verts), list(g.faces)
             if not fs:
                 continue
             P = [V(vs[i] * unit, vs[i + 1] * unit, vs[i + 2] * unit) for i in range(0, len(vs), 3)]
@@ -517,7 +524,7 @@ def tools(session):
             o.IfcType = el.is_a()[3:]
             n += 1
         if not n:
-            raise ToolError("failed", "IFC import: no product geometry could be read.")
+            raise ToolError("failed", f"IFC import: no product geometry could be read (IfcOpenShell {getattr(ifcopenshell, 'version', '?')}; {first or 'no products with geometry'}).")
 
     def bim_import(a):
         need_ifc()
