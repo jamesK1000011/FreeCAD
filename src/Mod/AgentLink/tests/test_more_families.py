@@ -81,10 +81,11 @@ class MoreFamilies(Base):
 
     def test_openscad(self):
         self.have("scad_op")
-        self.ok("part_primitive", {"kind": "sphere", "radius": 10, "at": [500, 0, 0], "name": "Sc a"})
-        self.ok("part_primitive", {"kind": "sphere", "radius": 5, "at": [530, 0, 0], "name": "Sc b"})
+        # two boxes apart: their hull is the box round both, 40 × 10 × 10
+        self.box("Sc a", [10, 10, 10], [500, 0, 0])
+        self.box("Sc b", [10, 10, 10], [530, 0, 0])
         h = self.unavailable_skip("scad_op", {"op": "hull", "objects": ["Sc a", "Sc b"]})
-        self.assertGreater(h["volume"], 4188 + 523)
+        self.assertAlmostEqual(h["volume"], 4000, delta=1)
         self.box("Sc box", [10, 20, 30], [600, 0, 0])
         e = self.ok("scad_export", {"objects": ["Sc box"], "path": "box.csg"})
         with open(e["path"]) as f:
