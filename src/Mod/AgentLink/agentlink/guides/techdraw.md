@@ -24,3 +24,7 @@
 - A point that is hidden in a view has no vertex there. Dimension it in a view that sees it, or in a section.
 - Form tolerances (flatness, straightness, circularity, cylindricity) take no datum. Orientation, runout, concentricity and symmetry need one. A refusal says which.
 - SVG and PDF are drawn here from the page's objects: views, dimensions, frames, leaders, notes, balloons and tables. Hatching and the template's artwork are left out (the title block's fields are kept). DXF comes from TechDraw itself.
+
+## centre marks and hatching
+- `td_centermarks` puts thin chain crosses on the holes and round edges of views; `extend` is how far past the circle they run.
+- A section's cut faces are hatched in exports by themselves. `td_hatch { view, faces, spacing, angle }` hatches other faces of the part; holes stay clear. A face seen edge-on has nothing to hatch, and the answer says so.

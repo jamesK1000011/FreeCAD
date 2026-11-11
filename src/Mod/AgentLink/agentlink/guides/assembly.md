@@ -52,3 +52,6 @@ FreeCAD's own Assembly workbench, its solver and its joints. Parts are bodies al
 - Build the sub-assembly as an assembly of its own, then `asm_sub { assembly: "Machine", sub: "Hinge" }` puts it in. It is rigid by default (one part to the parent); `rigid: false` lets its own joints keep moving.
 - Joint to it like any part: `b: { part: "<its name in the parent>", element }`. Its faces are numbered across all of its parts, so pick by query with `near`.
 - `asm_bom` itemises a sub-assembly's parts under it (2, 2.1, 2.1.1 …), as FreeCAD's BOM does.
+
+## couplings
+`asm_joint` kinds `gears`, `belt`, `rackpinion` and `screw` tie one motion to another, for `asm_sweep`. Give `radius1`/`radius2`, or the wheels' round edges and the radii are read off them; for a screw, `pitch` is mm per turn. They need each part's own joint (revolute, slider) as well.
