@@ -399,6 +399,8 @@ def tools(session):
             elif t == "Space" or type(getattr(o, "Proxy", None)).__name__ == "_Space":
                 ar = getattr(o, "Area", 0)
                 row = {"kind": "space", "area_m2": round(float(getattr(ar, "Value", ar) or 0) / 1e6, 3), "use": str(getattr(o, "SpaceType", ""))}
+            elif t in ("Reinforcing Bar", "Rebar") or type(getattr(o, "Proxy", None)).__name__ == "_Rebar":
+                row = {"kind": "rebar", "volume_m3": round(vol, 5), "mass_kg": round(vol * 7850, 1)}
             elif t in ("Roof", "Stair"):
                 row = {"kind": t.lower(), "volume_m3": round(vol, 4)}
             if row:
@@ -411,7 +413,7 @@ def tools(session):
         for r in rows:
             t = totals.setdefault(r["kind"], {"count": 0})
             t["count"] += 1
-            for k in ("length_m", "area_m2", "volume_m3"):
+            for k in ("length_m", "area_m2", "volume_m3", "mass_kg"):
                 if k in r:
                     t[k] = round(t.get(k, 0) + r[k], 4)
         out = {"rows": rows, "totals": totals}
