@@ -302,6 +302,16 @@ def tools(session):
             keep = ~keep
         voxel = a.get("thin")
         Q = P[keep]
+        dropped = 0
+        if a.get("specks"):
+            sp = a["specks"]
+            rr, least = float(sp.get("radius", 1.0)), int(sp.get("least", 4))
+            try:
+                k2 = fitting.radius_outliers(Q, rr, least)
+            except fitting.FitError as e:
+                raise bad(f"specks: {e}") from None
+            dropped = int((~k2).sum())
+            Q = Q[k2]
         if voxel:
             vx = picks.num(voxel, "thin")
             if vx <= 0:
@@ -320,7 +330,7 @@ def tools(session):
         else:
             c = make(Q, a.get("name") or f"{o.Label} cropped")
         s.snapshot("points_crop")
-        return {**reading(c, Q), "from": int(len(P)), "kept": int(len(Q)), "step": len(s.steps)}
+        return {**reading(c, Q), "from": int(len(P)), "kept": int(len(Q)), **({"specksDropped": dropped} if a.get("specks") else {}), "step": len(s.steps)}
 
     def points_fit(a):
         o = cloud(a.get("points"))
@@ -415,9 +425,9 @@ def tools(session):
         Tool("points_sample", "A point cloud sampled evenly over a body's, surface's or mesh's faces: count (5000), noise mm (to try a fit as a scan would see it), seed.",
              obj({"object": {"type": "string"}, "count": {"type": "integer"}, "noise": {"type": "number"}, "seed": {"type": "integer"}, "tolerance": {"type": "number"}, "name": {"type": "string"}}, ["object"]), points_sample, changes=True),
         Tool("points_info", "A point cloud's count, extent, centre and typical spacing between points. Changes nothing.", obj({"points": pts}), points_info),
-        Tool("points_crop", "Keep the points within a box [[min], [max]], near [x,y,z] within radius, and/or above a plane { at, normal } (outside: true keeps the rest); thin mm keeps one point per cell. replace: false makes a new cloud.",
+        Tool("points_crop", "Keep the points within a box [[min], [max]], near [x,y,z] within radius, and/or above a plane { at, normal } (outside: true keeps the rest); thin mm keeps one point per cell; specks { radius mm, least } drops stray points with fewer than least neighbours within radius. replace: false makes a new cloud.",
              obj({"points": pts, "box": {"type": "array"}, "near": {"type": "array"}, "radius": {"type": "number"}, "plane": {"type": "object"}, "outside": {"type": "boolean"},
-                  "thin": {"type": "number"}, "replace": {"type": "boolean"}, "name": {"type": "string"}}), points_crop, changes=True),
+                  "thin": {"type": "number"}, "specks": {"type": "object"}, "replace": {"type": "boolean"}, "name": {"type": "string"}}), points_crop, changes=True),
         Tool("points_fit", "Fit a shape through the points: plane (centre, normal), sphere (centre, diameter), cylinder (base, axis, diameter, length; axis a hint), or surface (a B-spline: degree 3, poles 6, smooth) — with rms and max distance of the points from it; tolerance mm gives a verdict. make: true makes the shape a body (a surface always is). Crop to the feature first.",
              obj({"points": pts, "shape": {"type": "string", "enum": ["plane", "sphere", "cylinder", "surface"]}, "axis": {"type": "array"}, "tolerance": {"type": "number"},
                   "make": {"type": "boolean"}, "degree": {"type": "integer"}, "poles": {"type": "integer"}, "smooth": {"type": "boolean"}, "weight": {"type": "number"},

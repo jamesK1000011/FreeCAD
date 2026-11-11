@@ -66,5 +66,15 @@ class Fits(unittest.TestCase):
             FT.plane([[0, 0, 0], [1, 0, 0], [2, 0, 0]])
 
 
+
+class Outliers(unittest.TestCase):
+    def test_specks_dropped(self):
+        rng = np.random.default_rng(1)
+        P = np.vstack([rng.uniform(0, 10, (2000, 3)), [[50, 50, 50], [-40, 0, 0], [0, 80, 0]]])
+        keep = FT.radius_outliers(P, 1.5, 3)
+        self.assertFalse(keep[-3:].any())
+        self.assertGreater(keep[:2000].mean(), 0.99)
+
+
 if __name__ == "__main__":
     unittest.main()

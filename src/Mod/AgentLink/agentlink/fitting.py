@@ -165,3 +165,28 @@ def cylinder(P, axis=None):
             break
     start = p0 + a * t.min()
     return {"base": start, "axis": a, "radius": r, "length": float(t.max() - t.min()), **st}
+
+
+def radius_outliers(P, radius, least):
+    """Which points have fewer than `least` others within radius (a scan's
+    stray specks): a boolean array, True to keep. A grid of radius-sized
+    cells keeps it near linear."""
+    P = np.asarray(P, float).reshape(-1, 3)
+    if radius <= 0:
+        raise FitError("radius: above 0 mm.")
+    cells = np.floor(P / radius).astype(np.int64)
+    grid = {}
+    for i, c in enumerate(map(tuple, cells)):
+        grid.setdefault(c, []).append(i)
+    keep = np.zeros(len(P), bool)
+    r2 = radius * radius
+    offs = [(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)]
+    for c, idx in grid.items():
+        near = []
+        for dx, dy, dz in offs:
+            near += grid.get((c[0] + dx, c[1] + dy, c[2] + dz), [])
+        Q = P[near]
+        for i in idx:
+            n = int((((Q - P[i]) ** 2).sum(1) <= r2).sum()) - 1
+            keep[i] = n >= least
+    return keep
