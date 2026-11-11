@@ -124,6 +124,23 @@ class MoreFamilies(Base):
         # beam theory: 20 N × 50 mm × 5 mm / (20 × 10³ / 12) = 3.0 MPa at the top fibre
         self.assertAlmostEqual(p["points"][0]["vonMisesMPa"], 3.0, delta=0.4)
 
+    def test_fea_thermal(self):
+        self.have("fea_probe")
+        import shutil
+
+        if not (shutil.which("ccx") and shutil.which("gmsh")):
+            self.skipTest("ccx and gmsh are not installed")
+        self.box("Th bar", [100, 10, 10], [0, 700, 0])
+        self.ok("fea_setup", {"body": "Th bar", "material": "PLA", "mesh": 3})
+        self.ok("fea_hold", {"faces": {"normal": [-1, 0, 0]}})
+        self.ok("fea_load", {"temperature": 50, "alpha": 68e-6})
+        free = self.ok("fea_solve", {})
+        self.assertAlmostEqual(free["displacementMax"]["mm"], 100 * 68e-6 * 50, delta=0.02)  # L·alpha·dT
+        self.ok("fea_hold", {"faces": {"normal": [1, 0, 0]}})
+        self.ok("fea_solve", {})
+        mid = self.ok("fea_probe", {"points": [[50, 705, 5]]})["points"][0]["vonMisesMPa"]
+        self.assertAlmostEqual(mid, 3500 * 68e-6 * 50, delta=1.5)  # E·alpha·dT
+
     def test_techdraw_marks_hatch(self):
         self.have("td_hatch")
         self.box("Td plate", [60, 40, 10], [0, 1000, 0])

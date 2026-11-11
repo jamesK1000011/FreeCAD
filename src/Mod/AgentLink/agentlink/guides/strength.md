@@ -34,3 +34,6 @@
 - `fea_refine { faces, size }` makes the mesh finer where a peak sits. Solve again and watch the peak settle; if it keeps rising, it is a sharp corner (a singularity), not a real stress.
 - `fea_export` writes VTU (ParaView, FreeCAD's FEM post-processing) and a CSV of every node.
 - `fea_native` builds the study as FreeCAD's own FEM analysis, so the person can open, mesh and run it in the FEM workbench.
+
+## heat and expansion
+`fea_load { temperature: dT }` warms (or, negative, cools) the whole part against its holds; `alpha` is the expansion per K, else the material's. A bar free at one end grows by L·alpha·dT; one held at both ends sees about E·alpha·dT of stress.
