@@ -218,8 +218,21 @@ def tools(session):
         brep = os.path.join(wd, "part.brep")
         shape.exportBrep(brep)
         mesh = float(st["mesh"])
+        # Finer near the faces fea_refine named: a distance field from them,
+        # the size growing back to the study's over three element lengths.
+        fields = []
+        for k, rg in enumerate(st.get("refine") or []):
+            ids = [int(n[4:]) for n, _ in facepick.pick(shape, rg["faces"], "faces")]
+            d, th = 2 * k + 1, 2 * k + 2
+            fields += [f"Field[{d}] = Distance;", f"Field[{d}].SurfacesList = {{{', '.join(map(str, ids))}}};", f"Field[{d}].Sampling = 40;",
+                       f"Field[{th}] = Threshold;", f"Field[{th}].InField = {d};", f"Field[{th}].SizeMin = {float(rg['size'])};",
+                       f"Field[{th}].SizeMax = {mesh};", f"Field[{th}].DistMin = 0;", f"Field[{th}].DistMax = {3 * mesh};"]
+        if fields:
+            n = len(st["refine"])
+            fields += [f"Field[{2 * n + 1}] = Min;", f"Field[{2 * n + 1}].FieldsList = {{{', '.join(str(2 * k + 2) for k in range(n))}}};", f"Background Field = {2 * n + 1};",
+                       "Mesh.MeshSizeExtendFromBoundary = 0;"]
         geo_txt = "\n".join([
-            'Merge "part.brep";',
+            'Merge "part.brep";'] + fields + [
             f"Mesh.MeshSizeMax = {mesh};",
             "Mesh.MeshSizeMin = 0;",
             "Mesh.MeshSizeFromCurvature = 12;",
@@ -257,22 +270,9 @@ def tools(session):
             raise ToolError("failed", "The mesh has no ten-node tetrahedra: this solve needs them.")
         return ccx, wd, femmesh, mesh_text, nodes, elems
 
-    def fea_solve(a):
-        st, o = _need_study(s)
-        if not st["holds"]:
-            raise ToolError("invalid_state", "Nothing holds the part: fea_hold the faces it is mounted by — a free body has no static answer.")
-        if not st["loads"]:
-            raise ToolError("invalid_state", "Nothing loads the part: fea_load a force, pressure or gravity.")
-        c = matfam.card(s.doc, st["material"])
-        if c is None or not c.get("E"):
-            raise ToolError("invalid_state", f"The study's material {st['material']!r} is gone or has no Young's modulus: fea_setup {{ material }} again.")
-        shape = o.Shape
-        t0 = time.time()
-        timeout = float(a.get("timeout", 300))
-        ccx, wd, femmesh, mesh_text, nodes, elems = _meshed(o, st, timeout)
-        mesh = float(st["mesh"])
-        faces = shape.Faces
-
+    def _assemble(st, shape, femmesh, nodes, elems):
+        """The study's holds and loads on the mesh: (fixed nodes, held face
+        names, nodal loads, face pressures, gravity, what was applied)."""
         def resolve(q):
             return facepick.pick(shape, q, "faces")
 
@@ -308,6 +308,25 @@ def tools(session):
                     for k in range(3):
                         acc[k] += fv[k]
                 applied.append({"force": ld["force"], "faces": [n for n, _ in picked], "area": round(area, 2)})
+        return fixed, held_faces, cloads, dloads, gravity, applied
+
+    def fea_solve(a):
+        st, o = _need_study(s)
+        if not st["holds"]:
+            raise ToolError("invalid_state", "Nothing holds the part: fea_hold the faces it is mounted by — a free body has no static answer.")
+        if not st["loads"]:
+            raise ToolError("invalid_state", "Nothing loads the part: fea_load a force, pressure or gravity.")
+        c = matfam.card(s.doc, st["material"])
+        if c is None or not c.get("E"):
+            raise ToolError("invalid_state", f"The study's material {st['material']!r} is gone or has no Young's modulus: fea_setup {{ material }} again.")
+        shape = o.Shape
+        t0 = time.time()
+        timeout = float(a.get("timeout", 300))
+        ccx, wd, femmesh, mesh_text, nodes, elems = _meshed(o, st, timeout)
+        mesh = float(st["mesh"])
+        faces = shape.Faces
+
+        fixed, held_faces, cloads, dloads, gravity, applied = _assemble(st, shape, femmesh, nodes, elems)
         mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
         with open(os.path.join(wd, "job.inp"), "w") as f:
             f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity))
@@ -382,6 +401,8 @@ def tools(session):
         # (view_render map stress): kept with the session, not the file.
         ids = [n for n in vm if n in nodes]
         field = {"points": [nodes[n] for n in ids], "vonMises": [vm[n] for n in ids], "displacement": [list(disp.get(n, (0, 0, 0))[:3]) for n in ids]}
+        at = {n: i for i, n in enumerate(ids)}
+        field["elements"] = [[at[n] for n in e] for e in elems.values() if all(n in at for n in e)]
         s._agentlink_fea = {"body": o.Label, "stats": geo.stats(shape), "study": st, "result": out, "field": field}
         return out
 
@@ -569,6 +590,167 @@ def tools(session):
         return out
 
     query = {"type": "object", "description": "Faces by query: { near: [x,y,z], radius }, { normal: [nx,ny,nz], x|y|z: plane, largest }, or { faces: [\"Face3\"] }"}
+    # ---- buckling, local refinement, export, FreeCAD's own FEM objects ----
+
+    def fea_buckle(a):
+        st, o = _need_study(s)
+        if not st["holds"] or not st["loads"]:
+            raise ToolError("invalid_state", "Buckling needs the study's holds and loads (the load whose multiple buckles it): fea_hold and fea_load first.")
+        c = matfam.card(s.doc, st["material"])
+        if c is None or not c.get("E"):
+            raise ToolError("invalid_state", "The study's material has no Young's modulus: fea_setup { material }.")
+        count = int(a.get("count", 3))
+        if not 1 <= count <= 10:
+            raise ToolError("invalid_input", "count: modes, 1 … 10.")
+        timeout = float(a.get("timeout", 300))
+        shape = o.Shape
+        t0 = time.time()
+        ccx, wd, femmesh, mesh_text, nodes, elems = _meshed(o, st, timeout, "buckle")
+        fixed, held_faces, cloads, dloads, gravity, applied = _assemble(st, shape, femmesh, nodes, elems)
+        mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
+        with open(os.path.join(wd, "job.inp"), "w") as f:
+            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, buckle=count))
+        frd, dat = _run(ccx, wd, timeout, "buckling step")
+        factors = ccx_io.read_buckling(dat)
+        if not factors:
+            raise ToolError("failed", "CalculiX wrote no buckling factors: see job.dat in " + wd)
+        shapes = ccx_io.read_frd_blocks(frd, "DISP")
+        modes = []
+        for k, (no, fac) in enumerate(factors):
+            m = {"mode": no, "factor": round(fac, 4)}
+            if k < len(shapes) and shapes[k]:
+                mag = {n: math.sqrt(sum(x * x for x in u[:3])) for n, u in shapes[k].items() if n in nodes}
+                if mag:
+                    m["bulges"] = _where(nodes, shape, max(mag, key=mag.get))
+            modes.append(m)
+        low = modes[0]["factor"]
+        out = {"body": o.Label, "loads": applied, "modes": modes, "lowest": low, "seconds": round(time.time() - t0, 1), "files": wd}
+        if low < 0:
+            out["note"] = "A negative factor: the part buckles with the loads reversed — reverse them and read again."
+        elif low < 1:
+            out["verdict"] = f"Buckles under these loads: at {low:.2f}× them."
+        else:
+            out["verdict"] = f"Buckles at {low:.2f}× these loads" + (" — under 3×: little margin; thin walls and columns want more." if low < 3 else ".")
+        out["note"] = (out.get("note", "") + " Linear (eigenvalue) buckling: an upper bound — real parts, imperfect and printed, go sooner; keep a margin of 3 or more.").strip()
+        return out
+
+    def fea_refine(a):
+        st, o = _need_study(s)
+        if a.get("clear"):
+            st["refine"] = []
+        else:
+            size = a.get("size")
+            if not isinstance(size, (int, float)) or size <= 0:
+                raise ToolError("invalid_input", "size: the element edge near the faces, mm, over 0 (smaller than the study's mesh).")
+            if size >= float(st["mesh"]):
+                raise ToolError("invalid_input", f"size {size:g} is not finer than the study's mesh ({st['mesh']:g} mm).")
+            _, picked = _pick_report(o.Shape, a.get("faces"), "faces")
+            st["refine"] = list(st.get("refine") or []) + [{"faces": a["faces"], "size": float(size)}]
+            out_p = picked
+        _save(s.doc, st)
+        s.snapshot("fea_refine")
+        return {"refine": st.get("refine", []), **({"faces": out_p} if not a.get("clear") else {}), "note": "Finer near those faces, growing back to the study's size over three elements: where a peak sits (a fillet, a hole's edge) — solve again and see the peak settle."}
+
+    def fea_export(a):
+        r = _results(s)
+        if not r or "field" not in r:
+            raise ToolError("not_found", "No solve to write: fea_solve first.")
+        f = r["field"]
+        base = os.path.join(s.out_dir, (a.get("name") or f"{r['body']}-stress").replace(" ", "-"))
+        kinds = a.get("formats") or ["vtu", "csv"]
+        files = {}
+        if "vtu" in kinds:
+            if not f.get("elements"):
+                raise ToolError("invalid_state", "This solve kept no elements: fea_solve again, then export.")
+            with open(base + ".vtu", "w") as fh:
+                fh.write(ccx_io.vtu(f["points"], f["elements"], {"von_Mises_MPa": f["vonMises"], "displacement_mm": f["displacement"]}))
+            files["vtu"] = base + ".vtu"
+        if "csv" in kinds:
+            with open(base + ".csv", "w") as fh:
+                fh.write("x,y,z,von_mises_MPa,ux,uy,uz\n")
+                for p, vm, u in zip(f["points"], f["vonMises"], f["displacement"]):
+                    fh.write(f"{p[0]:.5f},{p[1]:.5f},{p[2]:.5f},{vm:.5f},{u[0]:.6g},{u[1]:.6g},{u[2]:.6g}\n")
+            files["csv"] = base + ".csv"
+        return {"body": r["body"], "files": files, "nodes": len(f["points"]), "elements": len(f.get("elements") or []),
+                "note": "The VTU opens in ParaView (and FreeCAD's FEM post-processing); the CSV has every node."}
+
+    def fea_native(a):
+        st, o = _need_study(s)
+        try:
+            import ObjectsFem
+        except ImportError:
+            raise ToolError("unavailable", "FreeCAD's FEM module is not in this build.")
+        doc = s.doc
+        c = matfam.card(doc, st["material"]) or {}
+        an = ObjectsFem.makeAnalysis(doc, "Analysis")
+        an.Label = s.unique(a.get("name") or f"{o.Label} analysis")
+        made = []
+        mk_solver = getattr(ObjectsFem, "makeSolverCalculiX", None) or getattr(ObjectsFem, "makeSolverCalculixCcxTools")
+        solver = mk_solver(doc)
+        an.addObject(solver)
+        made.append(solver.Label)
+        mo = ObjectsFem.makeMaterialSolid(doc, "Material")
+        props = {"Name": c.get("name", st["material"])}
+        if c.get("E"):
+            props["YoungsModulus"] = f"{float(c['E'])} MPa"
+        if c.get("nu"):
+            props["PoissonRatio"] = str(float(c["nu"]))
+        if c.get("density"):
+            props["Density"] = f"{float(c['density'])} kg/m^3"
+        mo.Material = props
+        mo.References = [(o, "")]
+        an.addObject(mo)
+        made.append(mo.Label)
+        mesh = ObjectsFem.makeMeshGmsh(doc, "Mesh")
+        mesh.Shape = o
+        mesh.CharacteristicLengthMax = f"{float(st['mesh'])} mm"
+        try:
+            mesh.ElementOrder = "2nd"
+        except Exception:
+            pass
+        an.addObject(mesh)
+        made.append(mesh.Label)
+        shape = o.Shape
+        for h in st["holds"]:
+            fx = ObjectsFem.makeConstraintFixed(doc, "Fixed")
+            fx.References = [(o, tuple(n for n, _ in facepick.pick(shape, h["faces"], "faces")))]
+            an.addObject(fx)
+            made.append(fx.Label)
+        skipped = []
+        for ld in st["loads"]:
+            if ld["kind"] == "pressure":
+                pr = ObjectsFem.makeConstraintPressure(doc, "Pressure")
+                pr.References = [(o, tuple(n for n, _ in facepick.pick(shape, ld["faces"], "faces")))]
+                pr.Pressure = f"{float(ld['pressure'])} MPa"
+                an.addObject(pr)
+                made.append(pr.Label)
+            elif ld["kind"] == "gravity":
+                g = ObjectsFem.makeConstraintSelfWeight(doc, "SelfWeight")
+                g.Gravity_x, g.Gravity_y, g.Gravity_z = ld["gravity"]
+                an.addObject(g)
+                made.append(g.Label)
+            else:
+                # a force's direction is a line in the model: one drawn for it, hidden
+                fv = V(*ld["force"])
+                ln = doc.addObject("Part::Line", "ForceDirection")
+                ln.X2, ln.Y2, ln.Z2 = fv.normalize().x, fv.y, fv.z
+                ln.Visibility = False
+                fo = ObjectsFem.makeConstraintForce(doc, "Force")
+                fo.References = [(o, tuple(n for n, _ in facepick.pick(shape, ld["faces"], "faces")))]
+                fo.Force = f"{V(*ld['force']).Length} N"
+                try:
+                    fo.Direction = (ln, ["Edge1"])
+                except Exception:
+                    skipped.append("a force's direction (set it in the GUI)")
+                an.addObject(fo)
+                made.append(fo.Label)
+        doc.recompute()
+        s.snapshot("fea_native")
+        out = {"analysis": an.Label, "objects": made, "next": "In FreeCAD's FEM workbench: mesh it (double-click the mesh), then run the solver — the same study fea_solve runs headless."}
+        if skipped:
+            out["skipped"] = skipped
+        return out
+
     return [
         Tool(
             "fea_setup",
@@ -611,4 +793,12 @@ def tools(session):
         ),
         Tool("fea_results", "The last solve's answer again, with stale: true when the body or the study changed since.", obj({}), fea_results),
         Tool("fea_clear", "Drop the strength study and its results.", obj({}), fea_clear, changes=True),
+        Tool("fea_buckle", "Linear buckling of the study (its holds and loads): the lowest count (3) buckling factors — the loads times the factor is where each mode buckles — and where each bulges. Thin walls, columns, ribs under compression. Needs ccx and gmsh.",
+             obj({"count": {"type": "integer"}, "timeout": {"type": "number"}}), fea_buckle),
+        Tool("fea_refine", "A finer mesh near faces (a fillet, a hole's edge, where the peak sits): faces (a query as fea_hold takes), size mm; clear: true drops every region. Kept in the study; the next solve uses it.",
+             obj({"faces": {}, "size": {"type": "number"}, "clear": {"type": "boolean"}}), fea_refine, changes=True),
+        Tool("fea_export", "Write the last solve out: formats [vtu (ParaView, FreeCAD FEM post-processing), csv (every node: position, von Mises, displacement)], name.",
+             obj({"formats": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}), fea_export),
+        Tool("fea_native", "Build the study as FreeCAD's own FEM analysis (Analysis, CalculiX solver, material, Gmsh mesh, fixed / force / pressure / self-weight constraints), to open and run in the FEM workbench.",
+             obj({"name": {"type": "string"}}), fea_native, changes=True),
     ]

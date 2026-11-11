@@ -114,6 +114,7 @@ tests/_pd_base.py
 tests/test_assembly.py
 tests/test_assembly_more.py
 tests/test_cam.py
+tests/test_ccx_io_more.py
 tests/test_cells.py
 tests/test_cut.py
 tests/test_doc.py

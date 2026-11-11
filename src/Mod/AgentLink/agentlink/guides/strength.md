@@ -28,3 +28,9 @@
 - Across the layers is a simplification (0.5 × yield): a real printed part can be weaker still, and is weakest where layers are pulled apart.
 - A linear solve is wrong past yield or for large deflections; the warnings say when.
 - Needs CalculiX (`ccx`) and Gmsh (`gmsh`) installed; without them fea_solve says what to install.
+
+## More from a study
+- `fea_buckle` runs a linear buckling analysis with the same holds and loads, giving the factor at which each mode buckles. Keep the lowest at 3 or more: real, imperfect parts buckle sooner.
+- `fea_refine { faces, size }` makes the mesh finer where a peak sits. Solve again and watch the peak settle; if it keeps rising, it is a sharp corner (a singularity), not a real stress.
+- `fea_export` writes VTU (ParaView, FreeCAD's FEM post-processing) and a CSV of every node.
+- `fea_native` builds the study as FreeCAD's own FEM analysis, so the person can open, mesh and run it in the FEM workbench.

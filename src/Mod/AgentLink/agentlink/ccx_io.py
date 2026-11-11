@@ -95,7 +95,7 @@ def _rows(ids, per=12):
     return "\n".join(", ".join(str(i) for i in ids[j:j + per]) for j in range(0, len(ids), per))
 
 
-def deck(mesh_text, material, fixed, cloads, dloads, gravity):
+def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None):
     """The whole input deck: the mesh as written, one material on every
     volume element (Evolumes), the fixed nodes, nodal loads {node: [f]},
     face pressures [(element, face, MPa)], gravity [gx, gy, gz] mm/s² or
@@ -110,8 +110,7 @@ def deck(mesh_text, material, fixed, cloads, dloads, gravity):
            "*SOLID SECTION, ELSET=Evolumes, MATERIAL=PART",
            "*NSET, NSET=AGFIX",
            _rows(sorted(fixed)),
-           "*STEP",
-           "*STATIC",
+           "*STEP"] + (["*BUCKLE", f"{int(buckle)}"] if buckle else ["*STATIC"]) + [
            "*BOUNDARY",
            "AGFIX, 1, 3, 0.0"]
     cl = []
@@ -129,7 +128,50 @@ def deck(mesh_text, material, fixed, cloads, dloads, gravity):
             dl.append(f"Evolumes, GRAV, {g:.9g}, {gravity[0] / g:.9g}, {gravity[1] / g:.9g}, {gravity[2] / g:.9g}")
     if dl:
         out += ["*DLOAD"] + dl
-    out += ["*NODE FILE", "U", "*EL FILE", "S", "*END STEP", ""]
+    out += ["*NODE FILE", "U"] + ([] if buckle else ["*EL FILE", "S"]) + ["*END STEP", ""]
+    return "\n".join(out)
+
+
+def read_buckling(dat):
+    """[(mode, factor)] from the .dat's buckling factor table: the loads
+    times the factor is where that mode buckles."""
+    out, on = [], False
+    for line in dat.splitlines():
+        u = line.upper().replace(" ", "")
+        if "BUCKLINGFACTOROUTPUT" in u:
+            on = True
+            continue
+        if not on:
+            continue
+        p = line.split()
+        if len(p) >= 2:
+            try:
+                out.append((int(p[0]), float(p[1])))
+                continue
+            except ValueError:
+                if out:
+                    break
+                continue
+        if out and not line.strip():
+            break
+    return out
+
+
+def vtu(points, cells, point_data):
+    """An unstructured grid as VTK XML (ASCII): points [(x,y,z)], cells
+    [10 point indices] (quadratic tetrahedra — CalculiX's C3D10 order is
+    VTK's), point_data {name: [value or (x,y,z)]}."""
+    out = ['<?xml version="1.0"?>', '<VTKFile type="UnstructuredGrid" version="0.1" byte_order="LittleEndian">', "<UnstructuredGrid>",
+           f'<Piece NumberOfPoints="{len(points)}" NumberOfCells="{len(cells)}">', "<PointData>"]
+    for name, vals in point_data.items():
+        comp = len(vals[0]) if vals and isinstance(vals[0], (list, tuple)) else 1
+        flat = " ".join(f"{x:.6g}" for v in vals for x in (v if comp > 1 else (v,)))
+        out.append(f'<DataArray type="Float64" Name="{name}" NumberOfComponents="{comp}" format="ascii">{flat}</DataArray>')
+    out += ["</PointData>", "<Points>", '<DataArray type="Float64" NumberOfComponents="3" format="ascii">' + " ".join(f"{c:.6g}" for p in points for c in p) + "</DataArray>", "</Points>", "<Cells>"]
+    out.append('<DataArray type="Int64" Name="connectivity" format="ascii">' + " ".join(str(i) for c in cells for i in c) + "</DataArray>")
+    out.append('<DataArray type="Int64" Name="offsets" format="ascii">' + " ".join(str(10 * (k + 1)) for k in range(len(cells))) + "</DataArray>")
+    out.append('<DataArray type="UInt8" Name="types" format="ascii">' + " ".join("24" for _ in cells) + "</DataArray>")
+    out += ["</Cells>", "</Piece>", "</UnstructuredGrid>", "</VTKFile>", ""]
     return "\n".join(out)
 
 
