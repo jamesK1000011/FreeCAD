@@ -485,7 +485,67 @@ def tools(session):
 
     mref = {"type": "string", "description": "The mesh's label; may be left out when there is one."}
     cp = {"copy": {"type": "boolean"}, "name": {"type": "string"}}
+    def meshobj_unwrap(a):
+        """A curved surface laid flat (MeshPart's unwrap): its outline as a flat
+        pattern to cut from sheet, with how much it had to stretch."""
+        try:
+            import flatmesh
+        except ImportError:
+            raise ToolError("unavailable", "This FreeCAD has no flatmesh (MeshPart's unwrapping): it was built without it.") from None
+        from .. import flat2d
+        from . import picks as _p
+
+        ref = a.get("of")
+        if not isinstance(ref, str):
+            raise bad("of: a mesh's name, or a body's face \"Body.Face3\".")
+        label, sub, el = _p.resolve(s, ref)
+        if sub and sub.startswith("Face"):
+            vs, ts = el.tessellate(float(a.get("tolerance", 0.1)))
+            P = np.array([(v.x, v.y, v.z) for v in vs], float)
+            F = np.array(ts, int)
+        else:
+            m = mesh_of(label).Mesh
+            P = np.array([(p.x, p.y, p.z) for p in m.Points], float)
+            F = np.array([list(f) for f in m.Topology[1]], int)
+        if len(F) < 2:
+            raise bad("of: a surface with area.")
+        fl = flatmesh.FaceUnwrapper(P, F)
+        fl.findFlatNodes(int(a.get("iterations", 5)), float(a.get("weight", 0.95)))
+        Q = np.asarray(fl.ze_nodes, float)[:, :2]
+        def area(X, T):
+            A, B, C = X[T[:, 0]], X[T[:, 1]], X[T[:, 2]]
+            if X.shape[1] == 2:
+                return 0.5 * np.abs((B[:, 0] - A[:, 0]) * (C[:, 1] - A[:, 1]) - (B[:, 1] - A[:, 1]) * (C[:, 0] - A[:, 0]))
+            return 0.5 * np.linalg.norm(np.cross(B - A, C - A), axis=1)
+        a3, a2 = area(P, F), area(Q, F)
+        stretch = np.where(a3 > 1e-12, a2 / np.maximum(a3, 1e-12) - 1, 0.0)
+        bounds = [np.asarray(b, float)[:, :2] for b in fl.getFlatBoundaryNodes()]
+        items = [{"kind": "line", "points": b.tolist(), "closed": True, "layer": "cut"} for b in bounds if len(b) >= 3]
+        out = {"of": ref, "area3d": round(float(a3.sum()), 3), "areaFlat": round(float(a2.sum()), 3),
+               "stretch": {"mean": round(float(np.abs(stretch).mean()) * 100, 3), "max": round(float(np.abs(stretch).max()) * 100, 3), "unit": "%"},
+               "outlines": len(items)}
+        x0, y0, x1, y1 = flat2d.bounds(items)
+        out["size"] = [round(x1 - x0, 3), round(y1 - y0, 3)]
+        if a.get("path"):
+            pth = a["path"] if os.path.isabs(a["path"]) else os.path.join(s.out_dir, a["path"])
+            os.makedirs(os.path.dirname(pth), exist_ok=True)
+            with open(pth, "w", encoding="utf-8") as f:
+                f.write(flat2d.dxf(items) if pth.lower().endswith(".dxf") else flat2d.svg(items))
+            out["path"] = pth
+        if a.get("make", True):
+            o = doc().addObject("Part::Feature", "Pattern")
+            o.Label = s.unique(a.get("name") or f"{label} flat")
+            o.Shape = Part.makeCompound([Part.makePolygon([FreeCAD.Vector(x, y, 0) for x, y in b.tolist()] + [FreeCAD.Vector(*b[0].tolist(), 0)]) for b in bounds if len(b) >= 3])
+            doc().recompute()
+            s.snapshot("meshobj_unwrap")
+            out["pattern"] = o.Label
+        if out["stretch"]["max"] > 5:
+            out["note"] = "Doubly curved: it cannot lie flat without stretching — the most stretched spots are where a cut or dart would help."
+        return out
+
     return [
+        Tool("meshobj_unwrap", "Lay a curved surface flat (MeshPart's unwrap): of a body's face \"Body.Face3\" or a mesh — its flat outline (a pattern to cut from sheet, fabric, leather), the area before and after and how much it stretched (mean, max %); path .svg or .dxf writes the pattern; make: false keeps no object.",
+             obj({"of": {"type": "string"}, "path": {"type": "string"}, "make": {"type": "boolean"}, "tolerance": {"type": "number"}, "iterations": {"type": "integer"}, "weight": {"type": "number"}, "name": {"type": "string"}}, ["of"]), meshobj_unwrap, changes=True),
         Tool("meshobj_from_shape", "Mesh a body (MeshPart): method standard (deflection mm, angle deg) | mefisto (maxLength: even triangles) | netgen (fineness verycoarse … veryfine). Kept as a mesh object.",
              obj({"body": {"type": "string"}, "method": {"type": "string"}, "deflection": {"type": "number"}, "angle": {"type": "number"}, "maxLength": {"type": "number"}, "fineness": {"type": "string"}, "name": {"type": "string"}}), meshobj_from_shape, changes=True),
         Tool("meshobj_info", "A mesh's size and the Mesh workbench's evaluation: closed or open, components, non-manifolds, self-intersections, flipped normals, corrupt facets. Changes nothing.", obj({"mesh": mref}), meshobj_info),
