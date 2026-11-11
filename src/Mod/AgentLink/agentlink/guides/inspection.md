@@ -19,3 +19,4 @@ FreeCAD's own Inspection feature measures an actual against nominals, point by p
 - `search_radius` must reach past the tolerance, or points out of tolerance read as out of reach. A refusal says so.
 - A body as the actual is sampled every `spacing` mm (default 1% of its size). Finer finds smaller faults and takes longer.
 - Comparing two versions of a design works the same way: the new body as the actual, the old one as the nominal.
+- A mesh is measured at its vertices. A scan has plenty of them, but an STL exported from CAD has only a few, so a cylinder's wall may go unmeasured. Inspect the body itself instead; it is sampled every `spacing` mm.
