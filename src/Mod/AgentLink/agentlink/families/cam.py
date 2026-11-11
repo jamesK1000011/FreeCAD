@@ -656,6 +656,16 @@ def tools(session):
                     dr.Proxy.setup(dr, int(a["count"]))
                 except Exception:
                     pass
+        if kind == "boundary" and getattr(dr, "Stock", None) is not None:
+            # FreeCAD's boundary starts as the model's own box, which keeps
+            # nothing of a path round the outside: made the job's stock (or
+            # margin mm round the model) unless props give another.
+            js = job.Stock
+            m = a.get("margin")
+            for k in ("ExtXneg", "ExtXpos", "ExtYneg", "ExtYpos", "ExtZneg", "ExtZpos"):
+                if hasattr(dr.Stock, k):
+                    v = float(m) if m is not None else (float(getattr(js, k)) if hasattr(js, k) else 0.0)
+                    setattr(dr.Stock, k, v + (1.0 if k == "ExtZpos" else 0.0))
         if kind == "dogbone" and a.get("style") and "Style" in dr.PropertiesList:
             dr.Style = a["style"]
         for k, v in (a.get("props") or {}).items():
@@ -734,8 +744,8 @@ def tools(session):
         Tool("cam_tool_add", "Add a tool to the job: shape endmill | ballend | bullnose | v-bit | chamfer | drill | thread-mill | radius | dovetail | …, diameter mm, angle (V-bit, chamfer), tipDiameter, cornerRadius, flutes, feed, plunge (mm/min), rpm, number, name. Ask the person which tools they have.",
              obj({"job": jobref, "shape": {"type": "string"}, "diameter": {"type": "number"}, "angle": {"type": "number"}, "tipDiameter": {"type": "number"}, "cornerRadius": {"type": "number"}, "flutes": {"type": "integer"},
                   "length": {"type": "number"}, "cuttingLength": {"type": "number"}, "feed": {"type": "number"}, "plunge": {"type": "number"}, "rpm": {"type": "number"}, "number": {"type": "integer"}, "name": {"type": "string"}}, ["diameter"]), cam_tool_add, changes=True),
-        Tool("cam_dressup", "Dress an operation's path: kind tags (holding tabs so the part stays in the stock: count, width, height, angle), dogbone (inside corners cleared: style), boundary (kept within the stock), array, ramp / leadinout (where this FreeCAD has them headless); props for the dressup's own.",
-             obj({"job": jobref, "op": {"type": "string"}, "kind": {"type": "string"}, "count": {"type": "integer"}, "width": {"type": "number"}, "height": {"type": "number"}, "angle": {"type": "number"}, "style": {"type": "string"}, "props": {"type": "object"}}, ["op", "kind"]), cam_dressup, changes=True),
+        Tool("cam_dressup", "Dress an operation's path: kind tags (holding tabs so the part stays in the stock: count, width, height, angle), dogbone (inside corners cleared: style), boundary (moves kept within the stock, or margin mm round the part), array, ramp / leadinout (where this FreeCAD has them headless); props for the dressup's own.",
+             obj({"job": jobref, "op": {"type": "string"}, "kind": {"type": "string"}, "count": {"type": "integer"}, "width": {"type": "number"}, "height": {"type": "number"}, "angle": {"type": "number"}, "style": {"type": "string"}, "margin": {"type": "number"}, "props": {"type": "object"}}, ["op", "kind"]), cam_dressup, changes=True),
         Tool("cam_setup", "The job's setup: fixtures [G54 …] (the job run in each offset), coolant none | flood | mist (every op), safeHeight / clearance offsets mm, order [op labels] to run them in.",
              obj({"job": jobref, "fixtures": {"type": "array", "items": {"type": "string"}}, "coolant": {"type": "string"}, "safeHeight": {"type": "number"}, "clearance": {"type": "number"}, "order": {"type": "array", "items": {"type": "string"}}}), cam_setup, changes=True),
         Tool("cam_remove", "Remove an operation from the job.", obj({"job": jobref, "op": {"type": "string"}}, ["op"]), cam_remove, changes=True),
