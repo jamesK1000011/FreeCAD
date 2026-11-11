@@ -282,8 +282,12 @@ def frame_of(v, cache):
         c = v.projectPoint(sh.BoundBox.Center)
     sc = view_scale(v)
     best = None
+    # TechDraw keeps a view's geometry centred on the source, scaled and
+    # with y inverted (as Qt draws): that first, and another reading only
+    # if it fits clearly better — a symmetric part fits a flipped frame as
+    # well, and would put a datum on the opposite edge.
     for s in (sc, 1.0):
-        for sy in (1, -1):
+        for sy in (-1, 1):
             for centred in (True, False):
                 tx = -s * c.x if centred else 0.0
                 ty = -s * sy * c.y if centred else 0.0
@@ -292,7 +296,7 @@ def frame_of(v, cache):
                     X, Y = s * p.x + tx, s * sy * p.y + ty
                     err += min(math.hypot(X - q.x, Y - q.y) for q in verts)
                 cand = (err / len(proj), (s, sy, tx, ty))
-                if best is None or cand[0] < best[0]:
+                if best is None or cand[0] < best[0] - 1e-3 * max(1.0, sc):
                     best = cand
     cache[v.Name] = best[1]
     return best[1]
@@ -451,6 +455,18 @@ def draw_item(doc, sh, v, H):
                 pts = [(X + p.x, H - Y + p.y) for p in e.discretize(Deflection=0.05)] if e.Length > 1e-6 else []
                 if len(pts) >= 2:
                     sh.line(pts, kind)
+        for o in v.InList:
+            try:
+                if o.isDerivedFrom("TechDraw::DrawViewSection") and o.BaseView == v:
+                    cut_line(sh, v, o, X, Y, H)
+                elif o.isDerivedFrom("TechDraw::DrawViewDetail") and o.BaseView == v:
+                    sc_ = view_scale(v)
+                    c = (X + float(o.AnchorPoint.x) * sc_, H - (Y + float(o.AnchorPoint.y) * sc_))
+                    r = float(o.Radius) * sc_
+                    sh.circle(c[0], c[1], r, "thin", n=48)
+                    sh.text(c[0] + r * 0.75 + 1.5, c[1] - r * 0.75 - 1.0, 3.5, str(o.Reference))
+            except Exception:
+                pass
         cap = getattr(v, "Caption", "") or ""
         label = ""
         if v.isDerivedFrom("TechDraw::DrawViewSection"):
@@ -477,7 +493,7 @@ def draw_item(doc, sh, v, H):
         if not rows:
             raise ValueError("a symbol not made by these tools is left out of the file")
         data = json.loads(rows)
-        fig = gdt.frame(data["rows"], data.get("h", 3.5)) if data.get("kind") == "frame" else gdt.datum(data["letter"], data.get("h", 3.5))
+        fig = gdt.frame(data["rows"], data.get("h", 3.5)) if data.get("kind") == "frame" else gdt.datum(data["letter"], data.get("h", 3.5), data.get("side", "up"))
         X, Y = abs_xy(v)
         ox, oy = X - fig.w / 2, H - Y - fig.h / 2
         for pts, closed, filled in fig.polylines():
@@ -520,6 +536,42 @@ def draw_item(doc, sh, v, H):
     raise ValueError(f"{t} is left out of the file")
 
 
+def cut_line(sh, base, sv, X, Y, H):
+    """A section's cutting line across its base view: chain-dotted, thick
+    ends, arrows the way the section is looked at, the letter at each end."""
+    import Part
+
+    fr = frame_of(base, {})
+    if fr is None:
+        return
+    o = V(sv.SectionOrigin)
+    n = V(sv.SectionNormal)
+    a0 = to_view(fr, base, o)
+    a1 = to_view(fr, base, o + n * 10)
+    nx, ny = a1[0] - a0[0], a1[1] - a0[1]
+    ln = math.hypot(nx, ny)
+    if ln < 1e-9:
+        return
+    nx, ny = nx / ln, ny / ln
+    dx, dy = -ny, nx  # along the cut, in the view's plane
+    bb = Part.makeCompound(base.getVisibleEdges()).BoundBox
+    half = 0.5 * math.hypot(bb.XLength, bb.YLength) + 4
+
+    def P(x, y):
+        return (X + x, H - Y + y)
+
+    p, q = (a0[0] - dx * half, a0[1] - dy * half), (a0[0] + dx * half, a0[1] + dy * half)
+    sh.line([P(*p), P(*q)], "trail")
+    for e, sgn in ((p, 1), (q, -1)):
+        inner = (e[0] + dx * sgn * 5, e[1] + dy * sgn * 5)
+        sh.line([P(*e), P(*inner)], "visible")
+        tail = (e[0] + dx * sgn * 2.5, e[1] + dy * sgn * 2.5)
+        tip = (tail[0] - nx * 7, tail[1] - ny * 7)
+        sh.line([P(*tail), P(*tip)], "thin")
+        sh.arrow(P(*tip), P(*tail))
+        sh.text(*P(tip[0] - nx * 3, tip[1] - ny * 3 + 1.2), 4.0, str(sv.SectionSymbol), "middle")
+
+
 def draw_dim(sh, d, H):
     refs = d.References2D
     if not refs:
@@ -543,7 +595,7 @@ def draw_dim(sh, d, H):
                 tol = f" {iso286._dev(over)}/{iso286._dev(under)}"
         except Exception:
             pass
-    label = text + tol
+    label = text if (not tol or "±" in text or tol.strip() in text) else text + tol
     # the label's place: the dimension's X, Y (paper mm, y up) from the view's centre
     L = (X + float(d.X), H - (Y + float(d.Y)))
     typ = d.Type
@@ -640,6 +692,27 @@ def tools(session):
         if objs:
             wait(objs)
             doc().recompute()
+            settle()
+
+    def settle(seconds=0.15):
+        # TechDraw finishes a view's lines (and a section's faces) on worker
+        # threads; let them land before the next change touches the views.
+        try:
+            from PySide import QtCore
+        except ImportError:
+            try:
+                from PySide2 import QtCore
+            except ImportError:
+                return
+        import time
+
+        app = QtCore.QCoreApplication.instance()
+        if app is None:
+            return
+        t0 = time.time()
+        while time.time() - t0 < seconds:
+            app.processEvents()
+            time.sleep(0.01)
 
     def done(tool, out):
         s.snapshot(tool)
@@ -1213,11 +1286,21 @@ def tools(session):
             recompute([v])
         ref, p = ref_point(v, a.get("on"))
         vx, vy = abs_xy(v)
-        at = place_xy(page, a.get("at"), (vx + p[0], vy - p[1] - fig.h / 2 - 8))
-        sym = symbol(page, fig, {"kind": "datum", "letter": a["letter"], "h": float(a.get("height", 3.5)), "on": ref}, at, f"Datum {a['letter']}")
-        ln = leader(v, p, (at[0], at[1] - fig.h / 2))
+        # The triangle stands on the feature, the letter outward from the
+        # view's middle (page y up; the geometry's y is inverted).
+        ox, oy = p[0], -p[1]
+        side = ("right" if ox > 0 else "left") if abs(ox) > abs(oy) else ("up" if oy > 0 else "down")
+        try:
+            fig = gdt.datum(a.get("letter"), float(a.get("height", 3.5)), side)
+        except gdt.GdtError as e:
+            raise bad(str(e))
+        fx, fy = vx + ox, vy + oy  # the triangle's base, on the page
+        cx = fx + {"right": fig.w / 2, "left": -fig.w / 2}.get(side, 0.0)
+        cy = fy + {"up": fig.h / 2, "down": -fig.h / 2}.get(side, 0.0)
+        at = place_xy(page, a.get("at"), (cx, cy))
+        sym = symbol(page, fig, {"kind": "datum", "letter": a["letter"], "h": float(a.get("height", 3.5)), "side": side, "on": ref}, at, f"Datum {a['letter']}")
         recompute()
-        return done("td_datum", {"symbol": sym.Name, "datum": a["letter"], "on": ref, "leader": ln.Name})
+        return done("td_datum", {"symbol": sym.Name, "datum": a["letter"], "on": ref, "side": side, "at": [num(sym.X, 2), num(sym.Y, 2)]})
 
     def td_note(a):
         page = page_of(doc(), a.get("page"))
@@ -1276,8 +1359,7 @@ def tools(session):
         page.addView(t)
         t.Source = ss
         t.CellStart, t.CellEnd = C.name(r0, c0), C.name(r1, c1)
-        if a.get("size"):
-            t.TextSize = float(a["size"])
+        t.TextSize = float(a.get("size") or 3.5)
         W, H = paper_size(page)
         t.X, t.Y = place_xy(page, a.get("at"), (W * 0.75, H * 0.75))
         recompute()

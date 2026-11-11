@@ -226,24 +226,44 @@ def frame(rows, h=3.5):
     return f
 
 
-def datum(letter, h=3.5):
-    """A datum feature symbol: the letter in a square, a line down to a
-    filled triangle whose base sits on the feature (the figure's bottom
-    edge, centred)."""
+def datum(letter, h=3.5, side="up"):
+    """A datum feature symbol: the letter in a square joined to a filled
+    triangle whose base sits on the feature. side: where the letter stands
+    from the feature — up (the triangle's base is the figure's bottom
+    edge), down, left or right."""
     letter = str(letter or "").strip()
     if not letter.isalpha() or len(letter) > 2:
         raise GdtError("letter: one or two letters (I, O and Q are best avoided)")
-    f = Figure()
+    if side not in ("up", "down", "left", "right"):
+        raise GdtError("side: up, down, left or right")
     s = h * 2.0
     w = max(s, text_w(letter, h) + h)
-    f.line([(0, 0), (w, 0), (w, s), (0, s)], closed=True)
-    f.text(w / 2, s / 2 + h * 0.36, h, letter, "middle")
-    stem = h * 1.2
-    tri = h * 0.9
-    cx = w / 2
-    f.line([(cx, s), (cx, s + stem)])
-    f.filled.append([(cx - tri * 0.6, s + stem + tri), (cx + tri * 0.6, s + stem + tri), (cx, s + stem)])
-    f.w, f.h = w, s + stem + tri
+    stem, tri = h * 1.2, h * 0.9
+    L = s + stem + tri  # box, stem, triangle, along the figure's length
+    f = Figure()
+    # laid out along +u from the feature (u = 0 at the triangle's base),
+    # across v; then turned to the side asked for
+    prims = [("line", [(0, -tri * 0.6), (0, tri * 0.6), (tri, 0)], "fill"),
+             ("line", [(tri, 0), (tri + stem, 0)], None),
+             ("line", [(tri + stem, -w / 2), (L, -w / 2), (L, w / 2), (tri + stem, w / 2)], "closed")]
+    if side in ("up", "down"):
+        fw, fh = w, L
+        def m(u, v):  # noqa: E306
+            return (fw / 2 + v, fh - u) if side == "up" else (fw / 2 + v, u)
+        centre = m(tri + stem + s / 2, 0)
+    else:
+        fw, fh = L, w
+        def m(u, v):  # noqa: E306
+            return (u, fh / 2 + v) if side == "right" else (fw - u, fh / 2 + v)
+        centre = m(tri + stem + s / 2, 0)
+    for _, pts, how in prims:
+        q = [m(u, v) for u, v in pts]
+        if how == "fill":
+            f.filled.append(q)
+        else:
+            f.line(q, closed=how == "closed")
+    f.text(centre[0], centre[1] + h * 0.36, h, letter, "middle")
+    f.w, f.h = fw, fh
     return f
 
 
