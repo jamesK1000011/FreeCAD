@@ -580,6 +580,8 @@ def tools(session):
             bit.Flutes = int(a["flutes"])
         tc = PathToolController.Create(name, bit)
         job.Proxy.addToolController(tc)
+        # FreeCAD bumps a taken label's digits ("V60" to "V063"): "V60 2" says it plainly
+        tc.Label = s.unique(name, tc)
         set_tool(tc, {"feed": 600, "plunge": 200, "rpm": 12000, "number": len(job.Tools.Group), **{k: a[k] for k in ("feed", "plunge", "rpm", "number") if a.get(k) is not None}})
         d.recompute()
         return {"job": job.Label, "tool": tool_out(tc), "shape": shape, "tools": [x.Label for x in job.Tools.Group], "next": f"cam_op {{ …, tool: \"{tc.Label}\" }} uses it."}
