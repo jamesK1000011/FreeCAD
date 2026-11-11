@@ -641,6 +641,13 @@ def draw_dim(sh, d, H):
         sh.arrow(b2, a2)
         vertical = abs(a2[0] - b2[0]) < abs(a2[1] - b2[1])
         sh.text(L[0], L[1] - 1.0, 3.5, label, "vertical" if vertical else "middle")
+        if getattr(d, "TheoreticalExact", False):
+            # a basic size is boxed
+            hw, hh = len(label) * 3.5 * 0.31 + 1.0, 2.6
+            cx, cy = L[0], L[1] - 2.2
+            if vertical:
+                hw, hh, cx, cy = hh, hw, L[0] - 2.2 + 1.0, L[1]
+            sh.line([(cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)], "thin", closed=True)
     elif typ in ("Radius", "Diameter"):
         e = v.getEdgeBySelection(ref_names(d)[0]) if hasattr(v, "getEdgeBySelection") else None
         cu = getattr(e, "Curve", None)
@@ -815,7 +822,7 @@ def tools(session):
             p = find_template(paper, a.get("orientation") == "portrait", bool(a.get("blank")), a.get("standard"))
             std_note = None
             if p and a.get("standard") and f"{os.sep}{a['standard'].upper()}{os.sep}" not in p:
-                std_note = f"No {a['standard'].upper()} template for {paper}: the {os.path.basename(os.path.dirname(p))} one is used (ASME papers: Letter, ANSIB … ANSIE)."
+                std_note = f"No {a['standard'].upper()} template for {paper}: {os.path.basename(p)} is used (ASME sizes: Letter, ANSIB … ANSIE)."
             if p is None:
                 raise ToolError("not_found", f"No {paper} {a.get('orientation', 'landscape')} template in this build — td_page {{ action: \"templates\" }} lists them; pass template.")
         page = doc().addObject("TechDraw::DrawPage", "Page")
