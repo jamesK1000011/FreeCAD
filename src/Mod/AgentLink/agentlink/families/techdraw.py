@@ -446,6 +446,60 @@ def page_sheet(doc, page):
     return sh, skipped
 
 
+def draw_arch(sh, v, H):
+    """A BIM section drawn here: what the plane cuts (heavy) and what lies
+    beyond it, seen from the plane (thin) — the plane's own frame on the page."""
+    import Part
+
+    sec = v.Source
+    if sec is None:
+        raise ValueError("an Arch view with no section plane")
+    pl = sec.Placement
+    objs = [o for o in getattr(sec, "Objects", []) if isinstance(getattr(o, "Shape", None), Part.Shape) and not o.Shape.isNull()]
+    # every object inside a level or building, not the containers themselves
+    seen, flat = set(), []
+    while objs:
+        o = objs.pop()
+        if o.Name in seen:
+            continue
+        seen.add(o.Name)
+        kids = getattr(o, "Group", None)
+        if kids:
+            objs += [k for k in kids if isinstance(getattr(k, "Shape", None), Part.Shape)]
+        elif o.Shape.Solids:
+            flat.append(o)
+    if not flat:
+        raise ValueError("the section cuts no solid BIM objects")
+    # the plane's frame: its X and Y on the page, looking against its normal
+    inv = pl.inverse()
+    shapes = [o.Shape.transformGeometry(inv.toMatrix()) for o in flat]
+    lines = []
+    big = max(s.BoundBox.DiagonalLength for s in shapes) * 4 + 1
+    beyond = Part.makeBox(big, big, big, FreeCAD.Vector(-big / 2, -big / 2, -big))
+    for s in shapes:
+        for w in s.slice(FreeCAD.Vector(0, 0, 1), 0.0):
+            for e in w.Edges:
+                lines.append(("cut", [(p.x, p.y) for p in e.discretize(Deflection=0.5)]))
+        try:
+            below = s.common(beyond)
+        except Exception:
+            continue
+        if below.isNull() or not below.Solids:
+            continue
+        res = TechDraw.projectEx(below, FreeCAD.Vector(0, 0, 1))
+        for i in (0, 1, 3):
+            if not res[i].isNull():
+                for e in res[i].Edges:
+                    lines.append(("thin", [(p.x, p.y) for p in e.discretize(Deflection=0.5)]))
+    if not lines:
+        raise ValueError("the section plane misses the objects")
+    xs = [x for _, pts in lines for x, _ in pts]
+    ys = [y for _, pts in lines for _, y in pts]
+    X, Y = abs_xy(v)
+    sh.place(lines, (min(xs), min(ys), max(xs), max(ys)), (X, H - Y), float(v.Scale))
+    sh.text(X, H - Y + (max(ys) - min(ys)) * float(v.Scale) / 2 + 6, 3.0, f"{v.Label.upper()}  SCALE {sheets.scale_text(float(v.Scale))}", "middle")
+
+
 def abs_xy(v):
     """A view's centre on the page (mm, y up), through a group it sits in."""
     x, y = float(v.X), float(v.Y)
@@ -501,6 +555,9 @@ def draw_item(doc, sh, v, H):
         return
     if t == "TechDraw::DrawViewSpreadsheet":
         draw_table(doc, sh, v, H)
+        return
+    if t == "TechDraw::DrawViewArch":
+        draw_arch(sh, v, H)
         return
     if v.isDerivedFrom("TechDraw::DrawViewSymbol"):
         rows = getattr(v, GDT_PROP, "") if GDT_PROP in v.PropertiesList else ""
