@@ -95,7 +95,7 @@ def _rows(ids, per=12):
     return "\n".join(", ".join(str(i) for i in ids[j:j + per]) for j in range(0, len(ids), per))
 
 
-def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None):
+def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None, thermal=None):
     """The whole input deck: the mesh as written, one material on every
     volume element (Evolumes), the fixed nodes, nodal loads {node: [f]},
     face pressures [(element, face, MPa)], gravity [gx, gy, gz] mm/s² or
@@ -106,10 +106,13 @@ def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None):
            "*ELASTIC",
            f"{material['E']:.6g}, {material['nu']:.6g}",
            "*DENSITY",
-           f"{material['rho'] * 1e-9:.6g}",
+           f"{material['rho'] * 1e-9:.6g}"] + (
+           # a uniform temperature change: the material's expansion, every node from 0 to delta
+           ["*EXPANSION, ZERO=0", f"{thermal['alpha']:.6g}"] if thermal else []) + [
            "*SOLID SECTION, ELSET=Evolumes, MATERIAL=PART",
            "*NSET, NSET=AGFIX",
-           _rows(sorted(fixed)),
+           _rows(sorted(fixed))] + (
+           ["*NSET, NSET=AGALL", _rows(sorted(thermal["nodes"])), "*INITIAL CONDITIONS, TYPE=TEMPERATURE", "AGALL, 0.0"] if thermal else []) + [
            "*STEP"] + (["*BUCKLE", f"{int(buckle)}"] if buckle else ["*STATIC"]) + [
            "*BOUNDARY",
            "AGFIX, 1, 3, 0.0"]
@@ -128,6 +131,8 @@ def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None):
             dl.append(f"Evolumes, GRAV, {g:.9g}, {gravity[0] / g:.9g}, {gravity[1] / g:.9g}, {gravity[2] / g:.9g}")
     if dl:
         out += ["*DLOAD"] + dl
+    if thermal:
+        out += ["*TEMPERATURE", f"AGALL, {thermal['delta']:.6g}"]
     out += ["*NODE FILE", "U"] + ([] if buckle else ["*EL FILE", "S"]) + ["*END STEP", ""]
     return "\n".join(out)
 

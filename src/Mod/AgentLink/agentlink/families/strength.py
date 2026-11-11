@@ -143,6 +143,30 @@ def tools(session):
         s.snapshot("fea_hold")
         return {"held": picked, "holds": len(st["holds"]), "note": "Held rigidly: no movement at all on these faces. Real bolts and clamps give a little, so stress right at a hold reads high."}
 
+    TYPICAL_ALPHA = {"pla": 68e-6, "petg": 60e-6, "abs": 90e-6, "asa": 95e-6, "nylon": 110e-6, "pa": 110e-6, "tpu": 150e-6, "pc": 68e-6,
+                     "steel": 12e-6, "stainless": 16e-6, "aluminium": 23e-6, "aluminum": 23e-6, "brass": 19e-6, "copper": 17e-6, "titanium": 8.6e-6}
+
+    def _alpha(st, ld):
+        if ld.get("alpha") is not None:
+            return float(ld["alpha"])
+        c = matfam.card(s.doc, st["material"]) or {}
+        for k in ("alpha", "cte", "ThermalExpansionCoefficient", "expansion"):
+            v = c.get(k)
+            if v:
+                try:
+                    v = float(str(v).split()[0])
+                    return v * 1e-6 if v > 1e-3 else v  # µm/m·K given as a whole number
+                except ValueError:
+                    pass
+        key = str(st["material"]).lower()
+        return next((v for k, v in TYPICAL_ALPHA.items() if k in key), None)
+
+    def _thermal(st, nodes):
+        lds = [ld for ld in st["loads"] if ld["kind"] == "temperature"]
+        if not lds:
+            return None
+        return {"alpha": _alpha(st, lds[-1]), "delta": sum(ld["delta"] for ld in lds), "nodes": list(nodes.keys()) if isinstance(nodes, dict) else list(range(1, len(nodes) + 1))}
+
     def fea_load(a):
         st, o = _need_study(s)
         if a.get("clear"):
@@ -150,13 +174,25 @@ def tools(session):
             _save(s.doc, st)
             s.snapshot("fea_load")
             return {"loads": []}
-        kinds = [k for k in ("force", "pressure", "gravity") if k in a]
+        kinds = [k for k in ("force", "pressure", "gravity", "temperature") if k in a]
         if len(kinds) != 1:
-            raise ToolError("invalid_input", "One of force (N: [fx, fy, fz] total, or a number pushing into the faces), pressure (MPa, pushing into the faces) or gravity (true for 1 g down -z, a number of g, or [gx, gy, gz] in g).")
+            raise ToolError("invalid_input", "One of force (N: [fx, fy, fz] total, or a number pushing into the faces), pressure (MPa, pushing into the faces), gravity (true for 1 g down -z, a number of g, or [gx, gy, gz] in g) or temperature (K the whole part warms by, negative cools; alpha 1/K).")
         kind = kinds[0]
         ld = {"kind": kind}
         out = {}
-        if kind in ("force", "pressure"):
+        if kind == "temperature":
+            dT = a["temperature"]
+            if not isinstance(dT, (int, float)) or isinstance(dT, bool):
+                raise ToolError("invalid_input", "temperature: K (°C) the whole part changes by from as it was held — a number, negative to cool.")
+            ld["delta"] = float(dT)
+            if a.get("alpha") is not None:
+                ld["alpha"] = float(a["alpha"])
+            alpha = _alpha(st, ld)
+            if alpha is None:
+                raise ToolError("invalid_input", f"alpha: the material's expansion, 1/K (steel 12e-6, aluminium 23e-6, PLA 68e-6) — {st['material']} carries none.")
+            out["alpha"] = alpha
+            out["note"] = "Held faces stop it growing: stress builds where they do — a fully held part sees about E·alpha·dT."
+        elif kind in ("force", "pressure"):
             q = a.get("faces")
             picked, desc = _pick_report(o.Shape, q, "faces")
             ld["faces"] = q
@@ -287,6 +323,9 @@ def tools(session):
         cloads, dloads, gravity = {}, [], None
         applied = []
         for ld in st["loads"]:
+            if ld["kind"] == "temperature":
+                applied.append({"temperature": ld["delta"]})
+                continue
             if ld["kind"] == "gravity":
                 g = ld["gravity"]
                 gravity = [x * G for x in g] if gravity is None else [gravity[i] + g[i] * G for i in range(3)]
@@ -329,7 +368,7 @@ def tools(session):
         fixed, held_faces, cloads, dloads, gravity, applied = _assemble(st, shape, femmesh, nodes, elems)
         mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
         with open(os.path.join(wd, "job.inp"), "w") as f:
-            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity))
+            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, thermal=_thermal(st, nodes)))
         env = dict(os.environ)
         env.setdefault("OMP_NUM_THREADS", str(max(1, min(4, os.cpu_count() or 1))))
         try:
@@ -609,7 +648,7 @@ def tools(session):
         fixed, held_faces, cloads, dloads, gravity, applied = _assemble(st, shape, femmesh, nodes, elems)
         mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
         with open(os.path.join(wd, "job.inp"), "w") as f:
-            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, buckle=count))
+            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, buckle=count, thermal=_thermal(st, nodes)))
         frd, dat = _run(ccx, wd, timeout, "buckling step")
         factors = ccx_io.read_buckling(dat)
         if not factors:
@@ -795,6 +834,19 @@ def tools(session):
                 pr.Pressure = f"{float(ld['pressure'])} MPa"
                 an.addObject(pr)
                 made.append(pr.Label)
+            elif ld["kind"] == "temperature":
+                try:
+                    it = ObjectsFem.makeConstraintInitialTemperature(doc, "InitialTemperature")
+                    it.initialTemperature = "293.15 K"
+                    an.addObject(it)
+                    tc = ObjectsFem.makeConstraintTemperature(doc, "Temperature")
+                    tc.References = [(o, tuple(f"Face{i + 1}" for i in range(len(shape.Faces))))]
+                    tc.Temperature = f"{293.15 + float(ld['delta'])} K"
+                    an.addObject(tc)
+                    made += [it.Label, tc.Label]
+                    skipped.append("the material's expansion coefficient and a thermomechanical solver setting (set them in the FEM workbench)")
+                except Exception:
+                    skipped.append("the temperature change (add it in the FEM workbench)")
             elif ld["kind"] == "gravity":
                 g = ObjectsFem.makeConstraintSelfWeight(doc, "SelfWeight")
                 g.Gravity_x, g.Gravity_y, g.Gravity_z = ld["gravity"]
@@ -839,8 +891,8 @@ def tools(session):
         ),
         Tool(
             "fea_load",
-            "Load the part: force on faces (N; [fx, fy, fz] in total spread by area, or a number pushing into the faces), pressure on faces (MPa, positive pushes in), or gravity (true is 1 g down -z; a number of g; [gx, gy, gz] in g). Adds to the loads (replace: true starts again; clear: true drops them).",
-            obj({"faces": query, "force": {}, "pressure": {"type": "number"}, "gravity": {}, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}}),
+            "Load the part: force on faces (N; [fx, fy, fz] in total spread by area, or a number pushing into the faces), pressure on faces (MPa, positive pushes in), gravity (true is 1 g down -z; a number of g; [gx, gy, gz] in g), or temperature (K the whole part warms by, against its holds; alpha 1/K, else the material's). Adds to the loads (replace: true starts again; clear: true drops them).",
+            obj({"faces": query, "force": {}, "pressure": {"type": "number"}, "gravity": {}, "temperature": {"type": "number"}, "alpha": {"type": "number"}, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}}),
             fea_load,
             changes=True,
         ),
