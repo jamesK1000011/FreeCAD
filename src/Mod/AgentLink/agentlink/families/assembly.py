@@ -27,6 +27,8 @@ KINDS = {k.lower(): k for k in JointObject.JointTypes}
 # Joints between two elements; gears, belts and the like need more than this
 # family asks for yet.
 OFFERED = ["fixed", "revolute", "cylindrical", "slider", "ball", "distance", "parallel", "perpendicular", "angle"]
+# the motion couplings, where this FreeCAD has them
+OFFERED += [k for k in ("rackpinion", "screw", "gears", "belt") if k in KINDS]
 SOLVE = {0: "solved", -1: "solver error", -2: "redundant constraints", -3: "conflicting constraints", -4: "over-constrained", -5: "malformed constraints", -6: "no part is grounded"}
 
 
@@ -233,6 +235,29 @@ def tools(session):
             j.Distance = picks.num(a.get("distance", 0), "distance")
         if kind == "angle":
             j.Angle = picks.num(a.get("angle", 90), "angle")
+        if kind in ("rackpinion", "screw", "gears", "belt"):
+            # the couplings' figures: a pitch radius, a lead, or each wheel's radius
+            # — read off round elements when not given
+            def radius_of(part, el):
+                try:
+                    g = part.Shape.getElement(el)
+                    c = getattr(g, "Curve", None) or getattr(g, "Surface", None)
+                    return float(c.Radius)
+                except Exception:
+                    return None
+
+            r1 = a.get("radius1") if a.get("radius1") is not None else (a.get("pitch") if kind == "screw" else radius_of(*ends[0]))
+            if r1 is None or float(r1) <= 0:
+                raise ToolError("invalid_input", {"rackpinion": "radius1: the pinion's pitch radius, mm (or give its round edge).",
+                                                  "screw": "pitch: mm the nut moves per turn.",
+                                                  "gears": "radius1: the first gear's pitch radius, mm (or give its round edge).",
+                                                  "belt": "radius1: the first pulley's radius, mm (or give its round edge)."}[kind])
+            j.Distance = float(r1)
+            if kind in ("gears", "belt"):
+                r2 = a.get("radius2") if a.get("radius2") is not None else radius_of(*ends[1])
+                if r2 is None or float(r2) <= 0:
+                    raise ToolError("invalid_input", "radius2: the second wheel's radius, mm (or give its round edge).")
+                j.Distance2 = float(r2)
         off = a.get("offset")
         rot = a.get("rotate")
 
@@ -487,8 +512,8 @@ def tools(session):
         Tool("asm_add", "Put more bodies into an assembly.", obj({"assembly": asm_ref, "parts": {"type": "array", "items": {"type": "string"}}}, ["parts"]), asm_add, changes=True),
         Tool("asm_ground", "Hold a part fixed (grounded: true, the default) or let it move again (false). An assembly needs one grounded part to solve.", obj({"assembly": asm_ref, "part": {"type": "string"}, "grounded": {"type": "boolean"}}, ["part"]), asm_ground, changes=True),
         Tool("asm_joint",
-             "Join two parts and solve: kind fixed (no motion), revolute (turns about the elements' axis), cylindrical (turns and slides), slider (slides only), ball, distance (distance mm between them), parallel, perpendicular, angle (angle degrees). a and b each a part and a face or edge on it — for a flat face the joint sits at its middle with its normal; for a round edge or face, on its axis. offset mm along the joint's normal and rotate degrees about it; reverse: true turns b over (false keeps FreeCAD's way; left out, b is turned over when that stops the parts overlapping). Returns which parts moved where, and overlaps the solve left. Trap: the part of b moves; a grounded part never does.",
-             obj({"assembly": asm_ref, "kind": {"type": "string", "enum": OFFERED}, "a": part_end, "b": part_end, "offset": {"type": "number"}, "rotate": {"type": "number"}, "distance": {"type": "number"}, "angle": {"type": "number"}, "reverse": {"type": "boolean"}, "name": {"type": "string"}}, ["kind", "a", "b"]),
+             "Join two parts and solve: kind fixed (no motion), revolute (turns about the elements' axis), cylindrical (turns and slides), slider (slides only), ball, distance (distance mm between them), parallel, perpendicular, angle (angle degrees); couplings, which tie one motion to another for asm_sweep: rackpinion (radius1, the pinion's pitch radius), screw (pitch mm a turn), gears and belt (radius1, radius2 — read off round edges when left out). a and b each a part and a face or edge on it — for a flat face the joint sits at its middle with its normal; for a round edge or face, on its axis. offset mm along the joint's normal and rotate degrees about it; reverse: true turns b over (false keeps FreeCAD's way; left out, b is turned over when that stops the parts overlapping). Returns which parts moved where, and overlaps the solve left. Trap: the part of b moves; a grounded part never does.",
+             obj({"assembly": asm_ref, "kind": {"type": "string", "enum": OFFERED}, "a": part_end, "b": part_end, "offset": {"type": "number"}, "rotate": {"type": "number"}, "distance": {"type": "number"}, "angle": {"type": "number"}, "radius1": {"type": "number"}, "radius2": {"type": "number"}, "pitch": {"type": "number"}, "reverse": {"type": "boolean"}, "name": {"type": "string"}}, ["kind", "a", "b"]),
              asm_joint, changes=True),
         Tool("asm_list", "An assembly: its parts with their placements and which are grounded, its joints with what each joins, and whether it solves. Changes nothing.", obj({"assembly": asm_ref}), asm_list),
         Tool("asm_joint_remove", "Remove a joint (by label, asm_list lists them) and solve again.", obj({"assembly": asm_ref, "joint": {"type": "string"}}, ["joint"]), asm_joint_remove, changes=True),
