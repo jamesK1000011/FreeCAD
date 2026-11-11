@@ -20,6 +20,7 @@
 |---|---|---|
 | A standard part to size (bin, box, bracket) | `gen_make`, `gen_part` | `parts` |
 | A parametric part they can change later | `pd_body_new`, `sketch_new`, `sketch_add`, `pd_pad` … , `param_set` | `model`, `sketch`, `feature`, `param` |
+| A table of values, sizes in variants (S/M/L), a CSV in or out | `sheet_set`, `sheet_read`, `sheet_table`, `sheet_import` | `sheet` |
 | Lettering, a logo from SVG/DXF, copies of a part | `draft_text`, `draft_outline`, `draft_array` | `draft` |
 | A curved panel, a shape through points, a surface made solid | `surface_loft`, `surface_points`, `surface_fill`, `surface_thicken` | `draft` |
 | Will it break, shake or get too hot | `fea_setup` … `fea_solve`, `fea_modes`, `fea_heat` | `strength` |
