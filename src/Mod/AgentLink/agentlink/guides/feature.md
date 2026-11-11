@@ -15,3 +15,10 @@
 - A fillet or chamfer larger than a face beside it fails. Try a smaller value or fewer edges.
 - A failed feature is refused with FreeCAD's own error and nothing is kept. The document stays as it was.
 - To change a property bound to a parameter, use `param_set`. `feature_edit` refuses it.
+
+## More features
+- `pd_primitive { kind: "cylinder", size: { radius, height }, at, rotate }` adds a box, cylinder, sphere, cone, ellipsoid, torus, prism or wedge without a sketch. `subtractive: true` cuts it out instead: a quick bore or slot.
+- `pd_helix { profile, axis, pitch, height }` makes a spring or a coil; `subtractive: true` cuts a thread or a groove. Give two of pitch, height and turns. The profile must not cross the axis, and its height should be under the pitch.
+- `pd_multitransform { features, steps }` chains patterns. A grid is two linear steps; `scale` steps grow the copies.
+- `pd_datum` makes a line, point or coordinate system: placed from the origin, or `on: { near }` a round edge (its axis or centre), which then follows the model. A datum line serves as an axis by name.
+- `pd_binder { from: "Other body", faces }` brings another body's faces in to sketch on (sketch_external). `pd_boolean { op, with }` fuses, cuts or keeps the common part of other bodies.

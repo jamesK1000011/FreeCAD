@@ -233,7 +233,7 @@ def tools(session):
         out = {"datum": f.Label, "kind": kind, "how": how, "at": pc.geo.vec(pl.Base), "step": len(s.steps)}
         if kind == "line":
             out["direction"] = pc.geo.vec(pl.Rotation.multVec(V(0, 0, 1)))
-            out["use"] = f"pd_polar_pattern {{ axis }} and pd_revolution take it by name; sketch_external can project it."
+            out["use"] = "pd_polar_pattern, pd_revolution and pd_helix take it by name as their axis."
         if kind == "lcs":
             out["axes"] = {k: pc.geo.vec(pl.Rotation.multVec(v)) for k, v in (("x", V(1, 0, 0)), ("y", V(0, 1, 0)), ("z", V(0, 0, 1)))}
         return out

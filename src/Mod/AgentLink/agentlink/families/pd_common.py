@@ -152,11 +152,14 @@ def axis_ref(body, ref, sketch=None, what="axis"):
             return (origin_feature(body, AXES[key]), [""]), key.lower()
         if key in ("H", "V") and sketch is not None:
             return (sketch, [f"{key}_Axis"]), f"{sketch.Label} {key}_Axis"
+        line = next((o for o in body.Group if o.TypeId == "PartDesign::Line" and ref in (o.Label, o.Name)), None)
+        if line is not None:
+            return (line, [""]), line.Label
     if isinstance(ref, int) and sketch is not None:
         if not (0 <= ref < len(sketch.Geometry)):
             raise ToolError("invalid_input", f"{what}: geometry {ref} is not in {sketch.Label} (0 to {len(sketch.Geometry) - 1}).")
         return (sketch, [f"Edge{ref + 1}"]), f"{sketch.Label} geometry {ref}"
-    raise ToolError("invalid_input", f"{what}: x, y, z (the body's axes), H_Axis or V_Axis (the sketch's), or a line's geometry id in the sketch.")
+    raise ToolError("invalid_input", f"{what}: x, y, z (the body's axes), H_Axis or V_Axis (the sketch's), a datum line's name (pd_datum), or a line's geometry id in the sketch.")
 
 
 # ---- faces and edges by where they are -----------------------------------------------------
