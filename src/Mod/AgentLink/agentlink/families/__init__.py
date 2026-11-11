@@ -42,6 +42,7 @@ NAMES = [
     "cam",
     "draft",
     "draft_more",
+    "surface",
 ]
 
 

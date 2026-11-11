@@ -45,6 +45,7 @@ agentlink/families/sketch.py
 agentlink/families/sketch_more.py
 agentlink/families/slicing.py
 agentlink/families/strength.py
+agentlink/families/surface.py
 agentlink/families/techdraw.py
 agentlink/families/thread.py
 agentlink/families/view.py
