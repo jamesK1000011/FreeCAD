@@ -131,6 +131,10 @@ def tools(session):
         elif a.get("tcp") is not None:
             o.Error = ""
             o.Tcp = placement(a["tcp"], "tcp")
+            # the solver can answer whole extra turns (16439°): the same pose, each axis within ±180°
+            for i in range(1, 7):
+                v = float(getattr(o, f"Axis{i}"))
+                setattr(o, f"Axis{i}", ((v + 180.0) % 360.0) - 180.0)
         elif a.get("home"):
             for i in range(1, 7):
                 setattr(o, f"Axis{i}", 0.0)
