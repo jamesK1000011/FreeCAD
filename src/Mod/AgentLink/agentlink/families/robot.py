@@ -113,6 +113,9 @@ def tools(session):
             how = "the built-in Puma 560" + ("" if model == "puma" else f" — this FreeCAD ships no {model.upper()} file; give kinematics for the real one")
         if a.get("at") is not None or a.get("ypr") is not None:
             o.Base = placement(a, "robot")
+        if a.get("tool") is not None:
+            # the tool's point from the flange (a gripper's fingertips, a torch's tip)
+            o.Tool = placement(a["tool"], "tool")
         doc().recompute()
         s.snapshot("robot_new")
         return {**state(o), "model": how, "step": len(s.steps)}
@@ -237,8 +240,8 @@ def tools(session):
 
     tcp = {"type": "object", "description": "{ at [x,y,z], ypr [yaw, pitch, roll] | axis + angle }"}
     return [
-        Tool("robot_new", "A six-axis robot: model kr16 | kr125 | kr210 | kr500 (KUKA, where FreeCAD ships them) | puma; kinematics: a CSV of your own; at, ypr its base.",
-             obj({"model": {"type": "string"}, "kinematics": {"type": "string"}, "at": {"type": "array"}, "ypr": {"type": "array"}, "name": {"type": "string"}}), robot_new, changes=True),
+        Tool("robot_new", "A six-axis robot: model kr16 | kr125 | kr210 | kr500 (KUKA, where FreeCAD ships them) | puma; kinematics: a CSV of your own; at, ypr its base; tool { at, ypr } the tool's point from the flange (a gripper's tip), which tcp moves then mean.",
+             obj({"model": {"type": "string"}, "kinematics": {"type": "string"}, "at": {"type": "array"}, "ypr": {"type": "array"}, "tool": tcp, "name": {"type": "string"}}), robot_new, changes=True),
         Tool("robot_move", "Move a robot: axes [six degrees], tcp (its tool point: inverse kinematics; reached says if it got there), or home.",
              obj({"robot": {"type": "string"}, "axes": {"type": "array"}, "tcp": tcp, "home": {"type": "boolean"}}), robot_move, changes=True),
         Tool("robot_path", "A trajectory: waypoints [{ at, ypr, type LIN | PTP | CIRC | WAIT, speed mm/s, cont }] — or edges (\"Body.Edge3\", or shapes) to follow, deviation mm. Answers length and seconds.",

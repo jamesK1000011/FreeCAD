@@ -21,3 +21,4 @@ All sizes are mm; quantities come back in m, m² and m³. Z is up; a level's ele
 - `bim_rebar`: straight bars in a slab, beam, column or footing (`along`, `layer`, `cover`, `spacing`). It answers the steel's total length and mass.
 - `bim_panel` (sheet material), `bim_pipe` (along points), `bim_equipment` (any object made a fixture or furniture), `bim_grid` (structural grid lines).
 - `bim_material` makes a material with its density and puts it on objects. `bim_section` makes a section plane for TechDraw; `export { section: z }` writes a plan cut as DXF/SVG.
+- `bim_member` puts a library section (HEB200, IPE300, RHS …; `bim_profiles` lists them) between two points: a beam across, a column upright. It answers mass and kg/m (root radii left out, so a little light).
