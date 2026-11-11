@@ -108,6 +108,8 @@ def tools(session):
         elif model != "puma":
             raise bad(f"model: {', '.join(MODELS)} or puma; or kinematics, a CSV of your own.")
         if how is None:
+            if not a.get("name"):
+                o.Label = s.unique("Robot Puma 560", o)
             how = "the built-in Puma 560" + ("" if model == "puma" else f" — this FreeCAD ships no {model.upper()} file; give kinematics for the real one")
         if a.get("at") is not None or a.get("ypr") is not None:
             o.Base = placement(a, "robot")
