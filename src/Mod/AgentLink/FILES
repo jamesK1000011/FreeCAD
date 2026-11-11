@@ -38,6 +38,7 @@ agentlink/families/param.py
 agentlink/families/parts.py
 agentlink/families/pd_common.py
 agentlink/families/picks.py
+agentlink/families/points.py
 agentlink/families/printer.py
 agentlink/families/share.py
 agentlink/families/sheet.py
@@ -50,6 +51,7 @@ agentlink/families/techdraw.py
 agentlink/families/thread.py
 agentlink/families/view.py
 agentlink/fits_hw.py
+agentlink/fitting.py
 agentlink/flat2d.py
 agentlink/gdt.py
 agentlink/geometry.py
@@ -73,6 +75,7 @@ agentlink/guides/mill.md
 agentlink/guides/model.md
 agentlink/guides/param.md
 agentlink/guides/parts.md
+agentlink/guides/points.md
 agentlink/guides/printer.md
 agentlink/guides/share.md
 agentlink/guides/sheet.md
@@ -126,6 +129,7 @@ tests/test_embed.py
 tests/test_feature.py
 tests/test_feature_more.py
 tests/test_files.py
+tests/test_fitting.py
 tests/test_flat2d.py
 tests/test_guides.py
 tests/test_inspection.py
