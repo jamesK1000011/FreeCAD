@@ -170,7 +170,9 @@ def tools(session):
                "engagement": r4(eng), "axisOffset": r4(abs(hole[4] - shaft[4]))}
         if fit:
             hc, sc = fit_of(fit)
-            N = float(size) if size else round((D + dd) / 2, 2)
+            # the size both are made to: the larger, to the nearest 0.05 mm
+            # (10 for a 10.000 hole on a 9.98 pin; 6.35 for a quarter inch)
+            N = float(size) if size else round(round(max(D, dd) / 0.05) * 0.05, 3)
             try:
                 hes, hei = iso286.limits(N, hc)
                 ses, sei = iso286.limits(N, sc)
