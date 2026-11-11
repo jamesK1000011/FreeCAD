@@ -291,7 +291,7 @@ def tools(session):
             f.ToleranceLow, f.ToleranceHigh = lo, hi
         doc().recompute()
         if not len(f.Distances):
-            raise ToolError("failed", "Inspection measured no points: the actual is empty — nothing was kept.")
+            raise ToolError("failed", f"Inspection measured no points: {act.Label} holds none" + (" (the file read as empty — is it a mesh FreeCAD reads?)" if a.get("file") else "") + " — nothing was kept.")
         s.snapshot("insp_run")
         out = reading(f, int(a.get("worst", 5)))
         if meshed is not None:

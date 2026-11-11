@@ -582,7 +582,8 @@ class Session:
 
     def export_file(self, a):
         o = self.body(a.get("body"))
-        fmt = (a.get("format") or "step").lower()
+        ext = os.path.splitext(a.get("path") or "")[1].lower().lstrip(".")
+        fmt = (a.get("format") or {"stp": "step", "step": "step", "stl": "stl"}.get(ext) or "step").lower()
         if fmt not in ("step", "stl"):
             raise ToolError("invalid_input", "format: step or stl.")
         path = a.get("path") or os.path.join(self.out_dir, f"{o.Label}.{fmt}")
