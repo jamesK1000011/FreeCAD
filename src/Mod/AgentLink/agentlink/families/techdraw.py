@@ -139,6 +139,30 @@ def set_enum(o, prop, want):
     raise bad(f"{prop} {want!r}: this build offers {', '.join(o.getEnumerationsOfProperty(prop) or [])}.")
 
 
+def ref_names(d):
+    """A dimension's references as names: releases give (view, "Edge4") or
+    (view, ("Edge4",))."""
+    out = []
+    for _, sub in d.References2D:
+        out += list(sub) if isinstance(sub, (list, tuple)) else [sub]
+    return out
+
+
+def template_defaults(path):
+    """The example values a template's editable fields carry in the file."""
+    import re
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return {}
+    out = {}
+    for m in re.finditer(r'freecad:editable="([^"]+)"[^>]*>\s*(?:<tspan[^>]*>)?([^<]*)', text):
+        out[m.group(1)] = m.group(2).strip()
+    return out
+
+
 def pages(doc):
     return [o for o in doc.Objects if o.TypeId == "TechDraw::DrawPage"]
 
@@ -445,6 +469,9 @@ def draw_item(doc, sh, v, H):
     if t == "TechDraw::DrawViewDimension":
         draw_dim(sh, v, H)
         return
+    if t == "TechDraw::DrawViewSpreadsheet":
+        draw_table(doc, sh, v, H)
+        return
     if v.isDerivedFrom("TechDraw::DrawViewSymbol"):
         rows = getattr(v, GDT_PROP, "") if GDT_PROP in v.PropertiesList else ""
         if not rows:
@@ -466,7 +493,7 @@ def draw_item(doc, sh, v, H):
         pts = [(ox + p.x, H - (oy + p.y)) for p in v.WayPoints]
         if len(pts) >= 2:
             sh.line(pts, "thin")
-            if int(getattr(v, "StartSymbol", 0) or 0) != -1:
+            if str(getattr(v, "StartSymbol", "")).lower() not in ("none", "no symbol", "-1"):
                 sh.arrow(pts[0], pts[1])
         return
     if t == "TechDraw::DrawViewAnnotation":
@@ -540,7 +567,7 @@ def draw_dim(sh, d, H):
         vertical = abs(a2[0] - b2[0]) < abs(a2[1] - b2[1])
         sh.text(L[0], L[1] - 1.0, 3.5, label, "vertical" if vertical else "middle")
     elif typ in ("Radius", "Diameter"):
-        e = v.getEdgeBySelection(refs[0][1]) if hasattr(v, "getEdgeBySelection") else None
+        e = v.getEdgeBySelection(ref_names(d)[0]) if hasattr(v, "getEdgeBySelection") else None
         cu = getattr(e, "Curve", None)
         if cu is not None and hasattr(cu, "Center"):
             c = P(cu.Center)
@@ -702,8 +729,22 @@ def tools(session):
         if a.get("scale"):
             page.Scale = float(a["scale"])
         recompute()
+        # The template's own example values (names, numbers) are not this
+        # drawing's: cleared. What FreeCAD fills in itself (today's date,
+        # the scale) differs from them and stays.
+        try:
+            texts = dict(t.EditableTexts)
+            samples = template_defaults(p)
+            cleared = [k for k, v in texts.items() if v and samples.get(k) == v and "scale" not in k.lower()]
+            if cleared:
+                t.EditableTexts = {k: ("" if k in cleared else v) for k, v in texts.items()}
+                recompute()
+        except Exception:
+            cleared = []
         out = page_reading(page, full=True)
-        out["next"] = "td_title { fields } fills the title block; td_view or td_projection puts the part on."
+        if cleared:
+            out["cleared"] = cleared
+        out["next"] = "td_title { fields } fills the title block (ask the person for names and numbers); td_view or td_projection puts the part on."
         return done("td_page", out)
 
     def page_reading(p, full=False):
@@ -1045,7 +1086,7 @@ def tools(session):
                 d.UnderTolerance = m
 
     def dim_reading(d):
-        out = {"dimension": d.Name, "label": d.Label, "type": d.Type, "refs": [n for _, n in d.References2D], "view": d.References2D[0][0].Label if d.References2D else None}
+        out = {"dimension": d.Name, "label": d.Label, "type": d.Type, "refs": ref_names(d), "view": d.References2D[0][0].Label if d.References2D else None}
         try:
             out["measured"] = num(d.getRawValue(), 4)
         except Exception as e:
@@ -1096,11 +1137,13 @@ def tools(session):
         start = V(0, 0, 0)
         end = V(to_page[0] - (vx + p_from[0]), to_page[1] - (vy - p_from[1]), 0)
         ln.WayPoints = [start, end]
-        try:
-            ln.StartSymbol = 0
-            ln.EndSymbol = -1
-        except Exception:
-            pass
+        for prop, want in (("StartSymbol", ("Filled Arrow", "FILLED_ARROW")), ("EndSymbol", ("None", "No Symbol", "NONE"))):
+            for w in want:
+                try:
+                    set_enum(ln, prop, w)
+                    break
+                except Exception:
+                    continue
         return ln
 
     def ref_point(v, r):
