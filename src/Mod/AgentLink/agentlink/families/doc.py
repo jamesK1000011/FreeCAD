@@ -8,6 +8,7 @@ import difflib
 import os
 
 import FreeCAD
+import numpy as np
 import Part
 
 from .. import geometry as geo
@@ -23,8 +24,150 @@ MESH_FORMATS = {"stl": ("stl",), "obj": ("obj",), "3mf": ("3mf",), "ply": ("ply"
                 # read by meshformats, not FreeCAD's Mesh module
                 "gltf": ("gltf", "glb"), "dae": ("dae",), "wrl": ("wrl", "vrml"), "3ds": ("3ds",)}
 MORE_MESH = ("gltf", "dae", "wrl", "3ds")
-EXPORTS = ("step", "iges", "brep", "stl", "obj", "3mf")
+EXPORTS = ("step", "iges", "brep", "stl", "obj", "3mf", "ply", "off", "amf", "wrl", "x3d", "glb", "gltf", "dae", "dxf", "svg")
+# Written by FreeCAD's Mesh module as one mesh; by meshformats a mesh (and
+# colour) per object; by flat2d a 2D projection.
+FC_MESH_OUT = {"stl": ".stl", "obj": ".obj", "3mf": ".3mf", "ply": ".ply", "off": ".off", "amf": ".amf", "wrl": ".wrl", "x3d": ".x3d"}
+SCENE_OUT = {"glb": ".glb", "gltf": ".gltf", "dae": ".dae"}
+FLAT_OUT = {"dxf": ".dxf", "svg": ".svg"}
+# The 2D views: the shape turned so the view looks down -Z; X right, Y up.
+VIEWS = {
+    "top": ((1, 0, 0), (0, 1, 0)), "bottom": ((1, 0, 0), (0, -1, 0)),
+    "front": ((1, 0, 0), (0, 0, 1)), "back": ((-1, 0, 0), (0, 0, 1)),
+    "right": ((0, 1, 0), (0, 0, 1)), "left": ((0, -1, 0), (0, 0, 1)),
+    "iso": ((0.7071068, 0.7071068, 0), (-0.4082483, 0.4082483, 0.8164966)),
+}
 SKIP_PROPS = {"Proxy", "ExpressionEngine", "_GroupTouched"}
+
+
+def colour(v):
+    """"#rrggbb", "#rrggbbaa" or [r, g, b(, a)] in 0…1 → (r, g, b, a); None when not given."""
+    if v is None:
+        return None
+    if isinstance(v, str) and v.startswith("#") and len(v) in (7, 9):
+        try:
+            c = [int(v[i:i + 2], 16) / 255 for i in range(1, len(v), 2)]
+        except ValueError:
+            c = None
+        if c:
+            return tuple(c + [1.0] * (4 - len(c)))
+    if isinstance(v, (list, tuple)) and len(v) in (3, 4) and all(isinstance(x, (int, float)) and 0 <= x <= 1 for x in v):
+        return tuple(list(map(float, v)) + [1.0] * (4 - len(v)))
+    raise ToolError("invalid_input", f"colors: \"#rrggbb\" or [r, g, b] in 0…1, not {v!r}.")
+
+
+def view_matrix(view):
+    if view not in VIEWS:
+        raise ToolError("invalid_input", f"view: one of {', '.join(VIEWS)}.")
+    xa, ya = (FreeCAD.Vector(*v) for v in VIEWS[view])
+    za = xa.cross(ya)
+    m = FreeCAD.Matrix(xa.x, xa.y, xa.z, 0, ya.x, ya.y, ya.z, 0, za.x, za.y, za.z, 0, 0, 0, 0, 1)
+    return m
+
+
+def edge_items(edges, layer, defl):
+    """Projected edges (in the XY plane) as flat2d items: circles and arcs kept, the rest as polylines."""
+    import math
+
+    out = []
+    for e in edges:
+        c = e.Curve
+        if isinstance(c, Part.Circle) and abs(abs(c.Axis.z) - 1) < 1e-6:
+            cx, cy, r = c.Center.x, c.Center.y, c.Radius
+            if e.isClosed():
+                out.append({"kind": "circle", "c": [cx, cy], "r": r, "layer": layer})
+                continue
+            p0, p1 = e.valueAt(e.FirstParameter), e.valueAt(e.LastParameter)
+            a0, a1 = (math.degrees(math.atan2(q.y - cy, q.x - cx)) for q in (p0, p1))
+            if c.Axis.z < 0:
+                a0, a1 = a1, a0
+            out.append({"kind": "arc", "c": [cx, cy], "r": r, "a0": a0, "a1": a1, "layer": layer})
+            continue
+        pts = [[v.x, v.y] for v in e.discretize(Deflection=defl)]
+        if len(pts) >= 2:
+            out.append({"kind": "line", "points": pts, "layer": layer})
+    return out
+
+
+def flat_export(objs, fmt, path, a):
+    """A 2D view of the objects (hidden lines on their own layer when hidden: true), or a section at z."""
+    from .. import flat2d
+
+    defl = float(a.get("tolerance", 0.01))
+    shape = objs[0].Shape if len(objs) == 1 else Part.Compound([o.Shape for o in objs])
+    items = []
+    if a.get("section") is not None:
+        z = picks.num(a["section"], "section")
+        wires = shape.slice(FreeCAD.Vector(0, 0, 1), z)
+        if not wires:
+            raise ToolError("invalid_input", f"section: nothing at z = {z} mm (the shape runs {shape.BoundBox.ZMin:.2f} … {shape.BoundBox.ZMax:.2f}).")
+        for w in wires:
+            items += edge_items(w.Edges, "cut", defl)
+        what = {"section": z, "wires": len(wires)}
+    else:
+        import TechDraw
+
+        view = a.get("view", "top")
+        sh = shape.transformGeometry(view_matrix(view)) if view != "top" else shape.copy()
+        res = TechDraw.projectEx(sh, FreeCAD.Vector(0, 0, 1))
+        # hard, smooth and outline edges (seams and isolines left out), visible then hidden
+        vis = [e for i in (0, 1, 3) if not res[i].isNull() for e in res[i].Edges]
+        hid = [e for i in (5, 6, 8) if not res[i].isNull() for e in res[i].Edges] if a.get("hidden") else []
+        items = edge_items(vis, "visible", defl) + edge_items(hid, "hidden", defl)
+        what = {"view": view, "visibleEdges": len(vis), **({"hiddenEdges": len(hid)} if a.get("hidden") else {})}
+    if not items:
+        raise ToolError("failed", "The view came out empty — nothing to draw.")
+    text = flat2d.dxf(items) if fmt == "dxf" else flat2d.svg(items)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    x0, y0, x1, y1 = flat2d.bounds(items)
+    out = {**what, "size": [round(x1 - x0, 3), round(y1 - y0, 3)], "units": "mm"}
+    if fmt == "dxf":
+        out["entities"] = flat2d.read_dxf_counts(text)
+    return out
+
+
+def image_size(path):
+    """(width, height) in pixels from a PNG, JPEG or BMP header; None if unknown."""
+    import struct
+
+    with open(path, "rb") as f:
+        head = f.read(64 * 1024)
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", head[16:24])
+    if head[:2] == b"BM":
+        w, h = struct.unpack("<ii", head[18:26])
+        return w, abs(h)
+    if head[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(head):
+            if head[i] != 0xFF:
+                i += 1
+                continue
+            mk = head[i + 1]
+            n = struct.unpack(">H", head[i + 2:i + 4])[0]
+            if mk in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                h, w = struct.unpack(">HH", head[i + 5:i + 9])
+                return w, h
+            i += 2 + n
+    return None
+
+
+def image_plane(d, path, label, a):
+    """A picture as an image plane (a reference to trace over): width mm, its height from the picture's shape, on XY."""
+    try:
+        o = d.addObject("Image::ImagePlane", "ImagePlane")
+    except Exception as e:
+        raise ToolError("unavailable", f"Image planes are not available here ({e}).")
+    px = image_size(path)
+    w = picks.num(a.get("width", 100), "width")
+    if w <= 0:
+        raise ToolError("invalid_input", "width: the picture's width in mm, above 0.")
+    o.Label = label
+    o.ImageFile = path
+    o.XSize = w
+    o.YSize = w * px[1] / px[0] if px and px[0] else w
+    return o
 
 
 def fmt_of(path):
@@ -360,10 +503,22 @@ def tools(session):
             made = [o for o in d.Objects if o.Name not in before]
         elif fmt == "fcstd":
             raise ToolError("invalid_input", "A FreeCAD document: doc_open { path } opens it.")
-        elif fmt in ("svg", "pdf", "dwg", "ifc", "png", "jpg"):
+        elif fmt == "svg":
+            try:
+                import importSVG
+
+                importSVG.insert(p, d.Name)
+            except Exception as e:
+                raise ToolError("unavailable", f"SVG import failed here ({e}): open it in the FreeCAD window (Draft's importer).")
+            made = [o for o in d.Objects if o.Name not in before]
+            if not made:
+                raise ToolError("failed", f"{os.path.basename(p)}: no paths, shapes or text read.")
+        elif fmt in ("png", "jpg", "jpeg", "bmp"):
+            made = [image_plane(d, p, s.unique(base), a)]
+        elif fmt in ("pdf", "dwg", "ifc"):
             raise ToolError("unavailable", f"{fmt.upper()} comes in through the FreeCAD window's importers (Draft, BIM, image planes), not headless here: open it there.")
         else:
-            raise ToolError("invalid_input", f"{fmt or 'no extension'}: import_file reads STEP, IGES, BREP, STL, OBJ, 3MF, PLY, OFF, AMF, glTF/GLB, Collada, VRML, 3DS and DXF; FBX: export it as glTF from the program that made it.")
+            raise ToolError("invalid_input", f"{fmt or 'no extension'}: import_file reads STEP, IGES, BREP, STL, OBJ, 3MF, PLY, OFF, AMF, glTF/GLB, Collada, VRML, 3DS, DXF, SVG and PNG/JPG/BMP pictures; FBX: export it as glTF from the program that made it.")
         d.recompute()
         s.snapshot("import_file")
         out = []
@@ -392,9 +547,10 @@ def tools(session):
         fmt = fmt or "step"
         if fmt not in EXPORTS:
             raise ToolError("invalid_input", f"format: one of {', '.join(EXPORTS)}.")
-        ext = {"step": ".step", "iges": ".iges", "brep": ".brep"}.get(fmt, "." + fmt)
+        ext = {"step": ".step", "iges": ".iges", "brep": ".brep", **FC_MESH_OUT, **SCENE_OUT, **FLAT_OUT}[fmt]
         p = where(a.get("path") or (objs[0].Label.replace(" ", "_") + ext))
-        if os.path.splitext(p)[1].lower().lstrip(".") not in (SOLID_FORMATS.get(fmt) or MESH_FORMATS.get(fmt)):
+        known = {*(SOLID_FORMATS.get(fmt) or ()), *(MESH_FORMATS.get(fmt) or ()), ext.lstrip(".")}
+        if os.path.splitext(p)[1].lower().lstrip(".") not in known:
             p += ext
         os.makedirs(os.path.dirname(p), exist_ok=True)
         shape = objs[0].Shape if len(objs) == 1 else Part.Compound([o.Shape for o in objs])
@@ -406,6 +562,8 @@ def tools(session):
             verify = {"volume": round(back.Volume, 2), "volumeDiff": round(abs(back.Volume - vol), 3), "solids": len(back.Solids), "faces": len(back.Faces)}
             if fmt == "iges" and not back.Solids:
                 verify["note"] = "IGES carries faces, not solids, as most readers take it."
+        elif fmt in FLAT_OUT:
+            verify = flat_export(objs, fmt, p, a)
         else:
             import Mesh
             import MeshPart
@@ -413,10 +571,46 @@ def tools(session):
             tol = picks.num(a.get("tolerance", 0.01), "tolerance")
             if tol <= 0:
                 raise ToolError("invalid_input", "tolerance: the chord error, above 0 mm.")
-            m = MeshPart.meshFromShape(Shape=shape, LinearDeflection=tol, AngularDeflection=0.0873, Relative=False)
-            m.write(p)
-            back = Mesh.Mesh(p)
-            verify = {"triangles": back.CountFacets, "volume": round(back.Volume, 2), "volumeDiff": round(abs(back.Volume - vol), 2), "closed": back.isSolid()}
+
+            def mesh_of(sh):
+                return MeshPart.meshFromShape(Shape=sh, LinearDeflection=tol, AngularDeflection=0.0873, Relative=False)
+
+            if fmt in SCENE_OUT:
+                from .. import meshformats
+
+                parts, tris = [], 0
+                cols = a.get("colors") or {}
+                for o in objs:
+                    m = mesh_of(o.Shape)
+                    pts, fs = m.Topology
+                    rgba = colour(cols.get(o.Label) or cols.get(o.Name))
+                    parts.append({"name": o.Label, "V": [tuple(v) for v in pts], "F": fs, **({"rgba": rgba} if rgba else {})})
+                    tris += len(fs)
+                for q in parts:
+                    q["V"] = np.array(q["V"], float).reshape(-1, 3)
+                    q["F"] = np.array(q["F"], int).reshape(-1, 3)
+                meshformats.write(p, parts)
+                V, F, info = meshformats.read(p)
+                span = V.max(axis=0) - V.min(axis=0)
+                want = shape.BoundBox
+                verify = {"triangles": int(len(F)), "trianglesWritten": tris, "objects": info["nodes"],
+                          "size": [round(float(x), 2) for x in span], "sizeOfBodies": [round(want.XLength, 2), round(want.YLength, 2), round(want.ZLength, 2)],
+                          "note": "Metres, Y up, as glTF and Collada keep them; a mesh and colour per object (colors {label: \"#rrggbb\"})."}
+            else:
+                m = mesh_of(shape)
+                m.write(p)
+                try:
+                    if fmt == "wrl":
+                        from .. import meshformats
+
+                        V, F, _info = meshformats.read(p)
+                        back = Mesh.Mesh()
+                        back.addFacets([[tuple(V[i]) for i in tr] for tr in F.tolist()])
+                    else:
+                        back = Mesh.Mesh(p)
+                    verify = {"triangles": back.CountFacets, "volume": round(back.Volume, 2), "volumeDiff": round(abs(back.Volume - vol), 2), "closed": back.isSolid()}
+                except Exception as e:
+                    verify = {"triangles": m.CountFacets, "readBack": f"not read back here ({e})"}
         return {"objects": [o.Label for o in objs], "format": fmt, "path": p, "bytes": os.path.getsize(p), "verify": verify}
 
     objref = {"type": "string", "description": "An object's name or label."}
@@ -430,6 +624,6 @@ def tools(session):
         Tool("object_delete", "Delete objects (objects: names or labels). Refused while another object uses one (force: true deletes it anyway and the user breaks); recomputes and lists any error.", obj({"objects": {}, "force": {"type": "boolean"}}, ["objects"]), object_delete, changes=True),
         Tool("object_rename", "Give an object a new label (its internal name stays). Trap: setups, specs and waivers keep the old label.", obj({"object": objref, "label": {"type": "string"}}, ["object", "label"]), object_rename, changes=True),
         Tool("recompute", "Recompute the document (force: true recomputes everything) and list each object that failed, with FreeCAD's reason.", obj({"force": {"type": "boolean"}}), recompute, changes=True),
-        Tool("import_file", "Bring a file into the document: STEP, IGES, BREP as bodies (split: true makes a body of each solid); STL, OBJ, 3MF, PLY, OFF, AMF — and glTF/GLB, Collada, VRML 2, 3DS, every mesh node flattened into one in mm, Z up (units and up override what the format says; read says what was taken) — as a body made of its triangles when closed and up to 20000 triangles (solid: false keeps a mesh, solid: true forces a body up to 200000); DXF as Draft geometry. SVG, PDF, DWG, IFC need the FreeCAD window; FBX: export it as glTF. .FCStd: doc_open.", obj({"path": {"type": "string"}, "name": {"type": "string"}, "split": {"type": "boolean"}, "solid": {"type": "boolean"}, "units": {"type": "string", "enum": ["mm", "cm", "m", "in"]}, "up": {"type": "string", "enum": ["x", "y", "z"]}}, ["path"]), import_file, changes=True),
-        Tool("export", "Write objects (the one body when left out; several go as one compound) as STEP, IGES, BREP, STL, OBJ or 3MF (format, or from path's extension), and read it back: verify gives the volume read against the bodies' (and triangles, closed for meshes). tolerance: a mesh's chord error, 0.01 mm.", obj({"objects": {}, "format": {"type": "string", "enum": list(EXPORTS)}, "path": {"type": "string"}, "tolerance": {"type": "number"}}), export),
+        Tool("import_file", "Bring a file into the document: STEP, IGES, BREP as bodies (split: true makes a body of each solid); STL, OBJ, 3MF, PLY, OFF, AMF — and glTF/GLB, Collada, VRML 2, 3DS, every mesh node flattened into one in mm, Z up (units and up override what the format says; read says what was taken) — as a body made of its triangles when closed and up to 20000 triangles (solid: false keeps a mesh, solid: true forces a body up to 200000); DXF and SVG as Draft geometry; PNG, JPG, BMP as an image plane width mm wide on XY, to trace over. PDF, DWG, IFC need the FreeCAD window; FBX: export it as glTF. .FCStd: doc_open.", obj({"path": {"type": "string"}, "name": {"type": "string"}, "split": {"type": "boolean"}, "solid": {"type": "boolean"}, "units": {"type": "string", "enum": ["mm", "cm", "m", "in"]}, "up": {"type": "string", "enum": ["x", "y", "z"]}, "width": {"type": "number"}}, ["path"]), import_file, changes=True),
+        Tool("export", "Write objects (the one body when left out; several go as one compound) and read it back (verify). Solids: STEP, IGES, BREP. One mesh: STL, OBJ, 3MF, PLY, OFF, AMF, VRML (wrl), X3D. A scene, a mesh per object with colors {label: \"#rrggbb\"}: glTF (glb, gltf), Collada (dae) — metres, Y up. 2D: DXF (R12) or SVG of a view (top | bottom | front | back | right | left | iso; hidden: true adds hidden lines on their own layer) or of a section at z mm (section) — circles and arcs kept as such, for laser and plasma cutting. format, or from path's extension; tolerance: the chord error, 0.01 mm.", obj({"objects": {}, "format": {"type": "string", "enum": list(EXPORTS)}, "path": {"type": "string"}, "tolerance": {"type": "number"}, "colors": {"type": "object"}, "view": {"type": "string", "enum": list(VIEWS)}, "hidden": {"type": "boolean"}, "section": {"type": "number"}}), export),
     ]

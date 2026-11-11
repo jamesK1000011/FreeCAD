@@ -50,6 +50,7 @@ agentlink/families/techdraw.py
 agentlink/families/thread.py
 agentlink/families/view.py
 agentlink/fits_hw.py
+agentlink/flat2d.py
 agentlink/gdt.py
 agentlink/geometry.py
 agentlink/gridfinity.py
@@ -125,6 +126,7 @@ tests/test_embed.py
 tests/test_feature.py
 tests/test_feature_more.py
 tests/test_files.py
+tests/test_flat2d.py
 tests/test_guides.py
 tests/test_inspection.py
 tests/test_iso286.py

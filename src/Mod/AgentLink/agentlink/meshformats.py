@@ -505,3 +505,129 @@ def read(path, units=None, up=None):
     if units or up:
         taken = f"{units or 'as the format says'}, {(up or file_up).upper()} up (as given)"
     return V, F, {"format": ext, "nodes": nodes, "takenAs": taken, "triangles": int(len(F))}
+
+
+# ---- writing -----------------------------------------------------------------
+# parts: [{"name", "V" (n x 3, mm, Z up), "F" (m x 3), "rgba" (0…1, optional)}]
+# glTF and Collada are written in metres, Y up, as their readers expect.
+
+WRITES = ("glb", "gltf", "dae")
+GREY = (0.8, 0.8, 0.8, 1.0)
+
+
+def z_up_to_y_up(V):
+    return np.column_stack([V[:, 0], V[:, 2], -V[:, 1]])
+
+
+def _normals(V, F):
+    """Flat shading: each triangle's vertices its own, with its normal."""
+    P = V[F.reshape(-1)]
+    T = P.reshape(-1, 3, 3)
+    n = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+    ln = np.linalg.norm(n, axis=1)
+    ln[ln == 0] = 1.0
+    n = n / ln[:, None]
+    return P, np.repeat(n, 3, axis=0)
+
+
+def _gltf(parts):
+    bufs, views, accs, meshes, mats, nodes = [], [], [], [], [], []
+    off = 0
+
+    def add(arr, target, kind, minmax=False):
+        nonlocal off
+        b = arr.tobytes()
+        pad = (-len(b)) % 4
+        views.append({"buffer": 0, "byteOffset": off, "byteLength": len(b), "target": target})
+        acc = {"bufferView": len(views) - 1, "componentType": 5126 if arr.dtype == np.float32 else 5125,
+               "count": int(arr.shape[0]), "type": kind}
+        if minmax:
+            acc["min"] = [float(x) for x in arr.min(axis=0)]
+            acc["max"] = [float(x) for x in arr.max(axis=0)]
+        accs.append(acc)
+        bufs.append(b + b"\0" * pad)
+        off += len(b) + pad
+        return len(accs) - 1
+
+    for p in parts:
+        V = z_up_to_y_up(np.asarray(p["V"], float)) / 1000.0
+        P, N = _normals(V, np.asarray(p["F"], int))
+        idx = np.arange(len(P), dtype=np.uint32)
+        a_p = add(P.astype(np.float32), 34962, "VEC3", True)
+        a_n = add(N.astype(np.float32), 34962, "VEC3")
+        a_i = add(idx, 34963, "SCALAR")
+        rgba = [float(c) for c in (p.get("rgba") or GREY)]
+        mats.append({"name": p["name"], "pbrMetallicRoughness": {"baseColorFactor": rgba, "metallicFactor": 0.0, "roughnessFactor": 0.6},
+                     **({"alphaMode": "BLEND"} if rgba[3] < 1 else {})})
+        meshes.append({"name": p["name"], "primitives": [{"attributes": {"POSITION": a_p, "NORMAL": a_n}, "indices": a_i, "material": len(mats) - 1}]})
+        nodes.append({"name": p["name"], "mesh": len(meshes) - 1})
+    doc = {"asset": {"version": "2.0", "generator": "FreeCAD Agent Link"}, "scene": 0,
+           "scenes": [{"nodes": list(range(len(nodes)))}], "nodes": nodes, "meshes": meshes,
+           "materials": mats, "accessors": accs, "bufferViews": views, "buffers": [{"byteLength": off}]}
+    return doc, b"".join(bufs)
+
+
+def write_glb(path, parts):
+    doc, binc = _gltf(parts)
+    js = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    js += b" " * ((-len(js)) % 4)
+    total = 12 + 8 + len(js) + 8 + len(binc)
+    with open(path, "wb") as f:
+        f.write(struct.pack("<4sII", b"glTF", 2, total))
+        f.write(struct.pack("<II", len(js), 0x4E4F534A) + js)
+        f.write(struct.pack("<II", len(binc), 0x004E4942) + binc)
+
+
+def write_gltf(path, parts):
+    import base64
+
+    doc, binc = _gltf(parts)
+    doc["buffers"][0]["uri"] = "data:application/octet-stream;base64," + base64.b64encode(binc).decode("ascii")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, separators=(",", ":"))
+
+
+def _xid(name, i):
+    keep = "".join(c if c.isalnum() else "_" for c in name) or "part"
+    return f"{keep}_{i}"
+
+
+def write_dae(path, parts):
+    """Collada 1.4.1: a geometry, an effect and a node per part, in metres, Y up."""
+    geos, effs, mats, nodes = [], [], [], []
+    for i, p in enumerate(parts):
+        k = _xid(p["name"], i)
+        V = z_up_to_y_up(np.asarray(p["V"], float)) / 1000.0
+        F = np.asarray(p["F"], int)
+        r, g, b, al = (p.get("rgba") or GREY)
+        pos = " ".join(f"{x:.7g}" for x in V.reshape(-1))
+        tri = " ".join(str(int(x)) for x in F.reshape(-1))
+        geos.append(
+            f'<geometry id="{k}-mesh" name="{k}"><mesh>'
+            f'<source id="{k}-pos"><float_array id="{k}-pos-a" count="{V.size}">{pos}</float_array>'
+            f'<technique_common><accessor source="#{k}-pos-a" count="{len(V)}" stride="3">'
+            '<param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>'
+            f'<vertices id="{k}-v"><input semantic="POSITION" source="#{k}-pos"/></vertices>'
+            f'<triangles material="m" count="{len(F)}"><input semantic="VERTEX" source="#{k}-v" offset="0"/><p>{tri}</p></triangles>'
+            "</mesh></geometry>")
+        effs.append(f'<effect id="{k}-fx"><profile_COMMON><technique sid="t"><lambert><diffuse><color>{r:.4g} {g:.4g} {b:.4g} {al:.4g}</color></diffuse></lambert></technique></profile_COMMON></effect>')
+        mats.append(f'<material id="{k}-mat" name="{k}"><instance_effect url="#{k}-fx"/></material>')
+        nodes.append(f'<node id="{k}" name="{k}"><instance_geometry url="#{k}-mesh"><bind_material><technique_common>'
+                     f'<instance_material symbol="m" target="#{k}-mat"/></technique_common></bind_material></instance_geometry></node>')
+    xml = ('<?xml version="1.0" encoding="utf-8"?>\n'
+           '<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">'
+           '<asset><contributor><authoring_tool>FreeCAD Agent Link</authoring_tool></contributor>'
+           '<unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>'
+           f'<library_effects>{"".join(effs)}</library_effects><library_materials>{"".join(mats)}</library_materials>'
+           f'<library_geometries>{"".join(geos)}</library_geometries>'
+           f'<library_visual_scenes><visual_scene id="scene">{"".join(nodes)}</visual_scene></library_visual_scenes>'
+           '<scene><instance_visual_scene url="#scene"/></scene></COLLADA>\n')
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(xml)
+
+
+def write(path, parts):
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    if ext not in WRITES:
+        raise FormatError(f"{ext}: one of {', '.join(WRITES)}.")
+    {"glb": write_glb, "gltf": write_gltf, "dae": write_dae}[ext](path, parts)
