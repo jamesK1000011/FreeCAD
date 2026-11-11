@@ -35,7 +35,7 @@ def reading(o):
 
 def tools(session):
     s = session
-    doc = lambda: s.doc  # noqa: E731
+    doc = lambda: s.doc
 
     def new(kind, label):
         lab = s.unique(label)
@@ -46,9 +46,9 @@ def tools(session):
     def done(o, tool, extra=None):
         doc().recompute()
         if not o.isValid() or o.Shape.isNull():
-            msg = o.getStatusString()
+            msg, kind = o.getStatusString(), o.TypeId.split("::")[-1]
             doc().removeObject(o.Name)
-            raise ToolError("failed", f"{o.TypeId.split('::')[-1]} failed: {msg} — nothing was kept.")
+            raise ToolError("failed", f"{kind} failed: {msg} — nothing was kept.")
         s.snapshot(tool)
         return {**reading(o), **(extra or {}), "step": len(s.steps)}
 
@@ -126,17 +126,25 @@ def tools(session):
         return done(o, "surface_cut")
 
     def surface_blend(a):
-        o = new("Surface::FeatureBlendCurve", a.get("name") or "Blend curve")
+        ends = {}
         for side in ("start", "end"):
             e = a.get(side) or {}
             ob, subs = edge_ref(e.get("edge"), f"{side}.edge")
-            setattr(o, f"{side.capitalize()}Edge", (ob, [subs[0]]))
             c = int(e.get("continuity", 2))
             if not 0 <= c <= 4:
                 raise bad(f"{side}.continuity: 0 (touching) … 4; 1 tangent, 2 curvature.")
-            setattr(o, f"{side.capitalize()}Continuity", c)
-            setattr(o, f"{side.capitalize()}Parameter", float(e.get("at", 0 if side == "start" else 1)))
-            setattr(o, f"{side.capitalize()}Size", float(e.get("size", 1)))
+            at = float(e.get("at", 0 if side == "start" else 1))
+            if not 0 <= at <= 1:
+                raise bad(f"{side}.at: 0 (the edge's start) … 1 (its end).")
+            ends[side] = ((ob, [subs[0]]), c, at, float(e.get("size", 1)))
+        o = new("Surface::FeatureBlendCurve", a.get("name") or "Blend curve")
+        # Both edges first: changing any other property recomputes the curve at once.
+        o.StartEdge, o.EndEdge = ends["start"][0], ends["end"][0]
+        for side, (_, c, at, size) in ends.items():
+            p = side.capitalize()
+            setattr(o, f"{p}Continuity", c)
+            setattr(o, f"{p}Parameter", at)
+            setattr(o, f"{p}Size", size)
         return done(o, "surface_blend", {"note": "at: where on each edge, 0 (its start) … 1 (its end); size: how far the blend follows each edge's direction."})
 
     return [
