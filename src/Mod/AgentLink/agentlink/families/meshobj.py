@@ -485,6 +485,67 @@ def tools(session):
 
     mref = {"type": "string", "description": "The mesh's label; may be left out when there is one."}
     cp = {"copy": {"type": "boolean"}, "name": {"type": "string"}}
+    def unroll_exact(face, ref, label, a):
+        """A cylinder's or cone's side (and a flat face) rolled out exactly: no stretch."""
+        import math
+
+        from .. import flat2d
+
+        srf = face.Surface
+        kind = type(srf).__name__
+
+        def flat(p):
+            u, v = srf.parameter(p)
+            if kind == "Cylinder":
+                return (srf.Radius * u, v)
+            if kind == "Cone":
+                sa = math.sin(srf.SemiAngle)
+                rho = (srf.Radius + v * sa) / abs(sa)
+                th = u * abs(sa)
+                return (rho * math.cos(th), rho * math.sin(th))
+            return (u, v)
+
+        u0, u1, v0, v1 = face.ParameterRange
+        if kind == "Plane":
+            items = [{"kind": "line", "points": [list(flat(p)) for p in w.discretize(Deflection=float(a.get("tolerance", 0.05)))], "closed": True, "layer": "cut"}
+                     for w in face.Wires]
+        elif kind == "Cylinder":
+            # the side rolled out: its turn's length by its height
+            w_, h_ = srf.Radius * (u1 - u0), v1 - v0
+            items = [{"kind": "line", "points": [[0, 0], [w_, 0], [w_, h_], [0, h_]], "closed": True, "layer": "cut"}]
+        else:
+            # a cone's side (a frustum): two arcs between two straight edges
+            sa = math.sin(srf.SemiAngle)
+            r0, r1 = sorted([(srf.Radius + v0 * sa) / abs(sa), (srf.Radius + v1 * sa) / abs(sa)])
+            span = (u1 - u0) * abs(sa)
+            n = max(16, int(math.degrees(span) / 3))
+            outer = [(r1 * math.cos(span * i / n), r1 * math.sin(span * i / n)) for i in range(n + 1)]
+            inner = [(r0 * math.cos(span * (n - i) / n), r0 * math.sin(span * (n - i) / n)) for i in range(n + 1)]
+            items = [{"kind": "line", "points": [list(q) for q in outer + inner], "closed": True, "layer": "cut"}]
+        x0, y0, x1, y1 = flat2d.bounds(items)
+        poly = items[0]["points"]
+        fa = abs(sum(x0_ * y1_ - x1_ * y0_ for (x0_, y0_), (x1_, y1_) in zip(poly, poly[1:] + poly[:1]))) / 2
+        out = {"of": ref, "surface": kind.lower(), "exact": True, "area3d": round(face.Area, 3), "areaFlat": round(fa, 3),
+               "stretch": {"mean": 0.0, "max": round(abs(fa / face.Area - 1) * 100, 3), "unit": "%"}, "outlines": len(items),
+               "size": [round(x1 - x0, 3), round(y1 - y0, 3)]}
+        if kind == "Cone":
+            out["radii"] = [round(r0, 3), round(r1, 3)]
+            out["angle"] = round(math.degrees(span), 3)
+        if a.get("path"):
+            pth = a["path"] if os.path.isabs(a["path"]) else os.path.join(s.out_dir, a["path"])
+            os.makedirs(os.path.dirname(pth), exist_ok=True)
+            with open(pth, "w", encoding="utf-8") as f:
+                f.write(flat2d.dxf(items) if pth.lower().endswith(".dxf") else flat2d.svg(items))
+            out["path"] = pth
+        if a.get("make", True):
+            o = doc().addObject("Part::Feature", "Pattern")
+            o.Label = s.unique(a.get("name") or f"{label} flat")
+            o.Shape = Part.makeCompound([Part.makePolygon([FreeCAD.Vector(x, y, 0) for x, y in it["points"]] + [FreeCAD.Vector(*it["points"][0], 0)]) for it in items])
+            doc().recompute()
+            s.snapshot("meshobj_unwrap")
+            out["pattern"] = o.Label
+        return out
+
     def unwrap_apart(P, F, iters, weight):
         import subprocess
         import sys
@@ -538,6 +599,8 @@ def tools(session):
         if not isinstance(ref, str):
             raise bad("of: a mesh's name, or a body's face \"Body.Face3\".")
         label, sub, el = _p.resolve(s, ref)
+        if sub and sub.startswith("Face") and type(el.Surface).__name__ in ("Cylinder", "Cone", "Plane"):
+            return unroll_exact(el, ref, label, a)
         if sub and sub.startswith("Face"):
             vs, ts = el.tessellate(float(a.get("tolerance", 0.1)))
             P = np.array([(v.x, v.y, v.z) for v in vs], float)
