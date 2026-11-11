@@ -123,9 +123,21 @@ def tools(session):
         try:
             return done(o, "surface_boundary")
         except ToolError as e:
-            if ft != "Stretched" and "disjoint" in str(e):
-                raise ToolError("failed", f"{e.message if hasattr(e, 'message') else e} The {ft} fill could not join these curves; fill: stretched does.") from None
-            raise
+            if ft == "Stretched" or "disjoint" not in str(e) or len(edges) < 3:
+                raise
+            why = e.message
+        # FreeCAD's Coons and curved fills need the opposite curves to match
+        # (degree, knots) and report any mismatch as disjoint: a smooth
+        # N-sided filling through the same edges instead.
+        f = new("Surface::Filling", a.get("name") or "Boundary surface")
+        f.BoundaryEdges = [(ob, sub) for ob, subs in bl for sub in subs]
+        f.BoundaryOrder = [0] * len(edges)
+        try:
+            out = done(f, "surface_boundary")
+        except ToolError:
+            raise ToolError("failed", f"{why} — and a filling through the edges failed too; fill: stretched joins them.") from None
+        out["note"] = f"Made as Surface Filling (smooth through the edges): FreeCAD's {ft.lower()} fill refused these curves ({why.split(':')[-1].strip()})."
+        return out
 
     def surface_extend(a):
         ref = a.get("face")
