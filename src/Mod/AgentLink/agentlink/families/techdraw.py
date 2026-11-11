@@ -516,10 +516,7 @@ def paper_polys(v, faces, X, Y, H):
     out = []
     for f in faces:
         for w in f.Wires:
-            pts = []
-            for e in w.OrderedEdges if hasattr(w, "OrderedEdges") else w.Edges:
-                ps = e.discretize(Deflection=0.02)
-                pts += ps if not pts else ps[1:]
+            pts = w.discretize(Deflection=0.02)  # the wire's own order and direction
             poly = []
             for p in pts:
                 gx, gy = to_paper(v, cache, to_view(fr, v, p))
