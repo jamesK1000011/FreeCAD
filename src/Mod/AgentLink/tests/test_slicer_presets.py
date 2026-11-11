@@ -32,6 +32,9 @@ class Presets(unittest.TestCase):
         put(sysroot, "BBL/filament/Bambu PLA Basic @BBL H2D.json", {"type": "filament", "name": "Bambu PLA Basic @BBL H2D", "filament_type": ["PLA"], "filament_density": ["1.26"]})
         # The person's own: finer layers, three walls, on top of the system one.
         put(user, "1234/process/My fine PLA.json", {"name": "My fine PLA", "inherits": "0.20mm Standard @BBL H2D", "layer_height": "0.12", "wall_loops": "3", "from": "User"})
+        # A filament of the person's own that says nothing of its kind, as Bambu
+        # Studio's user folder has them: the command line refuses it written so.
+        put(user, "1234/filament/My PLA.json", {"name": "My PLA", "inherits": "Bambu PLA Basic @BBL H2D", "from": "User", "filament_density": ["1.24"]})
         os.environ["AGENTLINK_BAMBU_PRESETS"] = os.pathsep.join([user, sysroot])
         self.out = os.path.join(self.tmp, "out")
 
@@ -57,10 +60,11 @@ class Presets(unittest.TestCase):
         self.assertEqual(SP.setup_from(b), {"layerHeight": 0.12, "walls": 3, "infill": 15.0, "topLayers": 5, "bottomLayers": 3, "nozzle": 0.4})
 
     def test_profiles_name_the_printer(self):
-        b = SP.bundle("bambustudio", "Bambu Lab H2D 0.4 nozzle", "My fine PLA", "Bambu PLA Basic @BBL H2D")
+        b = SP.bundle("bambustudio", "Bambu Lab H2D 0.4 nozzle", "My fine PLA", "My PLA")
         paths = SP.write_profiles(b, os.path.join(self.tmp, "w"))
         with open(paths["filament"]) as f:
             fil = json.load(f)
+        self.assertEqual(fil["type"], "filament")
         self.assertIn("Bambu Lab H2D 0.4 nozzle", fil["compatible_printers"])
         with open(paths["process"]) as f:
             proc = json.load(f)

@@ -210,6 +210,10 @@ def write_profiles(data, folder_):
             if system:
                 part["inherits"] = system
         part["instantiation"] = "true"
+        # A preset in the person's own folder may say nothing of its kind
+        # (Bambu Studio knows it by the folder); the command line refuses a
+        # file that does not.
+        part["type"] = k
         if k != "machine" and printer:
             cp = list(part.get("compatible_printers") or [])
             for want in (printer, m.get("name")):
