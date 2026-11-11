@@ -19,7 +19,7 @@ class SheetTools(Base):
         self.ok("sheet_set", {"sheet": "Sizes", "at": "A3", "rows": [["x", "y"], [1, 2], [3, "=A4 + B4"]]})
         r = self.ok("sheet_read", {"sheet": "Sizes", "range": "A3:B5"})
         self.assertEqual([c["cell"] for c in r["cells"]], ["A3", "B3", "A4", "B4", "A5", "B5"])
-        self.assertEqual(r["cells"][-1]["value"], 6)
+        self.assertEqual(r["cells"][-1]["value"], 3)
         self.assertEqual(self.ok("sheet_set", {"sheet": "Sizes", "cells": {"E1": "12"}, "text": True})["cells"][0]["value"], "12")
 
     def test_2_refusals(self):
@@ -49,7 +49,7 @@ class SheetTools(Base):
         self.assertEqual(f["cells"][0]["background"], "#eeeeee")
         self.refused("sheet_format", {"sheet": "Sizes", "range": "A3", "style": ["blink"]})
         self.ok("sheet_rows", {"sheet": "Sizes", "action": "insert", "rows": 3, "count": 1})
-        self.assertEqual(self.ok("sheet_read", {"sheet": "Sizes", "cells": ["B6"]})["cells"][0]["value"], 6)
+        self.assertEqual(self.ok("sheet_read", {"sheet": "Sizes", "cells": ["B6"]})["cells"][0]["value"], 3)
         self.ok("sheet_rows", {"sheet": "Sizes", "action": "remove", "rows": 3, "count": 1})
         e = self.ok("sheet_export", {"sheet": "Sizes"})
         self.assertTrue(os.path.isfile(e["file"]))

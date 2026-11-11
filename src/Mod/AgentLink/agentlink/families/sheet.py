@@ -215,7 +215,13 @@ def tables(doc, ss):
                 active = getattr(owner, prop)
             except Exception:
                 active = None
-        out.append({"at": a, "owner": owner, "ownerLabel": owner.Label if owner is not None else owner_ref,
+        items = []
+        if owner is not None and hasattr(owner, prop):
+            try:
+                items = list(owner.getEnumerationsOfProperty(prop) or [])
+            except Exception:
+                items = []
+        out.append({"items": items, "at": a, "owner": owner, "ownerLabel": owner.Label if owner is not None else owner_ref,
                     "property": prop, "params": params, "configs": confs, "active": active})
     return out
 
@@ -237,7 +243,9 @@ def table_reading(ss, t):
     for a, p in t["params"]:
         v, u, err = value_of(ss, a)
         act[p] = {"value": v, **({"unit": u} if u else {}), **({"error": err} if err else {})}
-    return {"at": t["at"], "switch": f"{t['ownerLabel']}.{t['property']}", "active": t["active"], "params": [p for _, p in t["params"]],
+    names = [n for _, n in t["configs"]]
+    out_of_step = t["items"] and t["items"] != names
+    return {**({"switchOffers": t["items"]} if out_of_step else {}), "at": t["at"], "switch": f"{t['ownerLabel']}.{t['property']}", "active": t["active"], "params": [p for _, p in t["params"]],
             "configs": rows, "current": act, "refAs": f"{ss.Name}.<param>"}
 
 
@@ -248,8 +256,22 @@ def tools(session):
     def check(what):
         doc().recompute()
         b = pc.broken(doc())
-        if b:
-            raise ToolError("failed", f"{what} breaks {b[0]['object']}: {b[0]['error']}" + (f" (and {', '.join(x['object'] for x in b[1:])})" if len(b) > 1 else "") + " — nothing was kept.")
+        if not b:
+            return
+        # A sheet says only that some cell failed: name the cells.
+        why = []
+        for x in b:
+            o = doc().getObject(next((o.Name for o in doc().Objects if o.Label == x["object"]), ""))
+            if o is not None and o.TypeId == "Spreadsheet::Sheet":
+                bad_cells = [c for c in (cell_reading(o, a) for a in filled(o)) if "error" in c]
+                why.append(f"{x['object']} " + "; ".join(f"{c['cell']} ({c['content']}): {c['error']}" for c in bad_cells[:3]) if bad_cells else f"{x['object']}: {x['error']}")
+            else:
+                why.append(f"{x['object']}: {x['error']}")
+        # Undo here and recompute, so the sheet's values stand as they were
+        # (rolling back alone leaves the cells uncomputed).
+        doc().abortTransaction()
+        doc().recompute()
+        raise ToolError("failed", f"{what} breaks " + "; and ".join(why) + " — nothing was kept.")
 
     def bodies_now():
         return [pc.body_reading(b) for b in pc.pd_bodies(doc())]
@@ -355,6 +377,8 @@ def tools(session):
         rows = [cell_reading(ss, x) for x in touched[:READ_CAP]]
         errs = [r for r in rows if "error" in r]
         if errs:
+            doc().abortTransaction()
+            doc().recompute()
             raise ToolError("failed", f"{errs[0]['cell']} = {errs[0]['content']!r} does not evaluate: {errs[0]['error']} — nothing was kept.")
         used = sorted({u for al in aliases(ss, touched) for u in users_of(doc(), ss, al)})
         out = {"cells": rows}
@@ -587,6 +611,10 @@ def tools(session):
         first_conf, last_conf = r0 + 2, r0 + 1 + len(confs)
         owner.addProperty("App::PropertyEnumeration", prop, CONF_GROUP, "The configuration the design table in " + ss.Label + " drives")
         conf_rng = C.range_text((first_conf, c0), (last_conf, c0))
+        # The items now, and the binding that keeps them in step with the
+        # names column from the next recompute on (FreeCAD fills an
+        # enumeration from its expression only then).
+        setattr(owner, prop, list(names))
         owner.setExpression(f"{prop}.Enum", f"{ss.Name}.cells[<<{conf_rng}>>]")
         doc().recompute()
         ss.set(C.name(r0 + 1, c0), f"=hiddenref({owner.Name}.{prop}.String)")
@@ -666,6 +694,9 @@ def tools(session):
             body = C.content(x)
             ss.set(C.name(new, c + 1 + j), f"={body} {u}" if isinstance(x, (int, float)) and u else body)
         first = t["configs"][0][0]
+        cur = getattr(t["owner"], t["property"])
+        setattr(t["owner"], t["property"], names + [n])
+        setattr(t["owner"], t["property"], cur)
         t["owner"].setExpression(f"{t['property']}.Enum", f"{ss.Name}.cells[<<{C.range_text((first, c), (new, c))}>>]")
         check(f"Configuration {n}")
         t = next(x for x in tables(doc(), ss) if x["at"] == t["at"])
