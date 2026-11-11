@@ -339,7 +339,7 @@ def tools(session):
         if hits and not a.get("allowOverlap"):
             raise ToolError("failed", f"At {target:g} {'°' if turning else 'mm'} parts overlap ({', '.join('/'.join(h['parts']) for h in hits)}) — nothing was kept. asm_sweep finds the clear range; allowOverlap: true keeps it anyway.")
         s.snapshot("asm_pose")
-        out = {"joint": j.Label, "pose": r4(target), "unit": "degrees" if turning else "mm", "moved": sorted(o.Label for o in group.values()),
+        out = {"joint": j.Label, "pose": r4(target), "unit": "degrees" if turning else "mm", "along": vec(axis), "moved": sorted(o.Label for o in group.values()),
                "parts": {o.Label: A._placement(o) for o in group.values()}, "solve": said, "step": len(s.steps)}
         if hits:
             out["overlaps"] = hits

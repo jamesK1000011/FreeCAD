@@ -54,7 +54,7 @@ def range_or_refuse(r, what="range"):
 
 
 def sheets(doc):
-    return [o for o in doc.Objects if o.TypeId == "Spreadsheet::Sheet"]
+    return [o for o in doc.Objects if o.isDerivedFrom("Spreadsheet::Sheet")]  # a BOM is one too
 
 
 def find(doc, ref):
