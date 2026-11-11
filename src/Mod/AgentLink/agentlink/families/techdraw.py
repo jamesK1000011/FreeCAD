@@ -128,6 +128,17 @@ def save_presets(data, path=None):
 # ---- finding things ----
 
 
+def set_enum(o, prop, want):
+    """Set an enumeration by its item, matched without case or spaces:
+    releases spell them differently ("First angle", "First Angle")."""
+    key = want.lower().replace(" ", "").replace("_", "")
+    for item in o.getEnumerationsOfProperty(prop) or []:
+        if item.lower().replace(" ", "").replace("_", "") == key:
+            setattr(o, prop, item)
+            return item
+    raise bad(f"{prop} {want!r}: this build offers {', '.join(o.getEnumerationsOfProperty(prop) or [])}.")
+
+
 def pages(doc):
     return [o for o in doc.Objects if o.TypeId == "TechDraw::DrawPage"]
 
@@ -687,7 +698,7 @@ def tools(session):
         t.Template = p
         page.Template = t
         if a.get("projection") in ("first", "third"):
-            page.ProjectionType = "First angle" if a["projection"] == "first" else "Third angle"
+            set_enum(page, "ProjectionType", "First angle" if a["projection"] == "first" else "Third angle")
         if a.get("scale"):
             page.Scale = float(a["scale"])
         recompute()
@@ -800,9 +811,12 @@ def tools(session):
         page.addView(g)
         g.Source = objs
         if a.get("projection") in ("first", "third"):
-            g.ProjectionType = "First angle" if a["projection"] == "first" else "Third angle"
+            set_enum(g, "ProjectionType", "First angle" if a["projection"] == "first" else "Third angle")
         elif getattr(page, "ProjectionType", ""):
-            g.ProjectionType = page.ProjectionType
+            try:
+                set_enum(g, "ProjectionType", page.ProjectionType)
+            except ToolError:
+                pass
         g.addProjection("Front")
         if a.get("scale"):
             g.ScaleType = "Custom"
@@ -862,7 +876,7 @@ def tools(session):
         side = "Right" if normal.dot(bx) > 0.7 else "Left" if normal.dot(bx) < -0.7 else "Up" if normal.dot(by) > 0.7 else "Down" if normal.dot(by) < -0.7 else None
         if side:
             try:
-                sv.SectionDirection = side
+                set_enum(sv, "SectionDirection", side)
             except Exception:
                 pass
         W, H = paper_size(page)
