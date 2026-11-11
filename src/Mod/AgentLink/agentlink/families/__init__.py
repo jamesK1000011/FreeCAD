@@ -12,6 +12,7 @@ import sys
 NAMES = [
     "doc",
     "model",
+    "model_more",
     "measure",
     "sketch",
     "feature",
