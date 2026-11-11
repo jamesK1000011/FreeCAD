@@ -488,7 +488,7 @@ def tools(session):
             return Part.LineSegment(e.Vertexes[0].Point, e.Vertexes[-1].Point)
         if isinstance(c, Part.Circle):
             if e.isClosed():
-                return Part.Circle(c.Center, V(0, 0, 1), c.Radius)
+                return Part.Circle(c.Location, V(0, 0, 1), c.Radius)
             # By three points on it: an offset's arc can come with its axis
             # down, which the sketch reads as the rest of the circle.
             f, l_ = e.FirstParameter, e.LastParameter

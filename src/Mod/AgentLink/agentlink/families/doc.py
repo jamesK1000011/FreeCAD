@@ -73,7 +73,7 @@ def edge_items(edges, layer, defl):
     for e in edges:
         c = e.Curve
         if isinstance(c, Part.Circle) and abs(abs(c.Axis.z) - 1) < 1e-6:
-            cx, cy, r = c.Center.x, c.Center.y, c.Radius
+            cx, cy, r = c.Location.x, c.Location.y, c.Radius
             if e.isClosed():
                 out.append({"kind": "circle", "c": [cx, cy], "r": r, "layer": layer})
                 continue

@@ -574,11 +574,11 @@ def circle_centres(v):
         span = abs(e.LastParameter - e.FirstParameter)
         if span < math.pi * 1.01:
             continue
-        key = (round(c.Center.x, 2), round(c.Center.y, 2), round(c.Radius, 2))
+        key = (round(c.Location.x, 2), round(c.Location.y, 2), round(c.Radius, 2))
         if key in seen:
             continue
         seen.add(key)
-        out.append(((c.Center.x, c.Center.y), c.Radius))
+        out.append(((c.Location.x, c.Location.y), c.Radius))
     return out
 
 

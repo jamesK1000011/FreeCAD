@@ -225,7 +225,7 @@ def hole_sizes(holes):
     for h in holes:
         if len(h.Edges) == 1 and type(h.Edges[0].Curve).__name__ == "Circle":
             c = h.Edges[0].Curve
-            out.append({"d": round(2 * c.Radius, 3), "at": [round(c.Center.x, 2), round(c.Center.y, 2)], "round": True})
+            out.append({"d": round(2 * c.Radius, 3), "at": [round(c.Location.x, 2), round(c.Location.y, 2)], "round": True})
         else:
             bb = h.BoundBox
             out.append({"d": round(min(bb.XLength, bb.YLength), 3), "at": [round(bb.Center.x, 2), round(bb.Center.y, 2)], "round": False})
