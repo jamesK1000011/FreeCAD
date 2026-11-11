@@ -126,7 +126,6 @@ def tools(session):
             elif kind == "sprocket":
                 # The sprocket's own object asks its dialog for the chain table;
                 # its outline is drawn with the same builder.
-                import Part
                 from fcsprocket import fcsprocket
                 from fcsprocket import sprocket as S
 
@@ -134,9 +133,10 @@ def tools(session):
                 roller = float(a.get("roller", 0.53 * pitch))
                 w = fcsprocket.FCWireBuilder()
                 S.CreateSprocket(w, pitch, teeth, roller)
-                prof = doc().addObject("Part::Feature", "Sprocket")
-                prof.Shape = Part.Wire([o.toShape() for o in w.wire])
-                b.addObject(prof)
+                # A Part::Feature may not sit in a body: the outline goes in as a sketch.
+                prof = b.newObject("Sketcher::SketchObject", "Sprocket")
+                for g in w.wire:
+                    prof.addGeometry(g, False)
                 import math
 
                 info = {"pitchDiameter": round(pitch / math.sin(math.pi / teeth), 3), "chainPitch": pitch, "roller": roller}
@@ -147,17 +147,31 @@ def tools(session):
         if prof not in b.Group:
             b.addObject(prof)
         prof.Label = s.unique(a.get("name") and a["name"] + " profile" or f"{kind.capitalize()} {teeth}T", prof)
-        if kind == "gear":
-            attach_origin(b, prof, placement(a))
-        else:
-            prof.Placement = placement(a)
+        attach_origin(b, prof, placement(a))
         doc().recompute()
-        pad = new(b, "PartDesign::Pad", a.get("name") or f"{kind.capitalize()} {teeth}T pad")
-        pad.Profile = prof
-        pad.Length = thick
+        if kind == "gear" and a.get("internal"):
+            # an internal gear: a ring round the teeth, the teeth cut from it
+            m = float(a.get("module", 1))
+            rim = float(a.get("rim", 3 * m))
+            ring = new(b, "PartDesign::AdditiveCylinder", a.get("name") or f"Ring gear {teeth}T")
+            ring.Radius, ring.Height = m * teeth / 2 + 1.25 * m + rim, thick
+            attach_origin(b, ring, placement(a))
+            pc.settle(s, b, ring, "pd_gear", before, "add")
+            pad = new(b, "PartDesign::Pocket", f"{teeth}T teeth")
+            pad.Profile = prof
+            pad.Type = "ThroughAll"
+            pad.Reversed = True
+            info["outsideDiameter"] = round(2 * ring.Radius, 3)
+            before = pc.volume(b)
+            must = "cut"
+        else:
+            pad = new(b, "PartDesign::Pad", a.get("name") or f"{kind.capitalize()} {teeth}T pad")
+            pad.Profile = prof
+            pad.Length = thick
+            must = "add"
         if a.get("bore"):
             info["bore"] = float(a["bore"])
-        out = pc.settle(s, b, pad, "pd_gear", before, "add", hint="the gear lies on the body's XY plane at at; a body with a solid already needs the gear beside it, not inside.")
+        out = pc.settle(s, b, pad, "pd_gear", before, must, hint="the gear lies on the body's XY plane at at; a body with a solid already needs the gear beside it, not inside.")
         if a.get("bore"):
             hole = new(b, "PartDesign::SubtractiveCylinder", f"{pad.Label} bore")
             hole.Radius, hole.Height = float(a["bore"]) / 2, thick + 2
@@ -380,7 +394,7 @@ def tools(session):
              obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": list(PRIMS)}, "size": size_schema, "subtractive": {"type": "boolean"}, "name": {"type": "string"}, **place}, ["kind"]), pd_primitive, changes=True),
         Tool("pd_gear", "An involute gear (kind gear: teeth, module, pressureAngle 20, internal, shift) or a roller-chain sprocket (kind sprocket: teeth, pitch 9.525 for #35 / 12.7 for #40, roller diameter) as a padded PartDesign feature on the body's XY plane: thickness, bore mm, at. Answers the pitch diameter.",
              obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": ["gear", "sprocket"]}, "teeth": {"type": "integer"}, "module": {"type": "number"}, "pressureAngle": {"type": "number"},
-                  "internal": {"type": "boolean"}, "shift": {"type": "number"}, "highPrecision": {"type": "boolean"}, "pitch": {"type": "number"}, "roller": {"type": "number"},
+                  "internal": {"type": "boolean"}, "rim": {"type": "number"}, "shift": {"type": "number"}, "highPrecision": {"type": "boolean"}, "pitch": {"type": "number"}, "roller": {"type": "number"},
                   "thickness": {"type": "number"}, "bore": {"type": "number"}, "at": {"type": "array"}, "name": {"type": "string"}}), pd_gear, changes=True),
         Tool("pd_helix", "Sweep a sketch's profile in a helix about an axis (default the sketch's V_Axis; x | y | z, H_Axis, a line's id): two of pitch (mm per turn), height (mm), turns; taper (degrees), growth (mm per turn: a spiral), leftHanded, reversed; subtractive: true cuts it (a thread, a groove). Springs, coils, worm threads.",
              obj({"body": {"type": "string"}, "profile": {"type": "string"}, "axis": {"type": ["string", "integer"]}, "pitch": {"type": "number"}, "height": {"type": "number"}, "turns": {"type": "number"},
