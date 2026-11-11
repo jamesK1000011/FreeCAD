@@ -15,6 +15,7 @@ NAMES = [
     "measure",
     "sketch",
     "feature",
+    "feature_more",
     "param",
     "sheet",
     "material",
