@@ -47,3 +47,8 @@ FreeCAD's own Assembly workbench, its solver and its joints. Parts are bodies al
 ## Exploded layout and parts list
 - `asm_explode { factor }` spreads the parts out from the middle; `axis: "z"` stacks them along an axis in the order they sit. Then render it, or make `drawing_exploded`, and `asm_explode { collapse: true }` puts them back. Don't solve or add joints while exploded: the solver pulls the parts home.
 - `asm_bom` is FreeCAD's own bill of materials, with material, mass and volume from `part_spec`. `td_table { sheet }` puts it on a drawing.
+
+## Sub-assemblies
+- Build the sub-assembly as an assembly of its own, then `asm_sub { assembly: "Machine", sub: "Hinge" }` puts it in. It is rigid by default (one part to the parent); `rigid: false` lets its own joints keep moving.
+- Joint to it like any part: `b: { part: "<its name in the parent>", element }`. Its faces are numbered across all of its parts, so pick by query with `near`.
+- `asm_bom` itemises a sub-assembly's parts under it (2, 2.1, 2.1.1 …), as FreeCAD's BOM does.

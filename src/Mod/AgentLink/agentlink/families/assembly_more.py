@@ -432,6 +432,16 @@ def tools(session):
             m = mats.get(o.Label)
             vol = o.Shape.Volume / 1000.0
             rows.append({"name": o.Label, "material": m or "", "mass": (round(vol * DENSITY[m], 2) if m in DENSITY else ""), "volume": round(vol, 3)})
+        def nested(label):
+            # a row for a part inside a sub-assembly: found in the document by its label
+            o = next((x for x in doc().Objects if x.Label == label and hasattr(x, "Shape") and not x.Shape.isNull() and x.Shape.Solids
+                      and x.TypeId not in ("Assembly::AssemblyObject", "Assembly::AssemblyLink")), None)
+            if o is None:
+                return None
+            m = mats.get(o.Label)
+            vol = o.Shape.Volume / 1000.0
+            return {"name": o.Label, "material": m or "", "mass": (round(vol * DENSITY[m], 2) if m in DENSITY else ""), "volume": round(vol, 3)}
+
         if native:
             bom.columnsNames = cols + [c for c in ("Material", "Mass (g)", "Volume (cm3)") if c not in cols]
             doc().recompute()
@@ -443,7 +453,7 @@ def tools(session):
             r = 2
             while bom.getContents(Cc.name(r, name_col)):
                 nm = bom.getContents(Cc.name(r, name_col)).lstrip("'")
-                row = next((x for x in rows if x["name"] == nm), None)
+                row = next((x for x in rows if x["name"] == nm), None) or nested(nm)
                 if row:
                     for colname, key in (("Material", "material"), ("Mass (g)", "mass"), ("Volume (cm3)", "volume")):
                         if colname in hdr and row[key] != "":
