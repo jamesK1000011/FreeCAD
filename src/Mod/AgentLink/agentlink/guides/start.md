@@ -30,6 +30,7 @@
 | A point cloud: read, cropped, a plane / sphere / cylinder / surface fitted through it | `points_import`, `points_crop`, `points_fit`, `points_export` | `points` |
 | How far a made part or a scan is from the design, in tolerance or not | `insp_run`, `insp_read`, `view_render { map: "inspection" }`, `insp_export` | `inspection` |
 | OpenSCAD: a .scad or .csg in, code run, CSG out, a hull | `scad_import`, `scad_code`, `scad_export`, `scad_op` | `start` |
+| A robot arm: reach along a path, KUKA KRL out | `robot_new`, `robot_path`, `robot_run`, `robot_export` | `start` |
 | A building: walls, windows, doors, slabs, roof, stairs, rooms, levels, quantities, IFC | `bim_wall`, `bim_opening`, `bim_structure`, `bim_roof`, `bim_level`, `bim_schedule`, `bim_export` | `bim` |
 | Parts put together, a lid on its box | `asm_new`, `asm_joint`, `asm_check` | `assembly` |
 | Toolpaths and G-code for a mill | `cam_job`, `cam_op`, `cam_sim`, `cam_post` | `cam` |

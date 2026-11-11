@@ -42,6 +42,7 @@ agentlink/families/pd_common.py
 agentlink/families/picks.py
 agentlink/families/points.py
 agentlink/families/printer.py
+agentlink/families/robot.py
 agentlink/families/share.py
 agentlink/families/sheet.py
 agentlink/families/sketch.py
