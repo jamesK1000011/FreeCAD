@@ -140,11 +140,22 @@ def tools(session):
         return done(o, "surface_extend", {"note": "u and v: how far past each edge, as a share of the face's length that way (0.05 = 5%)."})
 
     def surface_sew(a):
-        objs = [picks.find(doc(), r) for r in (a.get("faces") or [])]
-        if len(objs) < 2:
-            raise bad("faces: two or more surfaces (objects) whose edges meet.")
+        refs = a.get("faces") or []
+        links = {}
+        for r in refs:
+            if not isinstance(r, str):
+                raise bad("faces: surfaces' names, or faces as \"Body.Face3\".")
+            label, sub, _ = picks.resolve(s, r)
+            x = picks.find(doc(), label)
+            # The feature sews only the faces listed: a whole object brings all of its own.
+            subs = [sub] if sub else [f"Face{i + 1}" for i in range(len(x.Shape.Faces))]
+            if not subs:
+                raise bad(f"faces: {x.Label} has no faces.")
+            links.setdefault(x, []).extend(subs)
+        if sum(len(v) for v in links.values()) < 2:
+            raise bad("faces: two or more faces (surfaces, or \"Body.Face3\") whose edges meet.")
         o = new("Surface::Sewing", a.get("name") or "Sewn")
-        o.ShapeList = [(x, []) for x in objs]
+        o.ShapeList = list(links.items())
         o.Tolerance = float(a.get("tolerance", 0.01))
         out = done(o, "surface_sew")
         if a.get("solid"):
@@ -162,7 +173,7 @@ def tools(session):
     def surface_cut(a):
         x, y = picks.find(doc(), a.get("surface")), picks.find(doc(), a.get("by"))
         o = new("Surface::Cut", a.get("name") or "Surface cut")
-        o.ShapeList = [(x, []), (y, [])]
+        o.ShapeList = [x, y]
         return done(o, "surface_cut")
 
     def surface_blend(a):
@@ -194,7 +205,7 @@ def tools(session):
              obj({"edges": {"type": "array", "items": {"type": "string"}}, "fill": {"type": "string"}, "name": {"type": "string"}}, ["edges"]), surface_boundary, changes=True),
         Tool("surface_extend", "Extend a face past its edges (Surface Extend): face \"Body.Face2\", u and v as shares of its size (0.05).",
              obj({"face": {"type": "string"}, "u": {"type": "number"}, "v": {"type": "number"}, "name": {"type": "string"}}, ["face"]), surface_extend, changes=True),
-        Tool("surface_sew", "Sew surfaces into a shell (Surface Sewing): faces [objects], tolerance mm; solid: true makes a closed shell a solid body.",
+        Tool("surface_sew", "Sew surfaces into a shell (Surface Sewing): faces [surfaces, or \"Body.Face3\"], tolerance mm; solid: true makes a closed shell a solid body.",
              obj({"faces": {"type": "array", "items": {"type": "string"}}, "tolerance": {"type": "number"}, "solid": {"type": "boolean"}, "name": {"type": "string"}}, ["faces"]), surface_sew, changes=True),
         Tool("surface_cut", "Cut one surface by another (Surface Cut): surface, by.", obj({"surface": {"type": "string"}, "by": {"type": "string"}, "name": {"type": "string"}}, ["surface", "by"]), surface_cut, changes=True),
         Tool("surface_blend", "A blend curve joining two edges smoothly: start / end { edge \"Body.Edge3\", at 0…1 along it, continuity 0…4 (2: curvature), size }.",
