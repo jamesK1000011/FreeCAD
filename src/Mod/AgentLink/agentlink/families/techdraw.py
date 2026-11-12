@@ -1861,10 +1861,6 @@ def tools(session):
             if kind == "line":
                 p, q = paper_of3d(v, it.get("from")), paper_of3d(v, it.get("to"))
                 prims.append({"pts": [p, q], "style": style})
-                try:
-                    v.makeCosmeticLine3D(vec(it["from"], "from"), vec(it["to"], "to"))
-                except Exception:
-                    pass
                 made.append({"kind": "line", "length_mm": num(math.hypot(q[0] - p[0], q[1] - p[1]) / view_scale(v), 3)})
             elif kind == "circle":
                 c = paper_of3d(v, it.get("center"))
@@ -1888,10 +1884,6 @@ def tools(session):
                 ext = float(it.get("extend", 3))
                 ux, uy = (m1[0] - m0[0]) / d, (m1[1] - m0[1]) / d
                 prims.append({"pts": [(m0[0] - ux * ext, m0[1] - uy * ext), (m1[0] + ux * ext, m1[1] + uy * ext)], "style": "center"})
-                try:
-                    v.makeCenterLine([resolve_ref(v, refs[0], frames), resolve_ref(v, refs[1], frames)], 1)
-                except Exception:
-                    pass
                 made.append({"kind": "centerline", "length_mm": num((d + 2 * ext) / view_scale(v), 2)})
             elif kind == "thread":
                 internal = bool(it.get("internal", False))
@@ -1926,8 +1918,10 @@ def tools(session):
                     # an external thread's root is inside its outline; an internal one's crest outside the drilled hole
                     off = h3 if not internal else -h3
                     length = float(it["length"]) * view_scale(v) if it.get("length") else L
-                    for base, toward in ((A, sgn), (B, -sgn)):
-                        p0 = (base[0][0] + nx * off * toward, base[0][1] + ny * off * toward)
+                    # start both at the end A starts from
+                    b0 = min(B, key=lambda q: (q[0] - A[0][0]) * ux + (q[1] - A[0][1]) * uy)
+                    for start, toward in ((A[0], sgn), (b0, -sgn)):
+                        p0 = (start[0] + nx * off * toward, start[1] + ny * off * toward)
                         prims.append({"pts": [p0, (p0[0] + ux * length, p0[1] + uy * length)], "style": "thin"})
                     made.append({"kind": "thread", "end": False, "nominal": num(D + (2 * 0.6134 * P if internal else 0), 3), "pitch": P,
                                  "note": f"M{num(D + (2 * 0.6134 * P if internal else 0), 1):g}x{P:g}"})
@@ -1980,6 +1974,9 @@ def tools(session):
         ref, p = ref_point(v, a["on"])
         vx, vy = abs_xy(v)
         base = (vx + p[0], vy - p[1])
+        if a.get("at") is None and not a.get("onSurface"):
+            # off the material, on a leader: below a lower edge, above an upper one
+            a = dict(a, at=[base[0] + 12, base[1] + (-14 if p[1] > 0 else 14)])
         if a.get("at") is not None:
             at = place_xy(page, a["at"], base)
             ln = leader(v, p, at)
@@ -2069,9 +2066,9 @@ def tools(session):
              obj({"view": {"type": "string"}, "items": {"type": "array", "items": {"type": "object"}}, "clear": {"type": "boolean"}}, ["view"]), td_cosmetic, changes=True),
         Tool("td_leader", "A leader line from a feature of a view (on: a ref as td_balloon takes) to at [x, y] page mm, with text (\\n splits lines) at its end — a note pointing at something.",
              obj({"view": {"type": "string"}, "on": {}, "at": {"type": "array"}, "text": {"type": "string"}, "size": {"type": "number"}}, ["view", "on"]), td_leader, changes=True),
-        Tool("td_finish", "A surface texture symbol (ISO 1302) on a surface's edge in a view: ra (\"1.6\" or \"Rz 6.3\"), removal required (machined) | prohibited | any, process (\"ground\"), lay = | perpendicular | crossed | multi | circular | radial | particulate, allowance mm; at [x, y] puts it off the part on a leader.",
+        Tool("td_finish", "A surface texture symbol (ISO 1302) on a surface's edge in a view: ra (\"1.6\" or \"Rz 6.3\"), removal required (machined) | prohibited | any, process (\"ground\"), lay = | perpendicular | crossed | multi | circular | radial | particulate, allowance mm; placed off the part on a leader (at [x, y] page mm to choose where; onSurface: true stands it on the edge itself).",
              obj({"view": {"type": "string"}, "on": {}, "ra": {"type": "string"}, "removal": {"type": "string", "enum": ["required", "prohibited", "any"]}, "process": {"type": "string"},
-                  "lay": {"type": "string"}, "allowance": {"type": "string"}, "height": {"type": "number"}, "at": {"type": "array"}}, ["view", "on"]), td_finish, changes=True),
+                  "lay": {"type": "string"}, "allowance": {"type": "string"}, "height": {"type": "number"}, "at": {"type": "array"}, "onSurface": {"type": "boolean"}}, ["view", "on"]), td_finish, changes=True),
         Tool("td_area", "Write a face's area on the drawing with a leader to it: face (\"Body.Face3\" on the part), view, unit mm2 | cm2 | m2, decimals, format (\"A = {value} {unit}\"), at.",
              obj({"view": {"type": "string"}, "face": {"type": "string"}, "unit": {"type": "string", "enum": ["mm2", "cm2", "m2"]}, "decimals": {"type": "integer"}, "format": {"type": "string"},
                   "size": {"type": "number"}, "at": {"type": "array"}}, ["view", "face"]), td_area, changes=True),
