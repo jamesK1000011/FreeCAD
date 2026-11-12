@@ -43,7 +43,14 @@ def shape_stats(sh):
         out["area_mm2"] = round(sh.Area, 3)
     if sh.Solids:
         out["volume_mm3"] = round(sh.Volume, 3)
-    out["closedWires"] = sum(1 for w in sh.Wires if w.isClosed()) if sh.Wires else 0
+    loops = 0
+    try:
+        for es in Part.sortEdges(list(sh.Edges)):
+            if Part.Wire(es).isClosed():
+                loops += 1
+    except Exception:
+        loops = sum(1 for w in sh.Wires if w.isClosed())
+    out["closedLoops"] = loops
     return out
 
 
@@ -123,13 +130,28 @@ def tools(s):
         join = {"arc": 0, "tangent": 1, "intersection": 2}.get(a.get("join", "arc"))
         if join is None:
             raise bad("join: arc | tangent | intersection.")
+        loops = [w for w in sh.Wires if w.isClosed()] if not sh.Faces else []
+        if loops and len(loops) == len(sh.Wires):
+            # FreeCAD's Offset2D of a bare closed wire goes astray: offset the
+            # face it bounds and take its outline (the band with fill)
+            try:
+                face = Part.makeFace(loops, "Part::FaceMakerBullseye")
+                grown = face.makeOffset2D(d, join, False, False, bool(a.get("intersection", False)))
+            except Exception as e:
+                raise ToolError("invalid_state", f"No offset of {src.Label} by {d} mm: {e} — a loop shrunk past its own width vanishes.")
+            if a.get("fill"):
+                res = grown.cut(face) if d > 0 else face.cut(grown)
+            else:
+                res = grown.Faces[0].OuterWire if len(grown.Faces) == 1 else Part.makeCompound([f.OuterWire for f in grown.Faces])
+            o = add(s, res, a.get("name") or f"{src.Label} offset")
+            s.snapshot("part_offset2d")
+            return {"offset": o.Label, **shape_stats(res), "note": "a plain shape (a closed wire's offset is taken through its face)"}
         o = doc(s).addObject("Part::Offset2D", "Offset2D")
         o.Source = src
         o.Value = d
         o.Join = join
         o.Fill = bool(a.get("fill", False))
         o.Intersection = bool(a.get("intersection", False))
-        o.Mode = "Skin" if a.get("open_skin") else "Pipe" if a.get("pipe") else "Skin"
         o.Label = s.unique(a.get("name") or f"{src.Label} offset")
         doc(s).recompute()
         if o.Shape.isNull() or not (o.Shape.Edges):
