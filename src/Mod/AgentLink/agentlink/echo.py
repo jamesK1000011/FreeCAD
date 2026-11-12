@@ -56,12 +56,41 @@ COMMAND = {
     "history_undo": "Std_Undo", "history_redo": "Std_Redo", "recompute": "Std_Refresh",
 }
 
+COMMAND.update({
+    "asm_ground": "Assembly_ToggleGrounded", "asm_sub": "Assembly_InsertLink", "asm_motion": "Assembly_CreateJointRevolute",
+    "bim_building": "BIM_Building", "bim_section": "BIM_SectionPlane", "bim_grid": "BIM_AxisSystem", "bim_member": "BIM_Beam",
+    "bim_frame": "BIM_Frame", "bim_equipment": "BIM_Equipment", "bim_panel": "BIM_Panel", "bim_rebar": "BIM_Rebar",
+    "bim_truss": "BIM_Truss", "bim_curtain_wall": "BIM_CurtainWall", "bim_fence": "BIM_Fence", "bim_pipe": "BIM_Pipe",
+    "bim_covering": "BIM_Covering", "bim_schedule": "BIM_Schedule", "bim_material": "BIM_Material",
+    "cam_tool": "CAM_ToolController", "cam_tool_add": "CAM_ToolBitDock", "cam_setup": "CAM_Job",
+})
+
+# Tools whose button depends on what kind was asked for.
+CAM_OP = {"profile": "CAM_Profile", "pocket": "CAM_Pocket_Shape", "adaptive": "CAM_Adaptive", "face": "CAM_MillFace",
+          "drill": "CAM_Drilling", "engrave": "CAM_Engrave", "helix": "CAM_Helix", "slot": "CAM_Slot", "deburr": "CAM_Deburr",
+          "vcarve": "CAM_Vcarve", "thread": "CAM_ThreadMilling", "surface": "CAM_Surface", "waterline": "CAM_Waterline"}
+CAM_DRESSUP = {"dogbone": "CAM_DressupDogbone", "tag": "CAM_DressupTag", "tags": "CAM_DressupTag", "ramp": "CAM_DressupRampEntry",
+               "boundary": "CAM_DressupPathBoundary", "leadinout": "CAM_DressupLeadInOut", "axismap": "CAM_DressupAxisMap", "zcorrect": "CAM_DressupZCorrect"}
+
+
+def command_for(name, args):
+    """The command whose button does what this call does."""
+    kind = str((args or {}).get("kind") or "").lower().replace("-", "").replace("_", "")
+    if name == "asm_joint" and kind:
+        return "Assembly_CreateJoint" + {"rackpinion": "RackPinion", "slider": "Slider", "ball": "Ball"}.get(kind, kind.capitalize())
+    if name == "cam_op" and kind in CAM_OP:
+        return CAM_OP[kind]
+    if name == "cam_dressup" and kind in CAM_DRESSUP:
+        return CAM_DRESSUP[kind]
+    return COMMAND.get(name)
+
+
 # Read-only tools that still show something (a view, a picture).
 SHOWN = ("view_", "measure", "clearance", "section", "body_check", "dfm_check", "part_review", "steps_render", "note_")
 
 # What a tool's arguments and answer name: the objects to select.
-ARG_KEYS = ("body", "sketch", "object", "base", "target", "feature", "page")
-OUT_KEYS = ("feature", "sketch", "object", "body", "created", "page", "view")
+ARG_KEYS = ("body", "sketch", "object", "base", "target", "feature", "page", "op", "joint")
+OUT_KEYS = ("feature", "sketch", "object", "body", "created", "page", "view", "joint", "op", "sub")
 
 _log = []
 _listeners = []
@@ -248,7 +277,7 @@ class Echo:
             self._mode(tool.name, args)
             caption(_describe(tool.name, args))
             FreeCADGui.getMainWindow().statusBar().showMessage("Agent: " + _describe(tool.name, args), 4000)
-            cmd = COMMAND.get(tool.name)
+            cmd = command_for(tool.name, args)
             if cmd:
                 flash_command(cmd)
             doc = self.s.doc
@@ -295,6 +324,79 @@ class Echo:
                 if type(sub.widget()).__name__ == "View3DInventor":
                     area.setActiveSubWindow(sub)
                     break
+        self._container(name, args or {}, body or {})
+
+    def _container(self, name, args, body):
+        """What a person would have made active for the work: an assembly
+        (as Assembly's "Activate assembly" does, its joints then going into
+        it), a BIM level or building (the active container new BIM objects
+        go into), a CAM job's operation shown with its stock; a joint's two
+        faces lit."""
+        import FreeCADGui
+
+        doc = self.s.doc
+        gd = FreeCADGui.ActiveDocument
+        view = getattr(gd, "ActiveView", None) if gd else None
+        if view is None:
+            return
+        if name.startswith("asm_"):
+            asm = _objects(doc, [body.get("assembly") or args.get("assembly")])
+            if asm:
+                try:
+                    if view.getActiveObject("part") is not asm[0]:
+                        view.setActiveObject("part", asm[0])
+                except Exception:
+                    pass
+            if name == "asm_joint":
+                ends = [body.get("a"), body.get("b")]
+                lit = []
+                for end in ends:
+                    if not isinstance(end, str) or "." not in end:
+                        continue
+                    label, el = end.rsplit(".", 1)
+                    o = _objects(doc, [label])
+                    if o:
+                        lit.append((o[0], el))
+                if lit:
+                    FreeCADGui.Selection.clearSelection()
+                    for o, el in lit:
+                        try:
+                            FreeCADGui.Selection.addSelection(o, el)
+                        except Exception:
+                            pass
+                    _wait(delay_ms())
+        elif name.startswith("bim_") and name in ("bim_level", "bim_building"):
+            made = _objects(doc, [body.get("object")])
+            if made:
+                try:
+                    view.setActiveObject("Arch", made[0])
+                except Exception:
+                    pass
+        elif name.startswith("bim_") and isinstance(args.get("level"), str):
+            lv = _objects(doc, [args["level"]])
+            if lv:
+                try:
+                    view.setActiveObject("Arch", lv[0])
+                except Exception:
+                    pass
+        elif name.startswith("cam_"):
+            job = _objects(doc, [body.get("job") or args.get("job")])
+            op = _objects(doc, [body.get("op")])
+            if job:
+                j = job[0]
+                stock = getattr(j, "Stock", None)
+                for o in [stock] + op:
+                    vo = getattr(o, "ViewObject", None) if o is not None else None
+                    if vo is not None:
+                        try:
+                            vo.Visibility = True
+                        except Exception:
+                            pass
+                if stock is not None and getattr(stock, "ViewObject", None) is not None:
+                    try:
+                        stock.ViewObject.Transparency = max(int(stock.ViewObject.Transparency or 0), 70)
+                    except Exception:
+                        pass
 
     def _mode(self, name, args):
         """The mode a person would be in: a sketch's tools work with the

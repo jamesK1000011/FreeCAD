@@ -155,6 +155,7 @@ tests/test_cut.py
 tests/test_doc.py
 tests/test_draft.py
 tests/test_drawing.py
+tests/test_echo_map.py
 tests/test_electronics.py
 tests/test_embed.py
 tests/test_feature.py
