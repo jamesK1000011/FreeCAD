@@ -46,6 +46,18 @@ def _results(session):
     return getattr(session, "_agentlink_fea", None)
 
 
+ELMER_EQUATIONS = {"elasticity": "makeEquationElasticity", "deformation": "makeEquationDeformation", "heat": "makeEquationHeat",
+                   "flow": "makeEquationFlow", "electrostatic": "makeEquationElectrostatic", "electricforce": "makeEquationElectricforce",
+                   "flux": "makeEquationFlux", "staticcurrent": "makeEquationStaticCurrent", "magnetodynamic": "makeEquationMagnetodynamic",
+                   "magnetodynamic2d": "makeEquationMagnetodynamic2D"}
+
+
+def ObjectsFem_():
+    import ObjectsFem
+
+    return ObjectsFem
+
+
 def _binary(name, pref_group, pref_key, env):
     p = os.environ.get(env)
     if p and shutil.which(p):
@@ -1244,13 +1256,35 @@ def tools(session):
         an = ObjectsFem.makeAnalysis(doc, "Analysis")
         an.Label = s.unique(a.get("name") or f"{o.Label} analysis")
         made = []
-        names = ("makeSolverCalculiX", "makeSolverCalculix", "makeSolverCalculixCcxTools", "makeSolverCcxTools")
-        mk_solver = next((getattr(ObjectsFem, n) for n in names if hasattr(ObjectsFem, n)), None)
-        if mk_solver is None:
-            raise ToolError("unavailable", "This FreeCAD's FEM has no CalculiX solver object to add: " + ", ".join(n for n in dir(ObjectsFem) if n.startswith("makeSolver")))
-        solver = mk_solver(doc)
-        an.addObject(solver)
-        made.append(solver.Label)
+        kind = str(a.get("solver", "calculix")).lower()
+        if kind not in ("calculix", "elmer"):
+            raise ToolError("invalid_input", "solver: calculix or elmer.")
+        eqs = [str(e).lower() for e in (a.get("equations") or ["elasticity"])]
+        if kind == "calculix" and (a.get("equations") or a.get("temperatures") or a.get("potentials")):
+            raise ToolError("invalid_input", "equations, temperatures and potentials are Elmer's: solver elmer.")
+        if kind == "elmer":
+            bad = [e for e in eqs if e not in ELMER_EQUATIONS]
+            if bad:
+                raise ToolError("invalid_input", f"equations: {', '.join(bad)} unknown — " + ", ".join(ELMER_EQUATIONS) + ".")
+            if not hasattr(ObjectsFem, "makeSolverElmer"):
+                raise ToolError("unavailable", "This FreeCAD's FEM has no Elmer solver object.")
+            solver = ObjectsFem.makeSolverElmer(doc)
+            an.addObject(solver)
+            made.append(solver.Label)
+            for e in eqs:
+                mk = getattr(ObjectsFem, ELMER_EQUATIONS[e], None)
+                if mk is None:
+                    raise ToolError("unavailable", f"This FreeCAD's Elmer has no {e} equation.")
+                eq = mk(doc, solver)
+                made.append(eq.Label)
+        else:
+            names = ("makeSolverCalculiX", "makeSolverCalculix", "makeSolverCalculixCcxTools", "makeSolverCcxTools")
+            mk_solver = next((getattr(ObjectsFem, n) for n in names if hasattr(ObjectsFem, n)), None)
+            if mk_solver is None:
+                raise ToolError("unavailable", "This FreeCAD's FEM has no CalculiX solver object to add: " + ", ".join(n for n in dir(ObjectsFem) if n.startswith("makeSolver")))
+            solver = mk_solver(doc)
+            an.addObject(solver)
+            made.append(solver.Label)
         mo = ObjectsFem.makeMaterialSolid(doc, "Material")
         props = {"Name": c.get("name", st["material"])}
         if c.get("E"):
@@ -1258,7 +1292,14 @@ def tools(session):
         if c.get("nu"):
             props["PoissonRatio"] = str(float(c["nu"]))
         if c.get("density"):
-            props["Density"] = f"{float(c['density'])} kg/m^3"
+            # cards keep g/cm³: FreeCAD's material wants kg/m³
+            props["Density"] = f"{float(c['density']) * 1000} kg/m^3"
+        if c.get("k"):
+            props["ThermalConductivity"] = f"{float(c['k'])} W/m/K"
+        props["SpecificHeat"] = f"{float(c.get('cp', 1500))} J/kg/K"
+        if c.get("alpha"):
+            props["ThermalExpansionCoefficient"] = f"{float(c['alpha'])} 1/K"
+        props["RelativePermittivity"] = str(float(c.get("permittivity", 1)))
         mo.Material = props
         mo.References = [(o, "")]
         an.addObject(mo)
@@ -1324,11 +1365,104 @@ def tools(session):
                     skipped.append("a force's direction (set it in the GUI)")
                 an.addObject(fo)
                 made.append(fo.Label)
+        if kind == "elmer":
+            made += _elmer_conditions(doc, an, o, shape, a, eqs)
         doc.recompute()
         s.snapshot("fea_native")
-        out = {"analysis": an.Label, "objects": made, "next": "In FreeCAD's FEM workbench: mesh it (double-click the mesh), then run the solver — the same study fea_solve runs headless."}
+        out = {"analysis": an.Label, "solver": kind, "objects": made, "next": "In FreeCAD's FEM workbench: mesh it (double-click the mesh), then run the solver — the same study fea_solve runs headless."}
+        if kind == "elmer":
+            out["equations"] = eqs
+            out["next"] = "write: true meshes it and writes Elmer's case here; with ElmerSolver installed, run: true solves it. Or open it in the FEM workbench."
+            if a.get("write") or a.get("run"):
+                out.update(_elmer_write(o, mesh, solver, bool(a.get("run")), float(a.get("timeout", 600))))
         if skipped:
             out["skipped"] = skipped
+        return out
+
+    def _elmer_conditions(doc, an, o, shape, a, eqs):
+        """Elmer's own boundary conditions: temperatures and heat for heat,
+        potentials for electrostatics (the study's holds and loads serve
+        elasticity as they are)."""
+        made = []
+
+        def refs(q, where):
+            return [(o, tuple(n for n, _ in facepick.pick(shape, q, where)))]
+
+        for i, tq in enumerate(a.get("temperatures") or []):
+            if "heat" not in eqs:
+                raise ToolError("invalid_input", "temperatures need the heat equation: equations [..., heat].")
+            tc = ObjectsFem_().makeConstraintTemperature(doc, "Temperature")
+            tc.References = refs(tq.get("faces"), f"temperatures.{i}.faces")
+            tc.Temperature = f"{273.15 + float(tq['celsius'])} K"
+            an.addObject(tc)
+            made.append(tc.Label)
+        for i, hq in enumerate(a.get("heat") or []):
+            if "heat" not in eqs:
+                raise ToolError("invalid_input", "heat needs the heat equation: equations [..., heat].")
+            picked = facepick.pick(shape, hq.get("faces"), f"heat.{i}.faces")
+            area = sum(f.Area for _, f in picked) * 1e-6
+            hf = ObjectsFem_().makeConstraintHeatflux(doc, "Heatflux")
+            hf.References = [(o, tuple(n for n, _ in picked))]
+            hf.ConstraintType = "DFlux"
+            hf.DFlux = f"{float(hq['watts']) / area} W/m^2"
+            an.addObject(hf)
+            made.append(hf.Label)
+        for i, pq in enumerate(a.get("potentials") or []):
+            if "electrostatic" not in eqs:
+                raise ToolError("invalid_input", "potentials need the electrostatic equation: equations [..., electrostatic].")
+            ep = ObjectsFem_().makeConstraintElectrostaticPotential(doc, "Potential")
+            ep.References = refs(pq.get("faces"), f"potentials.{i}.faces")
+            ep.Potential = f"{float(pq['volts'])} V"
+            for flag in ("PotentialEnabled", "EnablePotential"):
+                if hasattr(ep, flag):
+                    setattr(ep, flag, True)
+            an.addObject(ep)
+            made.append(ep.Label)
+        return made
+
+    def _elmer_write(o, mesh, solver, run, timeout):
+        """Mesh by Gmsh, write Elmer's case (case.sif, mesh.unv) into a folder;
+        ElmerGrid turns the mesh into Elmer's, and ElmerSolver solves — each
+        only when installed."""
+        if not _binary("gmsh", "Gmsh", "gmshBinaryPath", "AGENTLINK_GMSH"):
+            raise ToolError("unavailable", "Gmsh not found: the case needs a mesh (conda install -c conda-forge gmsh, or FreeCAD's FEM preferences).")
+        from femmesh import gmshtools
+        wd = os.path.join(s.out_dir, "elmer_" + "".join(ch if ch.isalnum() else "_" for ch in o.Label))
+        os.makedirs(wd, exist_ok=True)
+        err = gmshtools.GmshTools(mesh).create_mesh()
+        if err or not mesh.FemMesh.NodeCount:
+            raise ToolError("failed", f"Gmsh did not mesh it: {err or 'no nodes'}")
+        from femsolver.elmer import writer as ew
+        if hasattr(solver, "WorkingDirectory"):
+            solver.WorkingDirectory = wd
+        w = ew.Writer(solver, wd, testmode=True)
+        (getattr(w, "write_solver_input", None) or getattr(w, "write"))()
+        unv = os.path.join(wd, "mesh.unv")
+        mesh.FemMesh.write(unv)
+        out = {"files": wd, "mesh": {"nodes": mesh.FemMesh.NodeCount, "volumes": mesh.FemMesh.VolumeCount}, "solved": False}
+        grid = _binary("ElmerGrid", "Elmer", "gridBinaryPath", "AGENTLINK_ELMERGRID")
+        elmer = _binary("ElmerSolver", "Elmer", "elmerBinaryPath", "AGENTLINK_ELMER")
+        if not grid:
+            out["note"] = "ElmerGrid not found: the case is written (case.sif, mesh.unv); turn the mesh into Elmer's with ElmerGrid 8 2 mesh.unv -out . where Elmer is installed."
+            return out
+        r = subprocess.run([grid, "8", "2", unv, "-out", wd, "-autoclean"], cwd=wd, capture_output=True, text=True, timeout=timeout)
+        if r.returncode:
+            raise ToolError("failed", "ElmerGrid refused the mesh: " + (r.stderr or r.stdout)[-400:])
+        if not run:
+            return out
+        if not elmer:
+            out["note"] = "ElmerSolver not found: the case is ready to solve where Elmer is installed (ElmerSolver in the folder)."
+            return out
+        r = subprocess.run([elmer, "case.sif"], cwd=wd, capture_output=True, text=True, timeout=timeout)
+        log = (r.stdout or "") + (r.stderr or "")
+        with open(os.path.join(wd, "elmer.log"), "w") as f:
+            f.write(log)
+        bad = [l.strip() for l in log.splitlines() if "ERROR" in l and "::" in l]
+        if r.returncode or bad:
+            raise ToolError("failed", "ElmerSolver stopped: " + (" | ".join(bad[-3:]) or log[-400:]) + f" (log: {wd}/elmer.log)")
+        out["solved"] = True
+        out["results"] = sorted(os.path.relpath(os.path.join(dp, n), wd) for dp, _, ns in os.walk(wd) for n in ns if n.endswith((".vtu", ".pvtu", ".pvd", ".dat")))
+        out["note"] = "Solved: open the .vtu in ParaView, or in the FEM workbench (the Elmer solver's results)."
         return out
 
     return [
@@ -1391,6 +1525,10 @@ def tools(session):
              obj({"points": {"type": "array", "items": {}}, "line": {"type": "object"}, "faces": {}}), fea_probe),
         Tool("fea_export", "Write the last solve out: formats [vtu (ParaView, FreeCAD FEM post-processing), csv (every node: position, von Mises, displacement)], name.",
              obj({"formats": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}), fea_export),
-        Tool("fea_native", "Build the study as FreeCAD's own FEM analysis (Analysis, CalculiX solver, material, Gmsh mesh, fixed / force / pressure / self-weight constraints), to open and run in the FEM workbench.",
-             obj({"name": {"type": "string"}}), fea_native, changes=True),
+        Tool("fea_native", "Build the study as FreeCAD's own FEM analysis (Analysis, solver, material, Gmsh mesh, fixed / force / pressure / self-weight constraints), to open and run in the FEM workbench. solver elmer (multiphysics) takes equations [elasticity, heat, flow, electrostatic, electricforce, flux, staticcurrent, magnetodynamic, deformation (nonlinear elasticity)] together, temperatures [{ faces, celsius }] and heat [{ faces, watts }] for heat, potentials [{ faces, volts }] for electrostatics; write: true meshes it and writes Elmer's case (case.sif), run: true solves it where ElmerSolver is installed.",
+             obj({"name": {"type": "string"}, "solver": {"type": "string", "enum": ["calculix", "elmer"]},
+                  "equations": {"type": "array", "items": {"type": "string", "enum": list(ELMER_EQUATIONS)}},
+                  "temperatures": {"type": "array", "items": {"type": "object"}}, "heat": {"type": "array", "items": {"type": "object"}},
+                  "potentials": {"type": "array", "items": {"type": "object"}},
+                  "write": {"type": "boolean"}, "run": {"type": "boolean"}, "timeout": {"type": "number"}}), fea_native, changes=True),
     ]
