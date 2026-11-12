@@ -236,3 +236,21 @@ if __name__ == "__main__":
         self.assertAlmostEqual(b["boundaries"][0]["centre"][2], 15.0, delta=0.01)
         m = self.ok("meshobj_merge", {"meshes": ["Mm cyl", "Mm torus"]})
         self.assertEqual(m["components"], 2)
+
+    def test_bim_more(self):
+        self.have("bim_preflight")
+        self.ok("bim_wall", {"points": [[0, 3000], [5000, 3000]], "height": 3000, "width": 200, "name": "Bm wall"})
+        self.ok("bim_structure", {"kind": "slab", "points": [[0, 5000], [3000, 5000], [3000, 7000], [0, 7000]], "thickness": 200, "name": "Bm slab"})
+        c = self.unavailable_skip("bim_covering", {"face": "Bm slab.Face6", "tile": [300, 300], "thickness": 10, "joint": 3})
+        if "tiles" in c:
+            self.assertAlmostEqual(c["volume_m3"], 6.0 * 0.98 * 0.01, delta=0.002)
+        lay = self.ok("bim_layers", {"layers": [{"material": "Bm brick", "thickness": 215, "density": 1900}, {"material": "Bm plaster", "thickness": 13, "density": 1200}], "objects": ["Bm wall"]})
+        self.assertEqual(lay["total_mm"], 228.0)
+        q = self.ok("bim_quantities", {"by": "material"})
+        self.assertIn("Layers", q["groups"])
+        i = self.ok("bim_ifc", {"objects": ["Bm wall"], "properties": {"Pset_WallCommon.FireRating": "REI60"}})
+        self.assertEqual(i["objects"][0]["properties"]["Pset_WallCommon"]["FireRating"], "REI60")
+        cut = self.ok("bim_edit", {"op": "cut", "object": "Bm wall", "at": [0, 0, 2500], "normal": [0, 0, 1]})
+        self.assertGreater(cut["removed_m3"], 0.2)
+        pf = self.ok("bim_preflight", {})
+        self.assertFalse(pf["ok"])
