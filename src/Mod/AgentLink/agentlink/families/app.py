@@ -386,22 +386,27 @@ def tools(session):
                 raise ToolError("not_found", "Panels: " + ", ".join(sorted(d.windowTitle() for d in docks if d.windowTitle())))
         gui.updateGui()
         pix = target.grab()
-        # The 3D view is drawn by OpenGL: paint its own frame over the grab, where Qt's grab can come out blank.
+        # The 3D view is drawn by OpenGL, which a widget grab leaves blank:
+        # render it the way view_snapshot does and paint it in its place.
         try:
+            import tempfile
+
             from PySide import QtCore, QtGui
 
             QtW = getattr(__import__("PySide", fromlist=["QtWidgets"]), "QtWidgets", QtGui)
-            painter = QtGui.QPainter(pix)
-            for gl in target.findChildren(QtW.QOpenGLWidget if hasattr(QtW, "QOpenGLWidget") else QtW.QWidget):
-                if not hasattr(gl, "grabFramebuffer") or not gl.isVisible():
-                    continue
-                img = gl.grabFramebuffer()
-                top_left = gl.mapTo(target, gl.rect().topLeft())
-                # Retina: the frame is in device pixels, the window in points.
-                painter.drawImage(QtCore.QRect(top_left, gl.size()), img)
-            painter.end()
+            gd = gui.ActiveDocument
+            view = gd.activeView() if gd else None
+            gl = next((w for w in target.findChildren(QtW.QWidget) if w.isVisible() and type(w).__name__ in ("QuarterWidget", "QOpenGLWidget", "QGLWidget")), None)
+            if view is not None and gl is not None and hasattr(view, "saveImage"):
+                tmp = os.path.join(tempfile.gettempdir(), "agentlink_view.png")
+                ratio = getattr(pix, "devicePixelRatio", lambda: 1.0)()
+                view.saveImage(tmp, int(gl.width() * ratio), int(gl.height() * ratio), "Current")
+                img = QtGui.QImage(tmp)
+                painter = QtGui.QPainter(pix)
+                painter.drawImage(QtCore.QRect(gl.mapTo(target, QtCore.QPoint(0, 0)), gl.size()), img)
+                painter.end()
         except Exception as e:
-            FreeCAD.Console.PrintLog(f"Agent Link window_snapshot: 3D view not overlaid ({e})\n")
+            FreeCAD.Console.PrintLog(f"Agent Link window_snapshot: 3D view not painted in ({e})\n")
         out = os.path.expanduser(a.get("path") or os.path.join(s.out_dir, "window.png"))
         if not os.path.isabs(out):
             out = os.path.join(s.out_dir, out)
