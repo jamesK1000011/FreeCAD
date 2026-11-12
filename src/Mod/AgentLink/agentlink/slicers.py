@@ -63,9 +63,17 @@ def minimal_profiles(settings, folder):
     return out
 
 
-def slice_with(name, stl, gcode, settings, profiles=None, timeout=900):
-    """Slice stl into gcode with the named slicer. Returns (exe, profiles
-    used: 'given' or 'written' or 'setup')."""
+def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=None):
+    """Slice stl (a path, or a list of them on one plate) into gcode with the
+    named slicer. options (OrcaSlicer and Bambu Studio): orient, arrange
+    (each bool), project (a .3mf path: the sliced plate as a project the
+    slicer's window opens). Returns (exe, profiles used: 'given' or
+    'written' or 'setup')."""
+    options = options or {}
+    stls = [stl] if isinstance(stl, str) else list(stl)
+    if name == "prusaslicer" and len(stls) > 1:
+        raise RuntimeError("Several bodies on one plate: OrcaSlicer or Bambu Studio.")
+    stl = stls[0]
     exe = find(name)
     if not exe:
         how = "install PrusaSlicer, or set AGENTLINK_SLICER" if name == "prusaslicer" else f"install it, or set {_EXE[name][0]} to its command line"
@@ -91,16 +99,24 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900):
     for k in ("machine", "process", "filament"):
         if not os.path.isfile(profiles[k]):
             raise RuntimeError(f"profiles.{k}: {profiles[k]} is not a file.")
-    three_mf = os.path.join(out_dir, "out.3mf")
-    args = [exe, "--slice", "0", "--load-settings", f"{profiles['machine']};{profiles['process']}", "--load-filaments", profiles["filament"], "--outputdir", out_dir]
-    if name == "bambustudio":
+    three_mf = options.get("project") or os.path.join(out_dir, "out.3mf")
+    for old in glob.glob(os.path.join(out_dir, "*.gcode")) + [os.path.join(out_dir, "result.json")]:
+        if os.path.exists(old):
+            os.remove(old)
+    args = [exe, "--slice", "0", "--load-settings", f"{profiles['machine']};{profiles['process']}", "--load-filaments", ";".join([profiles["filament"]] * len(stls)), "--outputdir", out_dir]
+    if options.get("orient"):
+        args += ["--orient", "1"]
+    if options.get("arrange") or len(stls) > 1:
+        args += ["--arrange", "1"]
+    if name == "bambustudio" or options.get("project"):
         args += ["--export-3mf", three_mf]
+    if name == "bambustudio":
         kinds = nozzle_volume_types(profiles["machine"])
         if kinds:
             # Each filament put on a nozzle by hand: left to itself the
             # command line reads past the end of its extruder list.
             args += ["--nozzle-volume-type", ",".join(kinds), "--filament-map-mode", "Manual", "--filament-map", "1"]
-    args.append(stl)
+    args += stls
     run = _run(args, timeout)
     found = sorted(glob.glob(os.path.join(out_dir, "*.gcode")))
     if not found and os.path.isfile(three_mf):
@@ -111,9 +127,23 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900):
                     shutil.copyfileobj(src, dst)
                 found = [os.path.join(out_dir, "plate_1.gcode")]
     if not found:
-        raise RuntimeError(_tail(run))
+        why = result_error(out_dir)
+        raise RuntimeError((why + " — " if why else "") + _tail(run))
     shutil.copyfile(found[0], gcode)
     return exe, used
+
+
+def result_error(out_dir):
+    """The slicer's own word on a failed slice: OrcaSlicer and Bambu Studio
+    write result.json beside the plates, with an error string."""
+    try:
+        with open(os.path.join(out_dir, "result.json"), encoding="utf-8") as f:
+            r = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if r.get("return_code") in (0, None) and not r.get("error_string"):
+        return None
+    return f"{r.get('error_string') or 'failed'} (code {r.get('return_code')})"
 
 
 def nozzle_volume_types(machine_path):

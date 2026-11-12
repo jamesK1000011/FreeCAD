@@ -104,5 +104,21 @@ class SliceWith(unittest.TestCase):
             self.assertIn("M601 ; Insert the 10x3 magnet", f.read())
 
 
+    def test_orcaslicer(self):
+        if not slicers.find("orcaslicer"):
+            self.skipTest("no OrcaSlicer on this machine (the bake-off unpacks its AppImage)")
+        import Part
+
+        o = self.session.doc.addObject("Part::Feature", "Disc")
+        o.Label = "Disc"
+        o.Shape = Part.makeBox(30, 20, 6)
+        self.session.doc.recompute()
+        self.call("setup", {"action": "add", "type": "print", "bodies": ["Disc"], "settings": {"layerHeight": 0.2}})
+        err, r = self.call("slice_with", {"body": "Disc", "slicer": "orcaslicer", "project": True, "name": "Disc-orca"})
+        self.assertFalse(err, r)
+        print("\nslice_with orcaslicer:", json.dumps(r))
+        self.assertGreater(r["layers"], 3)
+        self.assertTrue(os.path.getsize(r["project"]) > 0)
+
 if __name__ == "__main__":
     unittest.main()

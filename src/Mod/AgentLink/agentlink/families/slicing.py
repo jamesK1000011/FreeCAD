@@ -40,7 +40,8 @@ def tools(session):
     s = session
 
     def slice_with(a):
-        o = s.body(a.get("body"))
+        others = [s.body(b) for b in (a.get("bodies") or [])]
+        o = others.pop(0) if others and not a.get("body") else s.body(a.get("body"))
         name = (a.get("slicer") or "prusaslicer").lower()
         if name not in slicers.NAMES:
             raise ToolError("invalid_input", f"slicer: one of {', '.join(slicers.NAMES)}.")
@@ -74,20 +75,35 @@ def tools(session):
         base = os.path.join(s.out_dir, a.get("name") or f"{o.Label.replace(' ', '_')}-{name}")
         stl, gcode = base + ".stl", base + ".gcode"
         MeshPart.meshFromShape(Shape=o.Shape, LinearDeflection=0.01, AngularDeflection=0.0873, Relative=False).write(stl)
+        stls = [stl]
+        for k, b in enumerate(x for x in others if x is not o):
+            p = f"{base}-{k + 2}.stl"
+            MeshPart.meshFromShape(Shape=b.Shape, LinearDeflection=0.01, AngularDeflection=0.0873, Relative=False).write(p)
+            stls.append(p)
+        options = {k: bool(a.get(k)) for k in ("orient", "arrange") if a.get(k)}
+        if a.get("project"):
+            options["project"] = base + ".3mf"
+        if (options or len(stls) > 1) and name == "prusaslicer":
+            raise ToolError("invalid_input", "orient, arrange, project and several bodies are OrcaSlicer's and Bambu Studio's: slicer orcaslicer.")
         try:
-            exe, used = slicers.slice_with(name, stl, gcode, settings, profiles)
+            exe, used = slicers.slice_with(name, stls if len(stls) > 1 else stl, gcode, settings, profiles, options=options)
         except FileNotFoundError as e:
             raise ToolError("unavailable", str(e))
         except RuntimeError as e:
             raise ToolError("failed", str(e))
         read = slicers.read_gcode(gcode)
-        want = pauses_for(s, o, setup)
+        # Pauses are a body's own heights: with several on a plate (and moved by orient), none written.
+        want = pauses_for(s, o, setup) if len(stls) == 1 and not a.get("orient") else []
         cmd = a.get("pauseCommand") or slicers.PAUSE[name]
         done = slicers.insert_pauses(gcode, want, cmd) if want else []
         out = {
             "body": o.Label, "slicer": name, "exe": os.path.basename(exe), "profiles": f"the person's presets: {preset_note}" if preset_note else used, "gcode": gcode, "bytes": os.path.getsize(gcode),
             **read, "setup": f"{setup['name']} ({setup['id']})",
         }
+        if len(stls) > 1:
+            out["bodies"] = [o.Label] + [b.Label for b in others if b is not o]
+        if options.get("project") and os.path.exists(options["project"]):
+            out["project"] = options["project"]
         if want:
             out["pauses"] = done
             out["pauseCommand"] = cmd
@@ -177,8 +193,9 @@ def tools(session):
         ),
         Tool(
             "slice_with",
-            "Slice a body in a print setup with slicer prusaslicer (default), orcaslicer or bambustudio, by its command line: profiles { machine, process, filament } JSON paths for OrcaSlicer and Bambu Studio (minimal ones written from the setup when left out), { config } an .ini for PrusaSlicer. Gives time, filament and layers, and writes in a pause after the layer over each encased part (hw_embed, gen_make magnets; M601, Bambu M400 U1, or pauseCommand). Trap: a slicer not on this computer is refused unavailable, naming those present (AGENTLINK_ORCASLICER, AGENTLINK_BAMBUSTUDIO set their paths).",
-            obj({"body": {"type": "string"}, "slicer": {"type": "string", "enum": list(slicers.NAMES)}, "profiles": {"type": "object"}, "pauseCommand": {"type": "string"}, "name": {"type": "string"}}),
+            "Slice a body in a print setup with slicer prusaslicer (default), orcaslicer or bambustudio, by its command line: profiles { machine, process, filament } JSON paths for OrcaSlicer and Bambu Studio (minimal ones written from the setup when left out), { config } an .ini for PrusaSlicer. Gives time, filament and layers, and writes in a pause after the layer over each encased part (hw_embed, gen_make magnets; M601, Bambu M400 U1, or pauseCommand). OrcaSlicer and Bambu Studio also take bodies (several on one plate, arranged), orient and arrange (the slicer's own), and project: true (the sliced plate as a .3mf its window opens). Trap: a slicer not on this computer is refused unavailable, naming those present (AGENTLINK_ORCASLICER, AGENTLINK_BAMBUSTUDIO set their paths).",
+            obj({"body": {"type": "string"}, "bodies": {"type": "array", "items": {"type": "string"}}, "slicer": {"type": "string", "enum": list(slicers.NAMES)}, "profiles": {"type": "object"}, "pauseCommand": {"type": "string"}, "name": {"type": "string"},
+                 "orient": {"type": "boolean"}, "arrange": {"type": "boolean"}, "project": {"type": "boolean"}}),
             slice_with,
         ),
     ]
