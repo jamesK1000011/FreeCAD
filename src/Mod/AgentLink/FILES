@@ -11,6 +11,13 @@ agentlink/boxes.py
 agentlink/ccx_io.py
 agentlink/cells.py
 agentlink/charts.py
+agentlink/code/__init__.py
+agentlink/code/beamfem.py
+agentlink/code/engine.py
+agentlink/code/findings.py
+agentlink/code/framing.py
+agentlink/code/packs.py
+agentlink/code/packs_shipped/example.demo.json
 agentlink/data/slicer-minimal.json
 agentlink/embeds.py
 agentlink/facepick.py
@@ -20,6 +27,7 @@ agentlink/families/assembly_more.py
 agentlink/families/bim.py
 agentlink/families/bim_more.py
 agentlink/families/cam.py
+agentlink/families/code.py
 agentlink/families/cut.py
 agentlink/families/doc.py
 agentlink/families/draft.py
@@ -130,6 +138,7 @@ tests/test_cam.py
 tests/test_ccx_io_more.py
 tests/test_cells.py
 tests/test_charts.py
+tests/test_code_engine.py
 tests/test_cut.py
 tests/test_doc.py
 tests/test_draft.py
