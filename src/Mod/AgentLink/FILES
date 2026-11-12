@@ -68,6 +68,7 @@ agentlink/families/view.py
 agentlink/fits_hw.py
 agentlink/fitting.py
 agentlink/flat2d.py
+agentlink/frame.py
 agentlink/gdt.py
 agentlink/geometry.py
 agentlink/gridfinity.py
