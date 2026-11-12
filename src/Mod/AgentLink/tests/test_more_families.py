@@ -219,7 +219,8 @@ class MoreFamilies(Base):
         self.assertEqual(sol["solids"], 1)
         r = self.ok("part_fix", {"body": "Pm rebuilt", "op": "reverse"})
         self.assertLess(r["volume_mm3"], 0)
-        dt = self.ok("part_datum", {"kind": "csys", "to": "Pm plain.Face6", "at": [5, 0, 0]})
+        self.box("Pm datum box", [10, 10, 20], [600, 0, 0])
+        dt = self.ok("part_datum", {"kind": "csys", "to": "Pm datum box.Face6", "at": [5, 0, 0]})
         self.assertEqual(dt["placement"]["at"][2], 20.0)
 
     def test_mesh_more(self):
