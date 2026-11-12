@@ -41,10 +41,10 @@ def present():
     return {n: bool(find(n)) for n in NAMES}
 
 
-def _run(args, timeout):
-    run = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+def _run(args, timeout, cwd=None):
+    run = subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     if run.returncode != 0 and not os.environ.get("DISPLAY") and shutil.which("xvfb-run"):
-        run = subprocess.run(["xvfb-run", "-a"] + args, capture_output=True, text=True, timeout=timeout)
+        run = subprocess.run(["xvfb-run", "-a"] + args, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     return run
 
 
@@ -100,7 +100,7 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
         if not os.path.isfile(profiles[k]):
             raise RuntimeError(f"profiles.{k}: {profiles[k]} is not a file.")
     three_mf = options.get("project") or os.path.join(out_dir, "out.3mf")
-    for old in glob.glob(os.path.join(out_dir, "*.gcode")) + [os.path.join(out_dir, "result.json")]:
+    for old in glob.glob(os.path.join(out_dir, "*.gcode")) + [os.path.join(out_dir, "result.json"), os.path.join(out_dir, "out.3mf")]:
         if os.path.exists(old):
             os.remove(old)
     args = [exe, "--slice", "0", "--load-settings", f"{profiles['machine']};{profiles['process']}", "--load-filaments", ";".join([profiles["filament"]] * len(stls)), "--outputdir", out_dir]
@@ -109,7 +109,8 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
     if options.get("arrange") or len(stls) > 1:
         args += ["--arrange", "1"]
     if name == "bambustudio" or options.get("project"):
-        args += ["--export-3mf", three_mf]
+        # A bare name: OrcaSlicer puts the output folder in front of any path.
+        args += ["--export-3mf", "out.3mf"]
     if name == "bambustudio":
         kinds = nozzle_volume_types(profiles["machine"])
         if kinds:
@@ -117,7 +118,10 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
             # command line reads past the end of its extruder list.
             args += ["--nozzle-volume-type", ",".join(kinds), "--filament-map-mode", "Manual", "--filament-map", "1"]
     args += stls
-    run = _run(args, timeout)
+    run = _run(args, timeout, cwd=out_dir)
+    made = os.path.join(out_dir, "out.3mf")
+    if options.get("project") and os.path.isfile(made) and os.path.abspath(made) != os.path.abspath(three_mf):
+        shutil.move(made, three_mf)
     found = sorted(glob.glob(os.path.join(out_dir, "*.gcode")))
     if not found and os.path.isfile(three_mf):
         with zipfile.ZipFile(three_mf) as z:
