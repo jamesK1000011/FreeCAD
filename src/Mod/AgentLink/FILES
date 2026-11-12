@@ -146,6 +146,7 @@ tests/test_inspection.py
 tests/test_iso286.py
 tests/test_mass.py
 tests/test_material.py
+tests/test_mcp_contract.py
 tests/test_measure.py
 tests/test_meshdist.py
 tests/test_meshformats.py

@@ -173,7 +173,16 @@ class Server:
         args = params.get("arguments") or {}
         tool = self.tools.get(name)
         if tool is None:
-            return self.refusal("not_found", f"{name}: no such tool — the tools: {', '.join(self.tools)}.")
+            import difflib
+
+            near = difflib.get_close_matches(str(name), list(self.tools), n=5, cutoff=0.5)
+            prefix = str(name).split("_")[0] + "_"
+            same = [n for n in self.tools if n.startswith(prefix)][:12] if not near else []
+            if len(self.tools) <= 30:
+                hint = f"the tools: {', '.join(self.tools)}"
+            else:
+                hint = f"near: {', '.join(near)}" if near else (f"its family: {', '.join(same)}" if same else "tool_groups lists them all")
+            return self.refusal("not_found", f"{name}: no such tool — {hint}.")
         t0 = time.time()
         try:
             check_input(tool.schema, args)
