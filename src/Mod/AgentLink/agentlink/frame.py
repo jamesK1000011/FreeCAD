@@ -191,7 +191,7 @@ def build(members, supports, loads, gravity=None, n=8, tol=1.0):
                     held_rot.add((node, ax))
                     sup_lines.append(f"{node}, {4 + ax}, {4 + ax}")
     out = ["*NODE, NSET=NALL"] + [f"{i}, {p[0]:.6f}, {p[1]:.6f}, {p[2]:.6f}" for i, p in sorted(node_xyz.items())]
-    out += ["*ELEMENT, TYPE=B32, ELSET=EALL"] + lines_el
+    out += ["*ELEMENT, TYPE=B32R, ELSET=EALL"] + lines_el
     for (E, nu, rho), name in mats.items():
         out += [f"*MATERIAL, NAME={name}", "*ELASTIC", f"{E:.6g}, {nu:.6g}"] + (["*DENSITY", f"{rho * 1e-12:.6g}"] if rho else [])
     out += lines_sec
@@ -204,7 +204,7 @@ def build(members, supports, loads, gravity=None, n=8, tol=1.0):
     for name, _, _, _ in sup_sets:
         out += [f"*NODE PRINT, NSET={name}, TOTALS=ONLY", "RF"]
     out += ["*END STEP", ""]
-    return "\n".join(out), {"members": mem, "supports": sup_sets, "applied": applied}
+    return "\n".join(out), {"members": mem, "supports": sup_sets, "applied": applied, "nodal": loads_c}
 
 
 def read_coords(frd):
@@ -226,7 +226,7 @@ def read_reactions(dat):
     out, cur = {}, None
     for line in dat.splitlines():
         low = line.lower()
-        if "forces (fx,fy,fz)" in low and "set" in low:
+        if "force (fx,fy,fz)" in low and "set" in low:
             cur = line.split("set")[-1].split()[0].strip().upper()
             continue
         if cur and line.strip():
@@ -298,5 +298,11 @@ def solve(ccx, workdir, members, supports, loads, gravity=None, n=8, timeout=300
         rows.append({"member": m["name"], "length": round(m["L"], 1), "axialBendingMPa": [round(min(sig), 3), round(max(sig), 3)] if sig else None,
                      "vonMisesMPa": round(max(vm), 3) if vm else None, "deflectionMm": round(rel, 3), "spanOverDeflection": round(m["L"] / rel) if rel > 1e-9 else None,
                      "movesMm": round(tot, 3)})
-    sups = [{"at": [round(c, 2) for c in p], "kind": kind, "reactionN": [round(x, 2) for x in reac.get(name.upper(), [])]} for name, _, p, kind in book["supports"]]
+    # what the support gives: CalculiX's reaction, plus the load laid right on
+    # the supported node (it goes straight into the support)
+    sups = []
+    for name, node, p, kind in book["supports"]:
+        rf = reac.get(name.upper())
+        on = book["nodal"].get(node, [0.0, 0.0, 0.0])
+        sups.append({"at": [round(c, 2) for c in p], "kind": kind, "reactionN": [round(rf[c] - on[c], 2) for c in range(3)] if rf else None})
     return {"members": rows, "supports": sups, "files": workdir}
