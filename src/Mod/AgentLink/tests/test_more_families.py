@@ -270,6 +270,11 @@ class MoreFamilies(Base):
         out = self.ok("td_export", {"page": "Tc page", "formats": ["svg"], "name": "tc"})
         with open(out["files"]["svg"]["path"]) as f:
             self.assertIn("Ra 0.8", f.read())
+        # the page goes, so later tests find one page as before
+        page = next(o for o in self.session.doc.Objects if o.Label == "Tc page")
+        for v in list(page.Views):
+            self.session.doc.removeObject(v.Name)
+        self.session.doc.removeObject(page.Name)
 
     def test_cam_edit(self):
         self.have("cam_edit")

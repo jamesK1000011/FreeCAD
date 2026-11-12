@@ -26,12 +26,16 @@ def doc(s):
     return s.doc
 
 
-def plane_face(spec, size):
+def plane_face(spec, size, near=None):
+    """A square of the plane through at with that normal, large enough to
+    cross the body, centred where the body's centre falls on it."""
     n = picks.direction(spec.get("normal", [0, 0, 1]), "plane.normal")
     at = picks.vec3(spec.get("at", [0, 0, 0]), "plane.at")
     pl = Part.makePlane(size * 2, size * 2, V(), n)
     c = pl.BoundBox.Center
-    pl.translate(at - c - n * n.dot(at - c))
+    target = near if near is not None else at
+    target = target - n * n.dot(target - at)  # onto the plane
+    pl.translate(target - c)
     return pl
 
 
@@ -82,7 +86,7 @@ def tools(s):
         b = picks.shaped(doc(s), a.get("body"), "body")
         size = b.Shape.BoundBox.DiagonalLength
         if a.get("plane") is not None:
-            other = plane_face(a["plane"], size)
+            other = plane_face(a["plane"], size, b.Shape.BoundBox.Center)
             tool_o = None
         elif a.get("with"):
             tool_o = picks.shaped(doc(s), a["with"], "with")
