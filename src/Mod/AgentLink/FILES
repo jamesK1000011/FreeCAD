@@ -126,6 +126,7 @@ agentlink/printers.py
 agentlink/printmass.py
 agentlink/protocol.py
 agentlink/render.py
+agentlink/restart_mark.py
 agentlink/server.py
 agentlink/sheetfile.py
 agentlink/sheets.py
