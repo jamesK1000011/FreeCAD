@@ -326,11 +326,16 @@ def tools(s):
             target = picks.find(doc(s), label)
             prop = "AttachmentSupport" if hasattr(o, "AttachmentSupport") else "Support"
             setattr(o, prop, [(target, sub or "")])
-            o.MapMode = a.get("mode") or ({"Face": "FlatFace", "Edge": "ObjectXY" if kind == "csys" else "TwoPointLine", "Vertex": "Translate"}.get((sub or "Face")[:4].rstrip("0123456789"), "ObjectXY") if sub else "ObjectXY")
-            if sub and sub.startswith("Edge") and kind == "plane":
-                o.MapMode = "NormalToEdge"
-            if sub and sub.startswith("Vertex"):
-                o.MapMode = "Translate"
+            mode = a.get("mode")
+            if not mode:
+                try:
+                    eng = Part.AttachEngine(o.AttacherType)
+                    eng.References = [(target, sub or "")]
+                    mode = eng.suggestMapModes().get("bestFitMode")
+                except Exception:
+                    mode = None
+            if mode and mode != "Deactivated":
+                o.MapMode = mode
             o.AttachmentOffset = pl
         o.Label = s.unique(a.get("name") or f"Datum {kind}")
         doc(s).recompute()
