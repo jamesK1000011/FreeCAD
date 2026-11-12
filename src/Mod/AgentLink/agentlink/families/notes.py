@@ -20,7 +20,7 @@ from ..tools import obj
 GROUP = "notes"
 INFO = "Notes pinned to the parts between the person and the agent; the build played back step by step, a picture a step (after Stefan Hermann's ScanRuler)."
 
-KEY_PARAMS = ("Length", "Depth", "Angle", "Radius", "Size", "Occurrences", "Offset", "Value")
+KEY_PARAMS = ("Length", "Depth", "Radius", "Size", "Occurrences", "Angle", "Offset", "Value")
 
 
 # ---- notes -------------------------------------------------------------------------------
