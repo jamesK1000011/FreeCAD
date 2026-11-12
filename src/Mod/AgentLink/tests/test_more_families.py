@@ -342,3 +342,13 @@ if __name__ == "__main__":
         sp = self.ok("code_span", {"size": "2x8", "span": 3500, "spacing": 600, "use": "habitable_attic", "design": {"Fb": 6, "Fv": 1, "E": 9000}, "fem": True})
         if "deflection_mm" in sp["fem"]:
             self.assertLess(abs(sp["fem"]["difference"]["deflection"]), 0.05)
+
+    def test_code_sloped_room(self):
+        self.have("code_check")
+        self.ok("part_extrude", {"profile": {"points": [[0, 9000, 0], [4000, 9000, 0], [4000, 9000, 1000], [2000, 9000, 3000], [0, 9000, 1000]]}, "direction": [0, 5000, 0], "name": "Cs volume"})
+        self.ok("bim_space", {"base": "Cs volume", "name": "Cs loft"})
+        self.ok("code_project", {"jurisdiction": "XX", "date": "2026-11-12"})
+        self.ok("code_answer", {"subject": "Cs loft", "facts": {"use": "habitable_attic"}})
+        c = self.ok("code_check", {"subjects": ["Cs loft"], "tags": ["geometry"]})
+        f = next(x for x in c["findings"] if x["rule"] == "example.space.sloped")
+        self.assertAlmostEqual(f["share"], 0.6, delta=0.02)
