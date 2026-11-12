@@ -1310,7 +1310,9 @@ def tools(session):
             props["ThermalExpansionCoefficient"] = f"{float(c['alpha'])} 1/K"
         props["RelativePermittivity"] = str(float(c.get("permittivity", 1)))
         mo.Material = props
-        mo.References = [(o, "")]
+        if kind != "elmer":
+            # Elmer reads a material without references as every body's
+            mo.References = [(o, "")]
         an.addObject(mo)
         made.append(mo.Label)
         mesh = ObjectsFem.makeMeshGmsh(doc, "Mesh")
