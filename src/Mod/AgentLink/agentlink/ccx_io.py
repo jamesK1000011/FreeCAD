@@ -328,7 +328,7 @@ def read_temperatures(frd):
 
 # ---- several parts: each its own material, tied or in contact -------------------------
 
-def parts_deck(text, parts, ties=(), contacts=(), contact_slope=None, friction=0.0):
+def parts_deck(text, parts, ties=(), contacts=(), contact_slope=None, friction=0.0, contact_type="NODE TO SURFACE"):
     """A one-material deck (deck()) made a several-part one: parts
     [(elset, element ids, {E, nu, rho, alpha?})] each with its own
     material and section; ties and contacts [(name, slave [(e, f)], master
@@ -365,7 +365,7 @@ def parts_deck(text, parts, ties=(), contacts=(), contact_slope=None, friction=0
             if kind == "tie":
                 defs += [f"*TIE, NAME={name}, ADJUST=NO", f"{name}S, {name}M"]
             else:
-                defs += [f"*CONTACT PAIR, INTERACTION=AGSI, TYPE=SURFACE TO SURFACE", f"{name}S, {name}M"]
+                defs += [f"*CONTACT PAIR, INTERACTION=AGSI, TYPE={contact_type}", f"{name}S, {name}M"]
     if contacts:
         defs += ["*SURFACE INTERACTION, NAME=AGSI", "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR", f"{float(contact_slope or 1e4):.6g}"]
         if friction:
