@@ -426,6 +426,75 @@ def tools(session):
         s.snapshot("object_rename")
         return {"name": o.Name, "from": old, "to": o.Label, "note": "Setups, specs and waivers kept by the old label are not renamed with it." if old != o.Label else ""}
 
+    def object_group(a):
+        d = s.doc
+        action = a.get("action", "add")
+        if action == "list":
+            out = []
+            for g in d.Objects:
+                if g.isDerivedFrom("App::DocumentObjectGroup") or g.TypeId in ("App::Part", "App::Link") or hasattr(g, "Group") and g.TypeId.startswith("App::"):
+                    row = {"group": g.Label, "type": g.TypeId}
+                    if hasattr(g, "Group"):
+                        row["holds"] = [x.Label for x in g.Group]
+                    if g.TypeId == "App::Link":
+                        lo = g.getLinkedObject(False) if hasattr(g, "getLinkedObject") else getattr(g, "LinkedObject", None)
+                        row["links"] = lo.Label if lo is not None else None
+                    out.append(row)
+            return {"groups": out}
+        if action == "link":
+            src = picks.find(d, a.get("object"))
+            n = int(a.get("count", 1))
+            made = []
+            for i in range(n):
+                ln = d.addObject("App::Link", "Link")
+                ln.setLink(src)
+                ln.Label = s.unique(a.get("name") or f"{src.Label} link")
+                step = a.get("step") or [0, 0, 0]
+                at = a.get("at") or [0, 0, 0]
+                ln.LinkPlacement = FreeCAD.Placement(FreeCAD.Vector(*[float(at[k]) + float(step[k]) * i for k in range(3)]), FreeCAD.Rotation())
+                made.append(ln.Label)
+            d.recompute()
+            s.snapshot("object_group")
+            return {"links": made, "of": src.Label, "note": "Links show the original where placed and follow its edits; they weigh nothing in the file."}
+        name = a.get("group")
+        if not name:
+            raise ToolError("invalid_input", "group: the group's name (made if new).")
+        g = next((x for x in d.Objects if x.Label == name and hasattr(x, "Group")), None)
+        kind = a.get("kind", "folder")
+        if g is None:
+            g = d.addObject("App::Part" if kind == "part" else "App::DocumentObjectGroup", "Group")
+            g.Label = s.unique(name, g)
+        objs = [picks.find(d, r) for r in (a.get("objects") or [])]
+        if action == "add":
+            for o in objs:
+                if o is g:
+                    continue
+                for p in o.InList:
+                    if hasattr(p, "Group") and p is not g and o in p.Group and (p.isDerivedFrom("App::DocumentObjectGroup") or p.TypeId == "App::Part"):
+                        p.removeObject(o)
+                g.addObject(o)
+        elif action == "remove":
+            for o in objs:
+                g.removeObject(o)
+        elif action == "dissolve":
+            for o in list(g.Group):
+                g.removeObject(o)
+            d.removeObject(g.Name)
+            d.recompute()
+            s.snapshot("object_group")
+            return {"dissolved": name}
+        else:
+            raise ToolError("invalid_input", "action: add | remove (objects to or from group) | dissolve | link (object, count, at, step) | list.")
+        if a.get("visible") is not None:
+            for o in g.Group:
+                try:
+                    o.Visibility = bool(a["visible"])
+                except Exception:
+                    pass
+        d.recompute()
+        s.snapshot("object_group")
+        return {"group": g.Label, "type": g.TypeId, "holds": [x.Label for x in g.Group]}
+
     def recompute(a):
         if a.get("force"):
             for o in s.doc.Objects:
@@ -633,6 +702,9 @@ def tools(session):
         Tool("object_set", "Set properties of an object by name: values { Length: 20, Placement: { at, axis, angle }, Refine: true, Base: \"Box\", Mode: \"…\" } — each converted to its type (numbers in mm and degrees, or strings with a unit \"1 in\"); enumerations checked; read-only ones refused. Recomputes; refused and undone when that fails. Trap: a plain shape (Part::Feature from a boolean) has no sizes to set — only placement.", obj({"object": objref, "values": {"type": "object"}}, ["object", "values"]), object_set, changes=True),
         Tool("object_delete", "Delete objects (objects: names or labels). Refused while another object uses one (force: true deletes it anyway and the user breaks); recomputes and lists any error.", obj({"objects": {}, "force": {"type": "boolean"}}, ["objects"]), object_delete, changes=True),
         Tool("object_rename", "Give an object a new label (its internal name stays). Trap: setups, specs and waivers keep the old label.", obj({"object": objref, "label": {"type": "string"}}, ["object", "label"]), object_rename, changes=True),
+        Tool("object_group", "Organise the document: action add | remove (objects into or out of group — made if new; kind folder (a plain group) | part (an App::Part container that moves as one)) | dissolve (the group, its objects kept) | link (count App::Link copies of object at, step [dx,dy,dz] apart — light copies that follow it) | list; visible: false hides a whole group's objects.",
+             obj({"action": {"type": "string", "enum": ["add", "remove", "dissolve", "link", "list"]}, "group": {"type": "string"}, "kind": {"type": "string", "enum": ["folder", "part"]}, "objects": {"type": "array", "items": {"type": "string"}},
+                  "object": {"type": "string"}, "count": {"type": "integer"}, "at": {"type": "array"}, "step": {"type": "array"}, "visible": {"type": "boolean"}, "name": {"type": "string"}}), object_group, changes=True),
         Tool("recompute", "Recompute the document (force: true recomputes everything) and list each object that failed, with FreeCAD's reason.", obj({"force": {"type": "boolean"}}), recompute, changes=True),
         Tool("import_file", "Bring a file into the document: STEP, IGES, BREP as bodies (split: true makes a body of each solid); STL, OBJ, 3MF, PLY, OFF, AMF — and glTF/GLB, Collada, VRML 2, 3DS, every mesh node flattened into one in mm, Z up (units and up override what the format says; read says what was taken) — as a body made of its triangles when closed and up to 20000 triangles (solid: false keeps a mesh, solid: true forces a body up to 200000); DXF and SVG as Draft geometry; JT where this FreeCAD has its reader; PNG, JPG, BMP as an image plane width mm wide on XY, to trace over. PDF, DWG, IFC need the FreeCAD window; FBX: export it as glTF. .FCStd: doc_open.", obj({"path": {"type": "string"}, "name": {"type": "string"}, "split": {"type": "boolean"}, "solid": {"type": "boolean"}, "units": {"type": "string", "enum": ["mm", "cm", "m", "in"]}, "up": {"type": "string", "enum": ["x", "y", "z"]}, "width": {"type": "number"}}, ["path"]), import_file, changes=True),
         Tool("export", "Write objects (the one body when left out; several go as one compound) and read it back (verify). Solids: STEP, IGES, BREP. One mesh: STL, OBJ, 3MF, PLY, OFF, VRML (wrl), X3D. A scene, a mesh per object with colors {label: \"#rrggbb\"}: glTF (glb, gltf), Collada (dae) — metres, Y up. 2D: DXF (R12) or SVG of a view (top | bottom | front | back | right | left | iso; hidden: true adds hidden lines on their own layer) or of a section at z mm (section) — circles and arcs kept as such, for laser and plasma cutting. format, or from path's extension; tolerance: the chord error, 0.01 mm.", obj({"objects": {}, "format": {"type": "string", "enum": list(EXPORTS)}, "path": {"type": "string"}, "tolerance": {"type": "number"}, "colors": {"type": "object"}, "view": {"type": "string", "enum": list(VIEWS)}, "hidden": {"type": "boolean"}, "section": {"type": "number"}}), export),
