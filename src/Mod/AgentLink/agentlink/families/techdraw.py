@@ -21,6 +21,7 @@ import TechDraw  # noqa: F401 — the family stands on TechDraw; left out withou
 
 from .. import gdt, iso286, sheets
 from ..protocol import Tool, ToolError
+from . import picks
 
 GROUP = "techdraw"
 INFO = "TechDraw pages piece by piece: template and title block, views, projection groups, sections, details, dimensions on real edges with tolerances and fits, GD&T frames, datums, notes, balloons, tables, export to SVG, PDF and DXF."
@@ -536,6 +537,7 @@ def draw_arch(sh, v, H):
 MARKS_PROP = "AgentLinkCenterMarks"
 HATCH_PROP = "AgentLinkHatch"
 WELD_PROP = "AgentLinkWeld"
+COSMETIC_PROP = "AgentLinkCosmetic"
 
 
 def paper_polys(v, faces, X, Y, H):
@@ -612,6 +614,27 @@ def circle_centres(v):
     return out
 
 
+def shifted_svg(fig):
+    """A figure drawn about a base point (origin = its top-left from the
+    base) as an svg whose own top-left is (0, 0)."""
+    ox, oy = fig.origin
+    g = gdt.Figure()
+    g.lines = [([(x - ox, y - oy) for x, y in pts], c) for pts, c in fig.lines]
+    g.circles = [(cx - ox, cy - oy, r) for cx, cy, r in fig.circles]
+    g.texts = [(x - ox, y - oy, h, s_, an) for x, y, h, s_, an in fig.texts]
+    g.filled = [[(x - ox, y - oy) for x, y in pts] for pts in fig.filled]
+    g.w, g.h = fig.w, fig.h
+    return g.svg()
+
+
+ISO_COARSE = {1.6: 0.35, 2: 0.4, 2.5: 0.45, 3: 0.5, 4: 0.7, 5: 0.8, 6: 1.0, 8: 1.25, 10: 1.5, 12: 1.75, 14: 2.0, 16: 2.0, 20: 2.5, 24: 3.0, 30: 3.5, 36: 4.0, 42: 4.5, 48: 5.0}
+
+
+def coarse_pitch(d):
+    k = min(ISO_COARSE, key=lambda x: abs(x - d))
+    return ISO_COARSE[k] if abs(k - d) < 0.6 else max(0.25, round(d * 0.125, 2))
+
+
 def abs_xy(v):
     """A view's centre on the page (mm, y up), through a group it sits in."""
     x, y = float(v.X), float(v.Y)
@@ -640,6 +663,11 @@ def draw_item(doc, sh, v, H):
                 sh.line([p, q], "thin")
             for poly in polys:
                 sh.line(poly, "visible", closed=True)
+        if COSMETIC_PROP in v.PropertiesList and getattr(v, COSMETIC_PROP):
+            for c in json.loads(getattr(v, COSMETIC_PROP)):
+                pts = [(X + x, H - Y + y) for x, y in c["pts"]]
+                if len(pts) >= 2:
+                    sh.line(pts, c.get("style", "thin"), closed=bool(c.get("closed")))
         ext = float(getattr(v, MARKS_PROP, 0) or 0) if MARKS_PROP in v.PropertiesList else 0
         if ext > 0:
             for c, r in circle_centres(v):
@@ -687,9 +715,15 @@ def draw_item(doc, sh, v, H):
         if not rows:
             raise ValueError("a symbol not made by these tools is left out of the file")
         data = json.loads(rows)
-        fig = gdt.frame(data["rows"], data.get("h", 3.5)) if data.get("kind") == "frame" else gdt.datum(data["letter"], data.get("h", 3.5), data.get("side", "up"))
+        if data.get("kind") == "frame":
+            fig = gdt.frame(data["rows"], data.get("h", 3.5))
+        elif data.get("kind") == "finish":
+            fig = gdt.finish(data.get("ra", ""), data.get("removal", "required"), data.get("process", ""), data.get("lay", ""), data.get("allowance", ""), data.get("h", 3.5))
+        else:
+            fig = gdt.datum(data["letter"], data.get("h", 3.5), data.get("side", "up"))
         X, Y = abs_xy(v)
-        ox, oy = X - fig.w / 2, H - Y - fig.h / 2
+        org = getattr(fig, "origin", (0.0, 0.0))
+        ox, oy = X - fig.w / 2 - org[0], H - Y - fig.h / 2 - org[1]
         for pts, closed, filled in fig.polylines():
             sh.line([(ox + x, oy + y) for x, y in pts], "thin", closed=closed, filled=filled)
         for x, y, h, s, anchor in fig.texts:
@@ -1612,7 +1646,7 @@ def tools(session):
         sym = doc().addObject("TechDraw::DrawViewSymbol", "Symbol")
         page.addView(sym)
         sym.Label = s.unique(label)
-        sym.Symbol = fig.svg()
+        sym.Symbol = fig.svg() if not hasattr(fig, "origin") else shifted_svg(fig)
         sym.addProperty("App::PropertyString", GDT_PROP, "AgentLink", "What this symbol is, for export and editing")
         setattr(sym, GDT_PROP, json.dumps(data))
         sym.X, sym.Y = at
@@ -1796,6 +1830,193 @@ def tools(session):
         return out
 
     ref_schema = {"type": ["string", "object"]}
+    # ---- cosmetic geometry, leaders, finishes, areas ----
+
+    def paper_of3d(v, p3):
+        fr = frame_of(v, frames)
+        if fr is None:
+            raise ToolError("invalid_state", f"{v.Label} has no geometry yet to place against.")
+        return to_paper(v, frames, to_view(fr, v, vec(p3, "point")))
+
+    def edge_paper(v, r, want="any"):
+        n = resolve_ref(v, r, frames, want)
+        if not n.startswith("Edge"):
+            raise bad(f"{r}: an edge of the view (td_geometry lists them).")
+        e = edges_of(v)[int(n[4:])]
+        return n, e
+
+    def td_cosmetic(a):
+        v = view_of(doc(), a.get("view"))
+        if not edges_of(v):
+            recompute([v])
+        items = a.get("items") or []
+        prims = json.loads(getattr(v, COSMETIC_PROP)) if COSMETIC_PROP in v.PropertiesList and getattr(v, COSMETIC_PROP) and not a.get("clear") else []
+        made = []
+        k = view_scale(v) / gscale(v, frames)
+        for it in items:
+            kind = it.get("kind")
+            style = it.get("style", "center" if kind == "centerline" else "thin")
+            if style not in ("thin", "visible", "hidden", "center"):
+                raise bad("style: thin | visible | hidden | center.")
+            if kind == "line":
+                p, q = paper_of3d(v, it.get("from")), paper_of3d(v, it.get("to"))
+                prims.append({"pts": [p, q], "style": style})
+                try:
+                    v.makeCosmeticLine3D(vec(it["from"], "from"), vec(it["to"], "to"))
+                except Exception:
+                    pass
+                made.append({"kind": "line", "length_mm": num(math.hypot(q[0] - p[0], q[1] - p[1]) / view_scale(v), 3)})
+            elif kind == "circle":
+                c = paper_of3d(v, it.get("center"))
+                r = float(it.get("radius", 0)) * view_scale(v)
+                if r <= 0:
+                    raise bad("circle: radius mm on the part.")
+                prims.append({"pts": [(c[0] + r * math.cos(2 * math.pi * i / 48), c[1] + r * math.sin(2 * math.pi * i / 48)) for i in range(48)], "style": style, "closed": True})
+                made.append({"kind": "circle", "radius": float(it["radius"])})
+            elif kind == "centerline":
+                refs = it.get("edges") or []
+                if len(refs) != 2:
+                    raise bad("centerline: edges [two lines of the view] (a shaft's or hole's sides).")
+                (_, e1), (_, e2) = edge_paper(v, refs[0]), edge_paper(v, refs[1])
+                a1, b1 = [(p.x * k, p.y * k) for p in (e1.Vertexes[0].Point, e1.Vertexes[-1].Point)]
+                a2, b2 = [(p.x * k, p.y * k) for p in (e2.Vertexes[0].Point, e2.Vertexes[-1].Point)]
+                if (a1[0] - b1[0]) * (a2[0] - b2[0]) + (a1[1] - b1[1]) * (a2[1] - b2[1]) < 0:
+                    a2, b2 = b2, a2
+                m0 = ((a1[0] + a2[0]) / 2, (a1[1] + a2[1]) / 2)
+                m1 = ((b1[0] + b2[0]) / 2, (b1[1] + b2[1]) / 2)
+                d = math.hypot(m1[0] - m0[0], m1[1] - m0[1]) or 1
+                ext = float(it.get("extend", 3))
+                ux, uy = (m1[0] - m0[0]) / d, (m1[1] - m0[1]) / d
+                prims.append({"pts": [(m0[0] - ux * ext, m0[1] - uy * ext), (m1[0] + ux * ext, m1[1] + uy * ext)], "style": "center"})
+                try:
+                    v.makeCenterLine([resolve_ref(v, refs[0], frames), resolve_ref(v, refs[1], frames)], 1)
+                except Exception:
+                    pass
+                made.append({"kind": "centerline", "length_mm": num((d + 2 * ext) / view_scale(v), 2)})
+            elif kind == "thread":
+                internal = bool(it.get("internal", False))
+                refs = it.get("edges") or ([it["circle"]] if it.get("circle") else [])
+                if len(refs) == 1:
+                    n, e = edge_paper(v, refs[0])
+                    cu = getattr(e, "Curve", None)
+                    if not hasattr(cu, "Radius"):
+                        raise bad("thread: circle — a round edge seen end-on (a hole or shaft from its end).")
+                    D = 2 * float(cu.Radius) * k / view_scale(v)  # part mm
+                    P = float(it.get("pitch") or coarse_pitch(D if not internal else D + 1.0825 * coarse_pitch(D)))
+                    h3 = 0.6134 * P
+                    loc = getattr(cu, "Location", None) or cu.Center
+                    c = (float(loc.x) * k, float(loc.y) * k)
+                    r = (D / 2 + (h3 if internal else -h3)) * view_scale(v)
+                    a0 = math.radians(10)
+                    prims.append({"pts": [(c[0] + r * math.cos(a0 + 1.5 * math.pi * i / 36), c[1] + r * math.sin(a0 + 1.5 * math.pi * i / 36)) for i in range(37)], "style": "thin"})
+                    made.append({"kind": "thread", "end": True, "diameter": num(D + (2 * h3 if internal else 0), 3), "pitch": P})
+                elif len(refs) == 2:
+                    (_, e1), (_, e2) = edge_paper(v, refs[0]), edge_paper(v, refs[1])
+                    A = [(p.x * k, p.y * k) for p in (e1.Vertexes[0].Point, e1.Vertexes[-1].Point)]
+                    B = [(p.x * k, p.y * k) for p in (e2.Vertexes[0].Point, e2.Vertexes[-1].Point)]
+                    ux, uy = A[1][0] - A[0][0], A[1][1] - A[0][1]
+                    L = math.hypot(ux, uy) or 1
+                    ux, uy = ux / L, uy / L
+                    nx, ny = -uy, ux
+                    gap = (B[0][0] - A[0][0]) * nx + (B[0][1] - A[0][1]) * ny  # signed, paper mm
+                    D = abs(gap) / view_scale(v)
+                    P = float(it.get("pitch") or coarse_pitch(D if not internal else D + 1.0825 * coarse_pitch(D)))
+                    h3 = 0.6134 * P * view_scale(v)
+                    sgn = 1 if gap > 0 else -1
+                    # an external thread's root is inside its outline; an internal one's crest outside the drilled hole
+                    off = h3 if not internal else -h3
+                    length = float(it["length"]) * view_scale(v) if it.get("length") else L
+                    for base, toward in ((A, sgn), (B, -sgn)):
+                        p0 = (base[0][0] + nx * off * toward, base[0][1] + ny * off * toward)
+                        prims.append({"pts": [p0, (p0[0] + ux * length, p0[1] + uy * length)], "style": "thin"})
+                    made.append({"kind": "thread", "end": False, "nominal": num(D + (2 * 0.6134 * P if internal else 0), 3), "pitch": P,
+                                 "note": f"M{num(D + (2 * 0.6134 * P if internal else 0), 1):g}x{P:g}"})
+                else:
+                    raise bad("thread: edges [two outline lines] (side view) or circle (end view).")
+            else:
+                raise bad("kind: line { from, to } | circle { center, radius } | centerline { edges } | thread { edges | circle, internal, pitch, length }.")
+        if COSMETIC_PROP not in v.PropertiesList:
+            v.addProperty("App::PropertyString", COSMETIC_PROP, "AgentLink", "Cosmetic lines drawn in the exported page (JSON, paper mm)")
+        setattr(v, COSMETIC_PROP, json.dumps(prims))
+        recompute()
+        return done("td_cosmetic", {"view": v.Label, "made": made, "total": len(prims)})
+
+    def td_leader(a):
+        v = view_of(doc(), a.get("view"))
+        page = page_holding(v)
+        if not edges_of(v):
+            recompute([v])
+        ref, p = ref_point(v, a.get("on"))
+        vx, vy = abs_xy(v)
+        at = place_xy(page, a.get("at"), (vx + p[0] + 20, vy - p[1] + 15))
+        ln = leader(v, p, at)
+        out = {"leader": ln.Name, "on": ref}
+        if a.get("text"):
+            n = doc().addObject("TechDraw::DrawViewAnnotation", "Note")
+            page.addView(n)
+            n.Text = str(a["text"]).split("\n")
+            n.TextSize = float(a.get("size", 3.5))
+            right = at[0] >= vx + p[0]
+            w = max(len(x) for x in n.Text) * n.TextSize * 0.55
+            n.X, n.Y = at[0] + (w / 2 + 1.5 if right else -w / 2 - 1.5), at[1] + n.TextSize * 0.35
+            out["note"] = n.Name
+        recompute()
+        return done("td_leader", out)
+
+    def td_finish(a):
+        v = view_of(doc(), a.get("view"))
+        page = page_holding(v)
+        data = {"kind": "finish", "ra": str(a.get("ra", "")), "removal": a.get("removal", "required"), "process": str(a.get("process", "")),
+                "lay": str(a.get("lay", "")), "allowance": str(a.get("allowance", "")), "h": float(a.get("height", 3.5))}
+        try:
+            fig = gdt.finish(data["ra"], data["removal"], data["process"], data["lay"], data["allowance"], data["h"])
+        except gdt.GdtError as e:
+            raise bad(str(e))
+        if not edges_of(v):
+            recompute([v])
+        if a.get("on") is None:
+            raise bad("on: the surface's edge in the view (\"Edge4\") — the symbol's point sits on it.")
+        ref, p = ref_point(v, a["on"])
+        vx, vy = abs_xy(v)
+        base = (vx + p[0], vy - p[1])
+        if a.get("at") is not None:
+            at = place_xy(page, a["at"], base)
+            ln = leader(v, p, at)
+            data["leader"] = ln.Name
+        else:
+            at = base
+        # the symbol's centre from its base point
+        cx = at[0] + fig.origin[0] + fig.w / 2
+        cy = at[1] - (fig.origin[1] + fig.h / 2)
+        data["on"] = ref
+        sym = symbol(page, fig, data, (cx, cy), "Surface finish")
+        recompute()
+        return done("td_finish", {"symbol": sym.Name, "on": ref, "ra": data["ra"], "removal": data["removal"], "at": [num(at[0], 2), num(at[1], 2)]})
+
+    def td_area(a):
+        v = view_of(doc(), a.get("view"))
+        page = page_holding(v)
+        label, sub, face = picks.resolve(s, a.get("face"))
+        if not sub or not sub.startswith("Face"):
+            raise bad("face: a face of the part (\"Body.Face3\") — its area is written.")
+        if not edges_of(v):
+            recompute([v])
+        p = paper_of3d(v, list(face.CenterOfMass))
+        vx, vy = abs_xy(v)
+        unit = a.get("unit", "mm2")
+        val = face.Area / {"mm2": 1, "cm2": 100, "m2": 1e6}.get(unit, 1)
+        text = a.get("format", "A = {value} {unit}").format(value=f"{val:.{int(a.get('decimals', 1))}f}", unit={"mm2": "mm²", "cm2": "cm²", "m2": "m²"}.get(unit, unit))
+        at = place_xy(page, a.get("at"), (vx + p[0] + 20, vy - p[1] + 15))
+        ln = leader(v, p, at)
+        n = doc().addObject("TechDraw::DrawViewAnnotation", "Note")
+        page.addView(n)
+        n.Text = [text]
+        n.TextSize = float(a.get("size", 3.5))
+        w = len(text) * n.TextSize * 0.55
+        n.X, n.Y = at[0] + w / 2 + 1.5, at[1] + n.TextSize * 0.35
+        recompute()
+        return done("td_area", {"face": f"{label}.{sub}", "area": num(val, 4), "unit": unit, "text": text, "leader": ln.Name, "note": n.Name})
+
     return [
         Tool("td_page", "TechDraw pages: action new { paper A4|A3|A2|A1|A0|Letter|ANSIB… , orientation landscape|portrait, standard iso|asme, blank, template (a path), projection first|third, scale, name } on the build's own templates; list; read (views and title-block fields); templates.",
              obj({"action": {"type": "string", "enum": ["new", "list", "read", "templates"]}, "page": {"type": "string"}, "paper": {"type": "string"}, "orientation": {"type": "string"}, "standard": {"type": "string"}, "blank": {"type": "boolean"},
@@ -1842,6 +2063,16 @@ def tools(session):
         Tool("td_table", "A spreadsheet's cells as a table on the page (a parts list, a revision table): sheet, range (default its used cells), size, at. It follows the sheet.",
              obj({"page": {"type": "string"}, "sheet": {"type": "string"}, "range": {"type": "string"}, "size": {"type": "number"}, "at": {"type": "array"}}), td_table, changes=True),
         Tool("td_list", "A page's views (with size and scale), dimensions (measured, text, tolerance), GD&T, other objects and title block. Changes nothing.", obj({"page": {"type": "string"}}), td_list),
+        Tool("td_cosmetic", "Cosmetic geometry on a view (kept with it, drawn in the export): items [{ kind line (from, to: points on the part) | circle (center on the part, radius mm) | centerline (edges: a shaft's or hole's two side lines; extend mm) | thread (edges: the two outline lines of a side view, or circle: the end view's round edge; internal: true for a tapped hole; pitch, ISO coarse by default; length mm) , style thin | visible | hidden | center }]; clear: true drops the earlier ones.",
+             obj({"view": {"type": "string"}, "items": {"type": "array", "items": {"type": "object"}}, "clear": {"type": "boolean"}}, ["view"]), td_cosmetic, changes=True),
+        Tool("td_leader", "A leader line from a feature of a view (on: a ref as td_balloon takes) to at [x, y] page mm, with text (\\n splits lines) at its end — a note pointing at something.",
+             obj({"view": {"type": "string"}, "on": {}, "at": {"type": "array"}, "text": {"type": "string"}, "size": {"type": "number"}}, ["view", "on"]), td_leader, changes=True),
+        Tool("td_finish", "A surface texture symbol (ISO 1302) on a surface's edge in a view: ra (\"1.6\" or \"Rz 6.3\"), removal required (machined) | prohibited | any, process (\"ground\"), lay = | perpendicular | crossed | multi | circular | radial | particulate, allowance mm; at [x, y] puts it off the part on a leader.",
+             obj({"view": {"type": "string"}, "on": {}, "ra": {"type": "string"}, "removal": {"type": "string", "enum": ["required", "prohibited", "any"]}, "process": {"type": "string"},
+                  "lay": {"type": "string"}, "allowance": {"type": "string"}, "height": {"type": "number"}, "at": {"type": "array"}}, ["view", "on"]), td_finish, changes=True),
+        Tool("td_area", "Write a face's area on the drawing with a leader to it: face (\"Body.Face3\" on the part), view, unit mm2 | cm2 | m2, decimals, format (\"A = {value} {unit}\"), at.",
+             obj({"view": {"type": "string"}, "face": {"type": "string"}, "unit": {"type": "string", "enum": ["mm2", "cm2", "m2"]}, "decimals": {"type": "integer"}, "format": {"type": "string"},
+                  "size": {"type": "number"}, "at": {"type": "array"}}, ["view", "face"]), td_area, changes=True),
         Tool("td_export", "Write a page out: formats [svg, pdf, dxf] (DXF by TechDraw; SVG and PDF drawn here from the same objects, no window needed), name. Files go to the out folder.",
              obj({"page": {"type": "string"}, "formats": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}), td_export),
     ]

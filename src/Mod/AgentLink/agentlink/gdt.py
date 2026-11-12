@@ -366,3 +366,45 @@ def weld(kind="fillet", size="", length="", side="arrow", all_around=False, fiel
         f.text(L + h * 1.3, h * 0.35, h, tail, "start")
     f.w, f.h = L + (h * 1.3 + text_w(tail, h) if tail else 0), h * 2.5
     return f
+
+
+LAYS = {"=": "=", "parallel": "=", "perpendicular": "⊥", "crossed": "X", "multi": "M", "circular": "C", "radial": "R", "particulate": "P"}
+
+
+def finish(ra="", removal="required", process="", lay="", allowance="", h=3.5):
+    """A surface texture symbol (ISO 1302 / 21920): the check mark with a
+    bar when material must be removed or a circle when it must not, the
+    roughness (Ra …) under the long leg's extension, the process above it,
+    the lay to the right. The base point (the surface) is the origin, the
+    figure's bottom; y grows down, so the figure runs up into negative y."""
+    if removal not in ("required", "prohibited", "any"):
+        raise GdtError("removal: required, prohibited or any")
+    if lay and lay not in LAYS:
+        raise GdtError(f"lay: {', '.join(LAYS)}")
+    f = Figure()
+    H1, H2 = 1.4 * h, 3.0 * h
+    t60 = math.tan(math.radians(60))
+    left = (-H1 / t60, -H1)
+    top = (H2 / t60, -H2)
+    f.line([left, (0, 0), top])
+    if removal == "required":
+        f.line([left, (H1 / t60, -H1)])
+    elif removal == "prohibited":
+        r = H1 / (2 * math.sin(math.radians(60))) * 0.55
+        f.circle(0, -H1 * 0.62, r)
+    text = str(ra) if ra else ""
+    if text and not any(text.startswith(k) for k in ("Ra", "Rz", "Rq", "Rt", "Rmax")):
+        text = f"Ra {text}"
+    width = max(text_w(text, h), text_w(str(process), h), h * 3) + h
+    f.line([top, (top[0] + width, top[1])])
+    if text:
+        f.text(top[0] + h * 0.4, top[1] + h * 1.2, h, text, "start")
+    if process:
+        f.text(top[0] + h * 0.4, top[1] - h * 0.35, h, str(process), "start")
+    if lay:
+        f.text(H1 / t60 + h * 0.6, -h * 0.2, h, LAYS[lay], "start")
+    if allowance:
+        f.text(left[0] - h * 0.3, -h * 0.2, h, str(allowance), "end")
+    f.w, f.h = top[0] + width - left[0], H2 + h * 1.2
+    f.origin = (left[0], -H2 - h * 1.2)  # the figure's top-left from the base point
+    return f
