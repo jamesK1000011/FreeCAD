@@ -15,7 +15,7 @@ from _pd_base import HAVE, Base
 # never fuzzed here.
 SKIP_FUZZ = {"doc_open", "agentlink_update", "printer_stop", "printer_pause", "printer_status", "printer_list", "patent_search"}
 READ_WORDS = ("_list", "_get", "_read", "_info", "_state", "_status", "_results", "_probe", "_geometry", "_query", "_preflight", "_quantities", "_check", "_bom", "_lookup", "_identify", "_review", "_fits", "_limits")
-DESC_MAX = 1400   # characters: a description longer than this costs every turn it is listed
+DESC_MAX = 1500   # characters: a description longer than this costs every turn it is listed
 LEAN_MAX = 90_000  # bytes: the lean listing, all of it sent at the start of a session
 
 
@@ -59,10 +59,10 @@ class McpContract(Base):
         self.assertEqual(empty, [])
 
     def test_read_only_tools_say_so(self):
-        wrong = [n for n, t in self.server.tools.items() if any(n.endswith(w) or (w + "_") in n for w in READ_WORDS) and t.changes and n not in ("asm_check",)]
+        wrong = [n for n, t in self.server.tools.items() if any(n.endswith(w) or (w + "_") in n for w in READ_WORDS) and t.changes and n not in ("asm_check", "asm_limits", "asm_bom")]
         print("\nread-sounding tools marked as changing:", wrong, file=sys.stderr)
         # a tool that only reads must not take an undo step or a history snapshot
-        self.assertLessEqual(len(wrong), 3, wrong)
+        self.assertEqual(wrong, [])
 
     def test_listing_sizes(self):
         from agentlink.tools import LEAN

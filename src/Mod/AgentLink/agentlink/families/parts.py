@@ -96,7 +96,8 @@ def tools(session):
         "(an enclosure round a board: standoffs under its holes, openings for edge connectors, a lid; for a KiCad board, board_enclosure "
         "reads all that from the import). Holes take the printer's fit calibration (fit calibrate); without one, holes are made 0.2 mm big. "
         "measure: true builds it and gives the sizes without adding it. Params — "
-        + " | ".join(f"{g}: {boxes.tips(t)}" for g, t in GENERATORS.items())
+        + " | ".join(f"{g}: " + ", ".join(f"{k} ({v.get('default')})" for k, v in t.items()) for g, t in GENERATORS.items())
+        + " (mm and counts; each refused value is answered with its range)."
     )
     return [
         Tool(
