@@ -22,6 +22,7 @@ from .. import store
 from ..protocol import Tool, ToolError
 from ..tools import obj
 from . import material as matfam
+from . import picks
 
 GROUP = "strength"
 INFO = "Strength by finite elements (Gmsh and CalculiX): set up a body, hold faces, load them, solve for stress, displacement and safety factor."
@@ -614,6 +615,116 @@ def tools(session):
                "note": "Joints between members are rigid; pinned and roller supports are held about the member's own axis. A frame model is a sizing look, not the connection design."}
         return out
 
+    def fea_shell(a):
+        """A thin plate or shell by shell elements (CalculiX S6 on Gmsh's
+        second-order triangles): the faces of an object (a face, a shell, a
+        sheet) with a thickness, held along edges, under pressure or its own
+        weight."""
+        ccx = _binary("ccx", "Ccx", "ccxBinaryPath", "AGENTLINK_CCX")
+        gmsh = _binary("gmsh", "Gmsh", "gmshBinaryPath", "AGENTLINK_GMSH")
+        if not (ccx and gmsh):
+            raise ToolError("unavailable", "CalculiX (ccx) and Gmsh are needed: install them, or set their paths in FreeCAD's FEM preferences.")
+        import Fem
+
+        o = picks.shaped(s.doc, a.get("object"), "object")
+        faces = list(o.Shape.Faces)
+        if a.get("faces"):
+            faces = [picks.element(o.Shape, f.split(".")[-1], o.Label) for f in a["faces"]]
+        if not faces:
+            raise ToolError("invalid_input", "object: a face, shell or sheet (its faces are the shell's mid-surface); faces [\"Face1\"] narrows it.")
+        th = float(a.get("thickness", 0))
+        if th <= 0:
+            raise ToolError("invalid_input", "thickness: the shell's thickness, mm.")
+        c = matfam.card(s.doc, a["material"]) if a.get("material") else matfam.of_body(s.doc, o.Label)[0]
+        if c is None or not c.get("E"):
+            raise ToolError("invalid_input", "material: an id with a Young's modulus (material_list).")
+        shell = Part.makeShell(faces) if len(faces) > 1 else faces[0]
+        bb = shell.BoundBox
+        mesh = float(a.get("mesh") or round(max(1.0, bb.DiagonalLength / 25.0), 2))
+        wd = os.path.join(s.out_dir, "shell_" + "".join(ch if ch.isalnum() else "_" for ch in o.Label))
+        os.makedirs(wd, exist_ok=True)
+        for n in os.listdir(wd):
+            if n.startswith(("job.", "shell.")):
+                os.remove(os.path.join(wd, n))
+        shell.exportBrep(os.path.join(wd, "shell.brep"))
+        with open(os.path.join(wd, "shell.geo"), "w") as f:
+            f.write("\n".join(['Merge "shell.brep";', f"Mesh.MeshSizeMax = {mesh};", "Mesh.MeshSizeMin = 0;", "Mesh.ElementOrder = 2;", "Mesh.SecondOrderLinear = 0;",
+                               "Mesh.Algorithm = 6;", "Mesh 2;", "Mesh.SaveAll = 1;", 'Save "shell.unv";', ""]))
+        timeout = float(a.get("timeout", 300))
+        r = subprocess.run([gmsh, "-", "shell.geo"], cwd=wd, capture_output=True, text=True, timeout=timeout)
+        unv = os.path.join(wd, "shell.unv")
+        if r.returncode != 0 or not os.path.isfile(unv):
+            raise ToolError("failed", "Gmsh could not mesh the faces: " + " | ".join((r.stderr or r.stdout or "").strip().splitlines()[-2:]))
+        fm = Fem.read(unv)
+        inp = os.path.join(wd, "shell.inp")
+        fm.writeABAQUS(inp, 1, False)
+        with open(inp) as f:
+            mesh_text = f.read()
+        import re
+
+        m = re.search(r"\*Element, TYPE=(\w+), ELSET=(\w+)", mesh_text, re.I)
+        if not m:
+            raise ToolError("failed", "No shell elements came out of the mesh.")
+        etype, eset = m.group(1).upper(), m.group(2)
+        if etype not in ("S6", "S3", "S8", "S4"):
+            raise ToolError("failed", f"The mesh gave {etype} elements, not shells.")
+        holds = a.get("holds") or []
+        if not holds:
+            raise ToolError("invalid_input", "holds [{ edges: \"boundary\" | [{ near: [x,y,z] }], kind pinned (simply supported) | fixed (clamped) }].")
+        outer = []
+        for e in shell.Edges:
+            # an edge on one face only is on the boundary
+            n_ = sum(1 for f in shell.Faces for fe in f.Edges if fe.isSame(e))
+            if n_ <= 1:
+                outer.append(e)
+        bl = []
+        held = 0
+        for h in holds:
+            kind = h.get("kind", "pinned")
+            if kind not in ("pinned", "fixed"):
+                raise ToolError("invalid_input", "holds.kind: pinned (simply supported: held, free to turn) | fixed (clamped).")
+            if h.get("edges", "boundary") == "boundary":
+                es = outer
+            else:
+                es = []
+                for q in h["edges"]:
+                    p = V(*[float(x) for x in q["near"]])
+                    es.append(min(shell.Edges, key=lambda e: e.distToShape(Part.Vertex(p))[0]))
+            ns = set()
+            for e in es:
+                ns.update(fm.getNodesByEdge(e))
+            held += len(ns)
+            dof = "1, 6" if kind == "fixed" else "1, 3"
+            bl += [f"{n}, {dof}" for n in sorted(ns)]
+        if held < 3:
+            raise ToolError("invalid_input", "The holds catch fewer than 3 mesh nodes: pick the edges again.")
+        nu = float(c.get("nu") or 0.3)
+        lines = [mesh_text.rstrip(), "*MATERIAL, NAME=SM", "*ELASTIC", f"{float(c['E']):.6g}, {nu:.6g}", "*DENSITY", f"{float(c.get('density') or 1) * 1e-9:.6g}",
+                 f"*SHELL SECTION, ELSET={eset}, MATERIAL=SM", f"{th:.6g}", "*STEP", "*STATIC", "*BOUNDARY"] + bl
+        dl = []
+        if a.get("pressure"):
+            dl.append(f"{eset}, P, {float(a['pressure']):.9g}")
+        if a.get("gravity"):
+            dl.append(f"{eset}, GRAV, {G:.6g}, 0, 0, -1")
+        if not dl:
+            raise ToolError("invalid_input", "pressure (MPa, on the faces' normal side) or gravity: true.")
+        lines += ["*DLOAD"] + dl + ["*NODE FILE", "U", "*EL FILE", "S", "*END STEP", ""]
+        with open(os.path.join(wd, "job.inp"), "w") as f:
+            f.write("\n".join(lines))
+        frd, _ = _run(ccx, wd, timeout, "shell")
+        disp, stress = ccx_io.read_frd(frd)
+        if not disp:
+            raise ToolError("failed", "CalculiX wrote no displacements.")
+        dmax = max(math.sqrt(sum(x * x for x in u[:3])) for u in disp.values())
+        vm = max((ccx_io.von_mises(sv) for sv in stress.values()), default=0.0)
+        y = c.get("yield")
+        out = {"object": o.Label, "faces": len(faces), "thickness": th, "material": c["name"], "mesh": {"size": mesh, "elements": fm.FaceCount, "type": etype},
+               "held": held, "deflectionMaxMm": round(dmax, 4), "vonMisesMaxMPa": round(vm, 3), **({"safety": round(y / vm, 2)} if y and vm else {}),
+               "files": wd, "note": "Shell elements carry bending through the thickness: the stress is the larger of the two faces'."}
+        if dmax > th / 2:
+            out["warning"] = f"The deflection ({dmax:.2f} mm) is over half the thickness: the plate is working as a membrane too, which a linear solve misses — real deflection is less."
+        return out
+
     def fea_solve(a):
         st, o = _need_study(s)
         if not st["holds"]:
@@ -1189,6 +1300,9 @@ def tools(session):
              obj({"members": {"type": "array", "items": {"type": "object"}}, "bodies": {"type": "array", "items": {"type": "string"}}, "material": {"type": "string"}, "supports": {"type": "array", "items": {"type": "object"}},
                   "loads": {"type": "array", "items": {"type": "object"}}, "gravity": {"type": "boolean"}, "deflectionLimit": {"type": "number"}, "tolerance": {"type": "number"},
                   "elements": {"type": "integer"}, "name": {"type": "string"}, "timeout": {"type": "number"}}), fea_frame),
+        Tool("fea_shell", "A thin plate or shell by shell elements (CalculiX on Gmsh's triangles): object (a face, shell or sheet: its faces are the mid-surface; faces narrows), thickness mm, material, holds [{ edges \"boundary\" (every free edge) | [{ near: [x,y,z] }], kind pinned (simply supported) | fixed (clamped) }], pressure MPa and/or gravity. Answers the largest deflection and stress. Panels, lids, sheet-metal, floors and walls as plates.",
+             obj({"object": {"type": "string"}, "faces": {"type": "array", "items": {"type": "string"}}, "thickness": {"type": "number"}, "material": {"type": "string"},
+                  "holds": {"type": "array", "items": {"type": "object"}}, "pressure": {"type": "number"}, "gravity": {"type": "boolean"}, "mesh": {"type": "number"}, "timeout": {"type": "number"}}, ["object", "thickness"]), fea_shell),
         Tool("fea_parts", "A strength study of several parts together (instead of fea_setup): bodies [labels, one solid each], materials { label: id } (else each body's own), join tie (bonded where they touch: glued, welded, press-fit) | contact (they push but do not pull; friction 0.2 lets them slide) | none, tolerance mm for touching (0.05), mesh mm. Then fea_hold / fea_load on the parts' faces and fea_solve: each part's peak stress and safety.",
              obj({"bodies": {"type": "array", "items": {"type": "string"}}, "materials": {"type": "object"}, "join": {"type": "string", "enum": ["tie", "contact", "none"]},
                   "friction": {"type": "number"}, "tolerance": {"type": "number"}, "mesh": {"type": "number"}, "name": {"type": "string"}}, ["bodies"]), fea_parts, changes=True),
