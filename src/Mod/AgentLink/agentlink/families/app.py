@@ -323,6 +323,51 @@ def tools(session):
         wbs = gui.listWorkbenches()
         return {"active": gui.activeWorkbench().name(), "workbenches": sorted(getattr(w, "MenuText", k) for k, w in wbs.items())}
 
+    def window_snapshot(a):
+        """The whole FreeCAD window as the person sees it — toolbars, tree,
+        panels, the 3D view — drawn by Qt itself, so it works in the
+        background with no screen-recording permission. part: one dock
+        panel by its title (e.g. "Report view", "Agent Link")."""
+        gui = _gui()
+        mw = gui.getMainWindow()
+        target = mw
+        if a.get("part"):
+            want = str(a["part"]).lower()
+            from PySide import QtGui
+
+            QtW = getattr(__import__("PySide", fromlist=["QtWidgets"]), "QtWidgets", QtGui)
+            docks = mw.findChildren(QtW.QDockWidget)
+            target = next((d for d in docks if d.windowTitle().lower() == want or d.objectName().lower() == want), None)
+            if target is None:
+                raise ToolError("not_found", "Panels: " + ", ".join(sorted(d.windowTitle() for d in docks if d.windowTitle())))
+        gui.updateGui()
+        pix = target.grab()
+        # The 3D view is drawn by OpenGL: paint its own frame over the grab, where Qt's grab can come out blank.
+        try:
+            from PySide import QtGui
+
+            QtW = getattr(__import__("PySide", fromlist=["QtWidgets"]), "QtWidgets", QtGui)
+            painter = QtGui.QPainter(pix)
+            for gl in target.findChildren(QtW.QOpenGLWidget if hasattr(QtW, "QOpenGLWidget") else QtW.QWidget):
+                if not hasattr(gl, "grabFramebuffer") or not gl.isVisible():
+                    continue
+                img = gl.grabFramebuffer()
+                top_left = gl.mapTo(target, gl.rect().topLeft())
+                painter.drawImage(top_left, img.scaled(gl.width(), gl.height()))
+            painter.end()
+        except Exception as e:
+            FreeCAD.Console.PrintLog(f"Agent Link window_snapshot: 3D view not overlaid ({e})\n")
+        out = os.path.expanduser(a.get("path") or os.path.join(s.out_dir, "window.png"))
+        if not os.path.isabs(out):
+            out = os.path.join(s.out_dir, out)
+        if not pix.save(out, "PNG"):
+            raise ToolError("failed", f"Could not write {out}")
+        res = {"path": out, "width": pix.width(), "height": pix.height()}
+        if a.get("inline", True):
+            with open(out, "rb") as f:
+                res["_png"] = f.read()
+        return res
+
     def app_restart(a):
         """Quit this FreeCAD and start it again (new add-on code, a theme):
         the settings written, each changed document saved first — one never
@@ -376,6 +421,8 @@ def tools(session):
              obj({"menu": {"type": "string"}, "limit": {"type": "integer"}}), menu_list),
         Tool("menu_run", "Press a menu item by its path of titles ([\"View\", \"Standard views\", \"Fit all\"]); modal dialogs refused as cmd_run. Window only.",
              obj({"path": {"type": "array", "items": {"type": "string"}}}, ["path"]), menu_run, changes=True),
+        Tool("window_snapshot", "A picture of the whole FreeCAD window as the person sees it (toolbars, tree, panels, 3D view), or part: one panel by its title; drawn by FreeCAD itself, in the background. path (a .png). Window only.",
+             obj({"part": {"type": "string"}, "path": {"type": "string"}, "inline": {"type": "boolean"}}), window_snapshot),
         Tool("app_restart", "Quit this FreeCAD window and open it again (new add-ons, a theme, settings that need a restart): settings written, changed documents saved and reopened; one never saved is refused unless discard: true. Window only.",
              obj({"discard": {"type": "boolean"}}), app_restart),
         Tool("workbench", "The workbenches, the active one, and activate: a name (Part Design, BIM, FEM …). Window only.", obj({"activate": {"type": "string"}}), workbench),
