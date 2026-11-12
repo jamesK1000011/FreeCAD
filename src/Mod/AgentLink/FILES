@@ -18,6 +18,7 @@ agentlink/families/__init__.py
 agentlink/families/assembly.py
 agentlink/families/assembly_more.py
 agentlink/families/bim.py
+agentlink/families/bim_more.py
 agentlink/families/cam.py
 agentlink/families/cut.py
 agentlink/families/doc.py
