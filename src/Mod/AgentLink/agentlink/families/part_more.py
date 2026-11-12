@@ -331,17 +331,30 @@ def tools(s):
                 try:
                     eng = Part.AttachEngine(o.AttacherType)
                     eng.References = [(target, sub or "")]
-                    mode = eng.suggestMapModes().get("bestFitMode")
-                except Exception:
+                    sug = eng.suggestMapModes()
+                    mode = sug.get("bestFitMode") or sug.get("BestFitMode")
+                except Exception as e:
+                    tried.append(f"suggest: {e}")
                     mode = None
-            if mode and mode != "Deactivated":
+            if not mode or mode == "Deactivated":
+                elt = (sub or "")[:4]
+                mode = {("point", "Vert"): "Vertex", ("point", "Edge"): "CenterOfCurvature", ("point", "Face"): "CenterOfMass",
+                        ("line", "Edge"): "TwoPointLine", ("line", "Face"): "NormalToSurface", ("line", "Vert"): "ObjectZ",
+                        ("plane", "Face"): "FlatFace", ("plane", "Edge"): "NormalToEdge", ("plane", "Vert"): "Translate",
+                        ("csys", "Face"): "FlatFace", ("csys", "Edge"): "NormalToEdge", ("csys", "Vert"): "Translate"}.get((kind, elt), "ObjectXY")
+            try:
                 o.MapMode = mode
+            except Exception:
+                raise bad(f"mode {mode!r}: not a mode for a {kind} datum — one of {', '.join(o.getEnumerationsOfProperty('MapMode')[:30])}.")
             o.AttachmentOffset = pl
         o.Label = s.unique(a.get("name") or f"Datum {kind}")
         doc(s).recompute()
+        if a.get("to") and getattr(o, "MapMode", "") == "Deactivated":
+            tried.append("left unattached")
         s.snapshot("part_datum")
         return {"datum": o.Label, "kind": kind, "type": o.TypeId, "made": made,
-                "placement": picks.placement_json(o.Placement)}
+                "placement": picks.placement_json(o.Placement), **({"mode": o.MapMode} if a.get("to") else {}),
+                **({"notes": tried} if tried and a.get("to") else {})}
 
     body = {"type": "string"}
     return [
