@@ -38,6 +38,7 @@ agentlink/families/model.py
 agentlink/families/model_more.py
 agentlink/families/openscad.py
 agentlink/families/param.py
+agentlink/families/part_more.py
 agentlink/families/parts.py
 agentlink/families/pd_common.py
 agentlink/families/picks.py

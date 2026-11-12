@@ -13,6 +13,7 @@ NAMES = [
     "doc",
     "model",
     "model_more",
+    "part_more",
     "measure",
     "sketch",
     "sketch_more",
