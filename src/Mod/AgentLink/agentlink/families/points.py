@@ -188,6 +188,25 @@ def spacing(P):
     return float(np.median(nn))
 
 
+def ring_order(P, gap_deg=30.0):
+    """The points in order round their centre when they make a loop (no
+    gap wider than gap_deg seen from the centre, all well away from it):
+    else None."""
+    if len(P) < 8:
+        return None
+    c = P.mean(axis=0)
+    _, _, vt = np.linalg.svd(P - c, full_matrices=False)
+    u, v = (P - c) @ vt[0], (P - c) @ vt[1]
+    r = np.hypot(u, v)
+    if r.min() < 0.2 * np.median(r):
+        return None
+    ang = np.arctan2(v, u)
+    order = np.argsort(ang)
+    s_ = np.sort(ang)
+    gaps = np.diff(np.concatenate([s_, [s_[0] + 2 * np.pi]]))
+    return order if np.degrees(gaps.max()) < gap_deg else None
+
+
 def chain_order(P):
     """An order along a line of points: start at one end (farthest from the
     centre along the main axis) and walk to the nearest unvisited point."""
@@ -439,21 +458,24 @@ def tools(session):
                         "sampled": int(len(d)), "area": round(face.Area, 3)})
             body = face
         elif kind == "curve":
-            order = chain_order(P)
-            Q = P[order]
-            # thin to the spacing the fit can use
+            tol = float(a.get("tolerance", 0.1))
+            ring = ring_order(P)
+            loop = a.get("closed", ring is not None)
+            if loop and ring is None:
+                raise bad("closed: these points do not go round a centre — leave closed out for an open curve.")
+            Q = P[ring] if loop else P[chain_order(P)]
             step = max(1, len(Q) // 400)
             Q = Q[::step]
             if len(Q) < 4:
                 raise bad("curve: four or more points along a line.")
-            tol = float(a.get("tolerance", 0.1))
-            steps = np.sqrt(((Q[1:] - Q[:-1]) ** 2).sum(axis=1))
-            gap = float(np.sqrt(((Q[0] - Q[-1]) ** 2).sum()))
-            loop = a.get("closed", gap < 3 * float(np.median(steps)))
             c = Part.BSplineCurve()
             try:
                 if loop:
-                    c.interpolate(Points=[vec(q) for q in Q[:: max(1, len(Q) // 60)]], PeriodicFlag=True)
+                    # the mean of each of up to 48 slices round the loop: noise averaged out
+                    k = max(8, min(48, len(Q) // 3))
+                    bins = np.array_split(Q, k)
+                    M = [b.mean(axis=0) for b in bins if len(b)]
+                    c.interpolate(Points=[vec(q) for q in M], PeriodicFlag=True)
                 else:
                     c.approximate(Points=[vec(q) for q in Q], DegMax=int(a.get("degree", 3)), Tolerance=tol)
             except Exception as e:
