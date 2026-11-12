@@ -273,7 +273,65 @@ def build(item):
         t = math.radians(float(item.get("rotation", 0)))
         e = Part.Ellipse(c + V(math.cos(t), math.sin(t), 0) * a_, c + V(-math.sin(t), math.cos(t), 0) * b_, c)
         return [e], C, D
-    raise ToolError("invalid_input", "kind: line, polyline, arc, circle, ellipse, bspline, rectangle, rounded_rectangle, polygon, slot or point.")
+    if k in ("arc3", "circle3"):
+        pts = [pc.vec2(p, f"{k}.points") for p in item.get("points") or []]
+        if len(pts) != 3:
+            raise ToolError("invalid_input", f"{k}.points: three [x, y] — {'start, a point on it, end' if k == 'arc3' else 'on the circle'}.")
+        try:
+            c = Part.Circle(*pts)
+        except Exception:
+            raise ToolError("invalid_input", f"{k}.points: three points not on one line.") from None
+        if k == "circle3":
+            D.append(("d", ("Diameter", 0, 2 * c.Radius)))
+            return [Part.Circle(c.Location, V(0, 0, 1), c.Radius)], C, D
+        D.append(("r", ("Radius", 0, c.Radius)))
+        lo, hi = _ccw(c, pts[0], pts[2], pts[1])
+        return [_arc(c.Location, c.Radius, lo, hi)], C, D
+    if k == "parabola":
+        v = pc.vec2(item.get("vertex", [0, 0]), "vertex")
+        f = float(item.get("focal", 0))
+        if f <= 0:
+            raise ToolError("invalid_input", "parabola: vertex, focal (distance from vertex to focus, mm), rotation (deg: the way it opens, 0 = +x), from and to (y along it, mm).")
+        t = math.radians(float(item.get("rotation", 0)))
+        pb = Part.Parabola()
+        pb.Focal = f
+        pb.Center = v
+        if t:
+            pb.rotate(FreeCAD.Placement(V(), FreeCAD.Rotation(V(0, 0, 1), math.degrees(t)), v))
+        u0, u1 = float(item.get("from", -2 * f)), float(item.get("to", 2 * f))
+        return [Part.ArcOfParabola(pb, min(u0, u1), max(u0, u1))], C, D
+    if k == "hyperbola":
+        c = pc.vec2(item.get("center", [0, 0]), "center")
+        a_, b_ = float(item.get("major", 0)), float(item.get("minor", 0))
+        if a_ <= 0 or b_ <= 0:
+            raise ToolError("invalid_input", "hyperbola: center, major and minor (semi-axes, mm), rotation (deg), from and to (its parameter, -1 … 1 by default).")
+        t = math.radians(float(item.get("rotation", 0)))
+        h = Part.Hyperbola(c + V(math.cos(t), math.sin(t), 0) * a_, c + V(-math.sin(t), math.cos(t), 0) * b_, c)
+        u0, u1 = float(item.get("from", -1)), float(item.get("to", 1))
+        return [Part.ArcOfHyperbola(h, min(u0, u1), max(u0, u1))], C, D
+    raise ToolError("invalid_input", "kind: line, polyline, arc, arc3, circle, circle3, ellipse, parabola, hyperbola, bspline, rectangle, rounded_rectangle, polygon, slot or point.")
+
+
+def _ccw(cu, start, end, mid):
+    """The parameters of a circle's arc from start to end through mid,
+    counter-clockwise as Sketcher keeps arcs (start and end swapped if the
+    three run clockwise)."""
+    c = cu.Location
+
+    def ang(p):
+        return math.atan2(p.y - c.y, p.x - c.x)
+
+    a0, a1, am = ang(start), ang(end), ang(mid)
+
+    def norm(x):
+        while x < 0:
+            x += 2 * math.pi
+        return x
+    if norm(am - a0) <= norm(a1 - a0):
+        lo, hi = a0, a0 + norm(a1 - a0)
+    else:
+        lo, hi = a1, a1 + norm(a0 - a1)
+    return lo, hi
 
 
 def _remap(t, ids):
@@ -767,7 +825,7 @@ def tools(session):
         ),
         Tool(
             "sketch_add",
-            "Add geometry to a sketch, in its own x/y (mm): items [{ kind, …, construction, dims, name }]. kinds: line {from, to}; polyline {points, closed}; arc {center, radius, start, end (deg, ccw)}; circle {center, radius|diameter}; ellipse {center, major, minor (full sizes), rotation}; bspline {points it passes through, closed — or interpolate: false, points its poles, degree}; rectangle {center|corner, size [w,h]}; rounded_rectangle {…, radius}; polygon {center, radius (to corners), sides, rotation}; slot {from, to (end centres), radius}; point {at}. Shapes come with their own coincident/horizontal/vertical/tangent/equal constraints; dims: true adds their sizes as constraints (named <name>_width … when named — what param_bind binds). Answers the geometry ids per item and the solver's state. Lines: vertex 1 start, 2 end; arcs and circles: 3 centre.",
+            "Add geometry to a sketch, in its own x/y (mm): items [{ kind, …, construction, dims, name }]. kinds: line {from, to}; polyline {points, closed}; arc {center, radius, start, end (deg, ccw)}; arc3 {points: start, through, end}; circle {center, radius|diameter}; circle3 {points: three on it}; parabola {vertex, focal, rotation, from, to}; hyperbola {center, major, minor (semi-axes), rotation, from, to}; ellipse {center, major, minor (full sizes), rotation}; bspline {points it passes through, closed — or interpolate: false, points its poles, degree}; rectangle {center|corner, size [w,h]}; rounded_rectangle {…, radius}; polygon {center, radius (to corners), sides, rotation}; slot {from, to (end centres), radius}; point {at}. Shapes come with their own coincident/horizontal/vertical/tangent/equal constraints; dims: true adds their sizes as constraints (named <name>_width … when named — what param_bind binds). Answers the geometry ids per item and the solver's state. Lines: vertex 1 start, 2 end; arcs and circles: 3 centre.",
             obj({"sketch": sketch, "items": {"type": "array", "items": {"type": "object"}}}, ["items"]),
             sketch_add,
             changes=True,
