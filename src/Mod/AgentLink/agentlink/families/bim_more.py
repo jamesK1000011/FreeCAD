@@ -41,6 +41,13 @@ def setsome(o, vals):
     return done, skipped
 
 
+def settype(o, t):
+    try:
+        o.IfcType = t
+    except Exception:
+        pass
+
+
 def qty(v):
     return float(getattr(v, "Value", v) or 0)
 
@@ -134,6 +141,7 @@ def tools(session):
             setsome(o, {"Rotation": float(a["rotate"])})
         if a.get("align") is not None:
             setsome(o, {"Align": bool(a["align"])})
+        settype(o, a.get("type") or "Beam")
         o.Label = s.unique(a.get("name") or f"{row[2]} frame", o)
         out = finish(o, "bim_frame", {"profile": row[2], "pathLength_mm": round(sum(e.Length for e in base.Shape.Edges), 1)})
         if o.Shape.Solids:
@@ -153,10 +161,20 @@ def tools(session):
             raise ToolError("unavailable", "This FreeCAD's BIM has no truss (FreeCAD 1.0 or newer).")
         o = headless_call(mk, line)
         h = a.get("height", 1000)
+        strut = float(a.get("strut", 100))
         done, skipped = setsome(o, {"HeightStart": a.get("heightStart", h), "HeightEnd": a.get("heightEnd", h),
-                                    "StrutHeight": a.get("strut"), "StrutWidth": a.get("strut"),
-                                    "RodSize": a.get("rod"), "RodSections": a.get("panels"),
-                                    "RodMode": {"warren": "/\\/\\/\\", "pratt": "/|/|/", "howe": "/|\\|/|\\"}.get(a.get("pattern")) if a.get("pattern") else None})
+                                    "StrutHeight": strut, "StrutWidth": strut,
+                                    "RodSize": float(a.get("rod", 20)), "RodSections": a.get("panels")})
+        if a.get("pattern"):
+            modes = o.getEnumerationsOfProperty("RodMode") if hasattr(o, "RodMode") else []
+            want = {"pratt": "/|/|/", "warren": "/\\/\\/\\", "howe": "/|\\|/|\\"}[a["pattern"]]
+            pick = next((m for m in modes if m.replace(" ", "") == want), None)
+            if pick is None and modes:
+                pick = modes[min(["pratt", "warren", "howe"].index(a["pattern"]), len(modes) - 1)]
+            if pick:
+                o.RodMode = pick
+                done["RodMode"] = pick
+        settype(o, "Beam")
         o.Label = s.unique(a.get("name") or "Truss", o)
         out = finish(o, "bim_truss", {"span_mm": round((p1 - p0).Length, 1), "set": done})
         if skipped:
@@ -182,26 +200,79 @@ def tools(session):
         sec.Placement.Base = V(0, -th / 2, h * 0.1)
         po.Visibility = sec.Visibility = False
         o = headless_call(mk, sec, po, base)
+        settype(o, "Railing")
         o.Label = s.unique(a.get("name") or "Fence", o)
         out = finish(o, "bim_fence")
         out.update({k: int(getattr(o, k)) for k in ("NumberOfPosts", "NumberOfSections") if hasattr(o, k)})
         return out
 
     def bim_covering(a):
-        mk = getattr(Arch, "makeCovering", None)
-        if mk is None:
-            raise ToolError("unavailable", "This FreeCAD's BIM has no covering (newer than 1.0): a slab of the finish's thickness (bim_structure) stands in.")
-        label, sub, _ = picks.resolve(s, a.get("face"))
+        label, sub, face = picks.resolve(s, a.get("face"))
         if not sub or not sub.startswith("Face"):
             raise bad("face: \"Slab.Face6\" — the face to cover.")
         target = picks.find(doc(), label)
-        o = headless_call(mk, (target, [sub]))
-        mode = {"tiles": "Solid Tiles", "solid": "Monolithic", "pattern": "Parametric Pattern", "hatch": "Hatch Pattern"}.get(a.get("finish", "tiles"))
-        done, skipped = setsome(o, {"FinishMode": mode, "TileLength": a.get("tile", [None, None])[0] if a.get("tile") else None,
-                                    "TileWidth": a.get("tile", [None, None])[1] if a.get("tile") else None,
-                                    "TileThickness": a.get("thickness"), "Thickness": a.get("thickness"), "JointWidth": a.get("joint")})
+        finish_kind = a.get("finish", "tiles")
+        th = float(a.get("thickness", 10))
+        mk = getattr(Arch, "makeCovering", None)
+        if mk is not None:
+            o = headless_call(mk, (target, [sub]))
+            mode = {"tiles": "Solid Tiles", "solid": "Monolithic", "pattern": "Parametric Pattern", "hatch": "Hatch Pattern"}.get(finish_kind)
+            done, skipped = setsome(o, {"FinishMode": mode, "TileLength": a.get("tile", [None, None])[0] if a.get("tile") else None,
+                                        "TileWidth": a.get("tile", [None, None])[1] if a.get("tile") else None,
+                                        "TileThickness": th, "JointWidth": a.get("joint")})
+            o.Label = s.unique(a.get("name") or "Covering", o)
+            return finish(o, "bim_covering", {"set": done, **({"skipped": skipped} if skipped else {})})
+        # FreeCAD 1.0 has no covering object: the tiles (or the slab of finish) built here as a covering component
+        if face.findPlane() is None:
+            raise bad("face: a flat face.")
+        u0, u1, v0, v1 = face.ParameterRange
+        n = face.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+        slab = face.extrude(n * th)
+        note = None
+        if finish_kind == "tiles":
+            tl, tw = [float(x) for x in (a.get("tile") or [300, 300])]
+            j = float(a.get("joint", 3))
+            u = face.Edges[0].tangentAt(face.Edges[0].FirstParameter) if face.Edges else V(1, 0, 0)
+            u = (u - n * u.dot(n))
+            u.normalize()
+            v = n.cross(u)
+            bb = face.BoundBox
+            span = bb.DiagonalLength
+            c = face.CenterOfMass
+            tiles = []
+            k = int(span / (tl + j)) + 2
+            m = int(span / (tw + j)) + 2
+            if k * m > 20000:
+                raise bad(f"tiles: {k * m} would be laid — bigger tiles, or finish solid.")
+            full = tl * tw * th
+            whole = cut = 0
+            for i in range(-k, k):
+                for jj in range(-m, m):
+                    o0 = c + u * (i * (tl + j)) + v * (jj * (tw + j))
+                    b = Part.makeBox(tl, tw, th)
+                    b.Placement = FreeCAD.Placement(o0, FreeCAD.Rotation(u, v, n, "ZXY"))
+                    piece = b.common(slab)
+                    if piece.isNull() or piece.Volume < 1e-6:
+                        continue
+                    tiles.append(piece)
+                    if piece.Volume > full * 0.999:
+                        whole += 1
+                    else:
+                        cut += 1
+            shape = Part.makeCompound(tiles)
+            note = {"tiles": len(tiles), "whole": whole, "cut": cut, "tile": [tl, tw], "joint": j}
+        else:
+            shape = slab
+        base = doc().addObject("Part::Feature", "CoveringShape")
+        base.Shape = shape
+        base.Visibility = False
+        o = headless_call(Arch.makeComponent, base) if getattr(Arch, "makeComponent", None) else base
+        settype(o, "Covering")
         o.Label = s.unique(a.get("name") or "Covering", o)
-        return finish(o, "bim_covering", {"set": done, **({"skipped": skipped} if skipped else {})})
+        out = finish(o, "bim_covering", {"on": f"{label}.{sub}", "area_m2": round(face.Area / 1e6, 3), "thickness": th, "made": "here (this FreeCAD has no covering object)"})
+        if note:
+            out.update(note)
+        return out
 
     # ---- layers ---------------------------------------------------------------
 
@@ -354,9 +425,8 @@ def tools(session):
                         row.append("not a solid (exported as a surface model or skipped)")
                     elif not sh.isValid():
                         row.append("invalid shape")
-            hosts = [p for p in o.InList if is_bim(p)]
-            if not contained(o) and not any(o in (getattr(p, "Subtractions", []) or []) + (getattr(p, "Additions", []) or []) for p in hosts) \
-                    and pn != "_Window" and t not in ("Window", "Door") and not hosts:
+            hosts = [p for p in o.InList if is_bim(p) and o in (list(getattr(p, "Subtractions", []) or []) + list(getattr(p, "Additions", []) or []))]
+            if not contained(o) and not hosts and pn != "_Window" and t not in ("Window", "Door"):
                 row.append("in no storey or building (bim_level { objects })")
             if pn == "_Window" and not getattr(o, "Hosts", None):
                 row.append("a window or door in no wall")
@@ -402,6 +472,7 @@ def tools(session):
             cutter.Label = s.unique(f"{host.Label} cut")
             before = host.Shape.Volume
             host.Subtractions = list(host.Subtractions) + [cutter]
+            doc().recompute()
             out = finish(host, "bim_edit", {"op": "cut", "removed_m3": round((before - host.Shape.Volume) / 1e9, 4)})
             if host.Shape.Volume >= before - 1e-6:
                 out["warning"] = "nothing was cut: the plane misses it, or the normal points away (it removes the side the normal points to)."
@@ -422,6 +493,7 @@ def tools(session):
             if c is None:
                 import Draft
                 c = headless_call(Draft.make_clone, host)
+            settype(c, ifc_type(host))
             if a.get("move"):
                 c.Placement.Base = c.Placement.Base + picks.vec3(a["move"], "move")
             c.Label = s.unique(a.get("name") or f"{host.Label} clone", c)
