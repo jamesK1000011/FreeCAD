@@ -1438,7 +1438,9 @@ def tools(session):
             area = sum(f.Area for _, f in picked) * 1e-6
             hf = ObjectsFem_().makeConstraintHeatflux(doc, "Heatflux")
             hf.References = [(o, tuple(n for n, _ in picked))]
-            hf.ConstraintType = "DFlux"
+            # "DFlux" in FreeCAD 1.0, "Flux" later
+            kinds = hf.getEnumerationsOfProperty("ConstraintType") or []
+            hf.ConstraintType = next((k for k in ("DFlux", "Flux") if k in kinds), "DFlux")
             _setq(hf, "DFlux", f"{float(hq['watts']) / area} W/m^2", float(hq["watts"]) / area)
             an.addObject(hf)
             made.append(hf.Label)
