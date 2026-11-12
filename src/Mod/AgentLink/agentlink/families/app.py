@@ -323,6 +323,50 @@ def tools(session):
         wbs = gui.listWorkbenches()
         return {"active": gui.activeWorkbench().name(), "workbenches": sorted(getattr(w, "MenuText", k) for k, w in wbs.items())}
 
+    def show(a):
+        """Show or hide objects in the window, as the eye in the tree does.
+        A PartDesign body shows its tip (its finished part), not its history."""
+        _gui()
+        doc = s.doc
+        names = a.get("objects")
+        if names in (None, "all"):
+            objs = [o for o in doc.Objects if o.TypeId in ("PartDesign::Body",) or (hasattr(o, "Shape") and not o.InList and o.TypeId not in ("App::Origin", "App::Line", "App::Plane"))]
+        else:
+            objs = []
+            for n in names if isinstance(names, list) else [names]:
+                o = doc.getObject(n) or next((x for x in doc.Objects if x.Label == n), None)
+                if o is None:
+                    raise ToolError("not_found", f"No object '{n}'.")
+                objs.append(o)
+        on = bool(a.get("visible", True))
+        done = []
+        for o in objs:
+            if not getattr(o, "ViewObject", None):
+                continue
+            o.ViewObject.Visibility = on
+            if on and o.TypeId == "PartDesign::Body" and o.Tip is not None:
+                o.Tip.ViewObject.Visibility = True
+            done.append(o.Label)
+        import FreeCADGui
+
+        FreeCADGui.updateGui()
+        return {"visible" if on else "hidden": done}
+
+    def selection(a):
+        import FreeCADGui
+
+        _gui()
+        if a.get("clear", True) and not a.get("objects"):
+            FreeCADGui.Selection.clearSelection()
+            return {"selected": []}
+        FreeCADGui.Selection.clearSelection()
+        for n in a.get("objects") or []:
+            o = s.doc.getObject(n) or next((x for x in s.doc.Objects if x.Label == n), None)
+            if o is None:
+                raise ToolError("not_found", f"No object '{n}'.")
+            FreeCADGui.Selection.addSelection(o)
+        return {"selected": [o.Object.Label for o in FreeCADGui.Selection.getSelectionEx()]}
+
     def window_snapshot(a):
         """The whole FreeCAD window as the person sees it — toolbars, tree,
         panels, the 3D view — drawn by Qt itself, so it works in the
@@ -344,7 +388,7 @@ def tools(session):
         pix = target.grab()
         # The 3D view is drawn by OpenGL: paint its own frame over the grab, where Qt's grab can come out blank.
         try:
-            from PySide import QtGui
+            from PySide import QtCore, QtGui
 
             QtW = getattr(__import__("PySide", fromlist=["QtWidgets"]), "QtWidgets", QtGui)
             painter = QtGui.QPainter(pix)
@@ -353,7 +397,8 @@ def tools(session):
                     continue
                 img = gl.grabFramebuffer()
                 top_left = gl.mapTo(target, gl.rect().topLeft())
-                painter.drawImage(top_left, img.scaled(gl.width(), gl.height()))
+                # Retina: the frame is in device pixels, the window in points.
+                painter.drawImage(QtCore.QRect(top_left, gl.size()), img)
             painter.end()
         except Exception as e:
             FreeCAD.Console.PrintLog(f"Agent Link window_snapshot: 3D view not overlaid ({e})\n")
@@ -376,6 +421,14 @@ def tools(session):
         import subprocess
         import sys
 
+        # A step playing hides the body: show it again before anything is saved.
+        try:
+            from .. import panel
+
+            if panel._panel is not None:
+                panel._panel.stop()
+        except Exception:
+            pass
         unsaved = [d.Label for d in FreeCAD.listDocuments().values() if d.isTouched() and not d.FileName]
         if unsaved and not a.get("discard"):
             raise ToolError("invalid_state", "Never saved: " + ", ".join(unsaved) + " — doc_save { path } first, or discard: true to lose them.")
@@ -421,6 +474,10 @@ def tools(session):
              obj({"menu": {"type": "string"}, "limit": {"type": "integer"}}), menu_list),
         Tool("menu_run", "Press a menu item by its path of titles ([\"View\", \"Standard views\", \"Fit all\"]); modal dialogs refused as cmd_run. Window only.",
              obj({"path": {"type": "array", "items": {"type": "string"}}}, ["path"]), menu_run, changes=True),
+        Tool("show", "Show or hide objects in the window as the tree's eye does (objects: names or labels, or all; visible: false hides); a PartDesign body shows its finished part. Window only.",
+             obj({"objects": {}, "visible": {"type": "boolean"}}), show, changes=True),
+        Tool("selection", "Select objects in the window (objects: names or labels) for a command to act on, or clear the selection (no objects). Window only.",
+             obj({"objects": {"type": "array", "items": {"type": "string"}}, "clear": {"type": "boolean"}}), selection),
         Tool("window_snapshot", "A picture of the whole FreeCAD window as the person sees it (toolbars, tree, panels, 3D view), or part: one panel by its title; drawn by FreeCAD itself, in the background. path (a .png). Window only.",
              obj({"part": {"type": "string"}, "path": {"type": "string"}, "inline": {"type": "boolean"}}), window_snapshot),
         Tool("app_restart", "Quit this FreeCAD window and open it again (new add-ons, a theme, settings that need a restart): settings written, changed documents saved and reopened; one never saved is refused unless discard: true. Window only.",
