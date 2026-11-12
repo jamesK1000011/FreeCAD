@@ -305,4 +305,13 @@ def solve(ccx, workdir, members, supports, loads, gravity=None, n=8, timeout=300
         rf = reac.get(name.upper())
         on = book["nodal"].get(node, [0.0, 0.0, 0.0])
         sups.append({"at": [round(c, 2) for c in p], "kind": kind, "reactionN": [round(rf[c] - on[c], 2) for c in range(3)] if rf else None})
-    return {"members": rows, "supports": sups, "files": workdir}
+    out = {"members": rows, "supports": sups, "files": workdir}
+    # the reactions must carry the whole load: CalculiX reads them low on some
+    # beam supports (a point load on a column) — said, not hidden
+    tot = [sum(v[c] for v in book["nodal"].values()) for c in range(3)]
+    got = [sum((sp["reactionN"] or [0, 0, 0])[c] for sp in sups) for c in range(3)]
+    if any(abs(got[c] + tot[c]) > 0.02 * max(1.0, max(abs(x) for x in tot)) for c in range(3)):
+        out["reactionsNote"] = (f"the reactions add to {[round(x, 1) for x in got]} N against {[round(-x, 1) for x in tot]} N of load: "
+                                "CalculiX reads beam supports short here — use the load total, and member stresses, which are sound")
+    out["loadTotalN"] = [round(-x, 1) for x in tot]
+    return out
