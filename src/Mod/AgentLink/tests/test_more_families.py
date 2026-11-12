@@ -223,3 +223,16 @@ if __name__ == "__main__":
         self.assertLess(r["volume_mm3"], 0)
         dt = self.ok("part_datum", {"kind": "csys", "to": "Pm plain.Face6", "at": [5, 0, 0]})
         self.assertEqual(dt["placement"]["at"][2], 20.0)
+
+    def test_mesh_more(self):
+        self.have("meshobj_boundary")
+        c = self.ok("meshobj_primitive", {"kind": "cylinder", "radius": 5, "height": 20, "at": [0, 900, 0], "name": "Mm cyl"})
+        self.assertEqual(c["box"], [10.0, 10.0, 20.0])
+        t = self.ok("meshobj_primitive", {"kind": "torus", "radius": 10, "radius2": 2, "at": [50, 900, 0], "name": "Mm torus"})
+        self.assertAlmostEqual(t["box"][2], 4.0, delta=0.01)
+        self.ok("meshobj_trim", {"mesh": "Mm cyl", "at": [0, 900, 15], "normal": [0, 0, 1]})
+        b = self.ok("meshobj_boundary", {"mesh": "Mm cyl"})
+        self.assertEqual(b["loops"], 1)
+        self.assertAlmostEqual(b["boundaries"][0]["centre"][2], 15.0, delta=0.01)
+        m = self.ok("meshobj_merge", {"meshes": ["Mm cyl", "Mm torus"]})
+        self.assertEqual(m["components"], 2)

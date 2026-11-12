@@ -663,6 +663,8 @@ def tools(session):
                 m.rotate(0, -math.pi / 2, 0)
             elif kind == "torus":
                 m = Mesh.createTorus(float(a.get("radius", 10)), float(a.get("radius2", 2)), n)
+                if m.BoundBox.ZLength > m.BoundBox.XLength + 1e-6 or m.BoundBox.XLength < m.BoundBox.YLength - 1e-6:
+                    m.rotate(0, math.pi / 2, 0)  # its axis up z
             else:
                 raise bad("kind: box | sphere | cylinder | cone | torus.")
         except ToolError:
