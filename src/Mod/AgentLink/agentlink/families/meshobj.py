@@ -18,6 +18,7 @@ import numpy as np
 
 from .. import geometry as geo
 from .. import render
+from .. import store
 from ..protocol import Tool, ToolError
 
 GROUP = "mesh"
@@ -101,9 +102,23 @@ def tools(session):
     s = session
     doc = lambda: s.doc  # noqa: E731
 
+    EDIT = "meshEdit"
+
+    def editing():
+        """{original label: its edit copy's label} for meshes being edited."""
+        return store.read(doc(), EDIT, {})
+
     def mesh_of(ref):
         ms = meshes(doc())
+        ed = editing()
+        if ref is not None and ref in ed:
+            # Being edited: the tools work on its copy (meshobj_edit).
+            cp = next((x for x in ms if x.Label == ed[ref]), None)
+            if cp is not None:
+                return cp
         if ref is None:
+            ms = [x for x in ms if x.Label not in ed]  # an original being edited is not a choice
+
             if len(ms) == 1:
                 return ms[0]
             raise (ToolError("not_found", "No mesh in the document: meshobj_from_shape makes one, import_file reads one.") if not ms else bad(f"mesh: say which — {', '.join(o.Label for o in ms)}."))
@@ -128,6 +143,48 @@ def tools(session):
         if before is not None:
             out["before"] = before
         return out
+
+    def meshobj_edit(a):
+        act = a.get("action", "state")
+        ed = editing()
+        if act == "state":
+            return {"editing": [{"mesh": k, "copy": v} for k, v in ed.items()]}
+        ref = a.get("mesh")
+        if act == "begin":
+            o = mesh_of(ref)
+            if o.Label in ed or o.Label in ed.values():
+                raise ToolError("invalid_state", f"{o.Label} is being edited already: use or discard first.")
+            c = new_mesh(o.Mesh.copy(), f"{o.Label} (editing)")
+            if getattr(o, "ViewObject", None) is not None:
+                o.ViewObject.Visibility = False
+            ed[o.Label] = c.Label
+            store.write(doc(), EDIT, ed)
+            doc().recompute()
+            return {"editing": o.Label, "copy": c.Label, **reading(c.Mesh), "note": f"Every meshobj tool given {o.Label} now changes the copy (each step undoable); use puts it in place of the original, discard drops it."}
+        orig = next((k for k, v in ed.items() if ref in (k, v)), None) if ref else (next(iter(ed)) if len(ed) == 1 else None)
+        if orig is None:
+            raise ToolError("invalid_state", "No edit of that mesh: meshobj_edit { action: begin, mesh } starts one." if ref else f"mesh: which edit — {', '.join(ed) or 'none'}.")
+        o = next((x for x in meshes(doc()) if x.Label == orig), None)
+        c = next((x for x in meshes(doc()) if x.Label == ed[orig]), None)
+        if act == "use":
+            if o is None or c is None:
+                raise ToolError("not_found", "The original or its copy is gone: discard.")
+            before = reading(o.Mesh)
+            o.Mesh = c.Mesh.copy()
+            doc().removeObject(c.Name)
+        elif act == "discard":
+            if c is not None:
+                doc().removeObject(c.Name)
+            before = None
+        else:
+            raise bad("action: begin, use, discard or state.")
+        if o is not None and getattr(o, "ViewObject", None) is not None:
+            o.ViewObject.Visibility = True
+        del ed[orig]
+        store.write(doc(), EDIT, ed)
+        doc().recompute()
+        s.snapshot("meshobj_edit")
+        return {"mesh": orig, ("used" if act == "use" else "discarded"): True, **({"now": reading(o.Mesh), "before": before} if act == "use" and o is not None else {})}
 
     def new_mesh(m, label):
         n = doc().addObject("Mesh::Feature", "Mesh")
@@ -278,6 +335,10 @@ def tools(session):
             raise bad("normal: not zero — the side it points to is removed.")
         n0 = m.CountFacets
         m.trimByPlane(p, n)
+        if a.get("preview"):
+            bb = m.BoundBox
+            return {"mesh": o.Label, "preview": True, "wouldRemove": n0 - m.CountFacets, "wouldKeep": m.CountFacets,
+                    "keptBox": [round(bb.XLength, 2), round(bb.YLength, 2), round(bb.ZLength, 2)], "note": "Nothing changed: the same call without preview cuts."}
         if a.get("close") and not m.isSolid():
             m.fillupHoles(int(a.get("maxHoleEdges", 1000)))
         return keep(o, m, "meshobj_trim", a, {"removed": n0 - m.CountFacets, "note": "Cut open where the plane passed; close: true fills the cut."})
@@ -765,8 +826,10 @@ def tools(session):
         Tool("meshobj_smooth", "Smooth a mesh: method taubin (keeps its size; lambda, mu) | laplace (lambda; shrinks), iterations.",
              obj({"mesh": mref, "method": {"type": "string"}, "iterations": {"type": "integer"}, "lambda": {"type": "number"}, "mu": {"type": "number"}, **cp}), meshobj_smooth, changes=True),
         Tool("meshobj_offset", "Move a mesh's surface along its normals by distance mm (negative inward).", obj({"mesh": mref, "distance": {"type": "number"}, **cp}, ["distance"]), meshobj_offset, changes=True),
-        Tool("meshobj_trim", "Cut a mesh with a plane: at [x,y,z], normal (the side it points to goes); close: true fills the cut.",
-             obj({"mesh": mref, "at": {"type": "array", "items": {}}, "normal": {"type": "array", "items": {}}, "close": {"type": "boolean"}, "maxHoleEdges": {"type": "integer"}, **cp}), meshobj_trim, changes=True),
+        Tool("meshobj_edit", "Edit a mesh on a copy, as ScanRuler's Mesh Tools do: action begin { mesh } (a copy made, the original hidden; every meshobj tool given the original then changes the copy, each step undoable) | use (the copy put in place of the original) | discard (the copy dropped) | state.",
+             obj({"action": {"type": "string", "enum": ["begin", "use", "discard", "state"]}, "mesh": mref}), meshobj_edit, changes=True),
+        Tool("meshobj_trim", "Cut a mesh with a plane: at [x,y,z], normal (the side it points to goes); close: true fills the cut; preview: true says what would go and changes nothing.",
+             obj({"mesh": mref, "at": {"type": "array", "items": {}}, "normal": {"type": "array", "items": {}}, "close": {"type": "boolean"}, "maxHoleEdges": {"type": "integer"}, "preview": {"type": "boolean"}, **cp}), meshobj_trim, changes=True),
         Tool("meshobj_transform", "Scale (a factor or [x,y,z]), rotate { axis, angle }, move [x,y,z] or mirror \"x\" | \"y\" | \"z\" a mesh's points, in that order.",
              obj({"mesh": mref, "scale": {"type": ["number", "array"]}, "rotate": {"type": "object"}, "move": {"type": "array", "items": {}}, "mirror": {"type": "string"}, **cp}), meshobj_transform, changes=True),
         Tool("meshobj_boolean", "A boolean of two closed meshes: a, b, op union | intersection | difference; a new mesh.",

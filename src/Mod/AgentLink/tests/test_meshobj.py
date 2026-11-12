@@ -48,6 +48,26 @@ class MeshObj(unittest.TestCase):
         s = self.ok("meshobj_sections", {"mesh": "Ball mesh", "count": 1})
         self.assertAlmostEqual(s["slices"][0]["length"], 2 * 3.14159 * 12, delta=1.0)
 
+    def test_4_edit_on_a_copy(self):
+        b = self.ok("meshobj_edit", {"action": "begin", "mesh": "Ball mesh"})
+        n0 = b["facets"]
+        p = self.ok("meshobj_trim", {"mesh": "Ball mesh", "at": [40, 15, 20], "normal": [0, 0, 1], "preview": True})
+        self.assertTrue(p["preview"])
+        self.assertGreater(p["wouldRemove"], 0)
+        self.ok("meshobj_trim", {"mesh": "Ball mesh", "at": [40, 15, 20], "normal": [0, 0, 1]})
+        st = self.ok("meshobj_edit", {"action": "state"})
+        self.assertEqual(st["editing"][0]["mesh"], "Ball mesh")
+        # The original is untouched until use.
+        orig = next(o for o in self.session.doc.Objects if o.Label == "Ball mesh")
+        self.assertEqual(orig.Mesh.CountFacets, n0)
+        u = self.ok("meshobj_edit", {"action": "use", "mesh": "Ball mesh"})
+        self.assertLess(u["now"]["facets"], n0)
+        self.assertEqual(orig.Mesh.CountFacets, u["now"]["facets"])
+        self.assertFalse(any("(editing)" in o.Label for o in self.session.doc.Objects))
+        self.ok("meshobj_edit", {"action": "begin", "mesh": "Brick mesh"})
+        self.ok("meshobj_edit", {"action": "discard"})
+        self.assertEqual(self.ok("meshobj_edit", {})["editing"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

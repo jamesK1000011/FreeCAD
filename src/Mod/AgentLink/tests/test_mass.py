@@ -72,6 +72,26 @@ class Mass(unittest.TestCase):
         self.assertTrue(no)
         self.assertEqual(no["error"]["code"], "invalid_state")
 
+    def test_9_calibrate_to_a_weighed_print(self):
+        import Part
+
+        add_body(self.session, "Coupon", Part.makeBox(20, 20, 20))
+        self.call("material_set", {"bodies": ["Coupon"], "id": "pla"})
+        self.call("setup", {"action": "add", "type": "print", "bodies": ["Coupon"], "settings": {"walls": 2, "infill": 15}})
+        _e, before = self.call("mass_properties", {"body": "Coupon"})
+        expected = before["bodies"][0]["mass"]
+        err, cal = self.call("mass_calibrate", {"body": "Coupon", "grams": round(expected * 1.1, 2)})
+        self.assertFalse(err, cal)
+        self.assertAlmostEqual(cal["scale"], 1.1, delta=0.01)
+        _e, after = self.call("mass_properties", {"body": "Coupon"})
+        self.assertAlmostEqual(after["bodies"][0]["mass"], expected * 1.1, delta=0.02)
+        self.assertIn("calibrated", after["bodies"][0]["as"])
+        err, far = self.call("mass_calibrate", {"body": "Coupon", "grams": expected * 10})
+        self.assertTrue(err)
+        self.call("mass_calibrate", {"body": "Coupon", "reset": True})
+        _e, back = self.call("mass_properties", {"body": "Coupon"})
+        self.assertAlmostEqual(back["bodies"][0]["mass"], expected, delta=0.01)
+
 
 if __name__ == "__main__":
     unittest.main()

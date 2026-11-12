@@ -137,13 +137,28 @@ def encased_parts(meta):
     return out
 
 
-def properties(session, o, rho=None, shape=None, meta=None):
+CALIBRATION = "massCalibration"
+
+
+def calibration_key(setup, material):
+    """What a calibration is for: the print setup (its printer, settings and
+    spool), else solid in this material."""
+    return f"setup:{setup['id']}" if setup else f"solid:{material}"
+
+
+def properties(session, o, rho=None, shape=None, meta=None, calibrated=True):
     doc = session.doc
     c, set_ = matfam.of_body(doc, o.Label)
     if rho is not None:
         c = dict(c, density=rho)
     setup = store.setup_of(doc, o.Label, "print")
     m_b, c_b, I_b, how, vol = body_mass(shape or o.Shape, c["density"], setup)
+    cal = store.read(doc, CALIBRATION, {}).get(calibration_key(setup, c.get("id"))) if calibrated else None
+    if cal and cal.get("scale"):
+        # A weighed print of this setup: every reading scaled to match it.
+        k = float(cal["scale"])
+        m_b, I_b = m_b * k, _scale(I_b, k)
+        how += f"; calibrated ×{k:.3f} to a weighed print of {cal.get('body')} ({cal.get('grams')} g)"
     enc = encased_parts(session.meta.get(o.Label) if meta is None else meta)
     m, com, I = _combine([(m_b, c_b, I_b)] + [(e[0], e[1], e[2]) for e in enc])
     return {
@@ -412,8 +427,42 @@ def tools(session):
             out["next"] = "cut: true cuts these pockets (one undo step)."
         return out
 
+    def mass_calibrate(a):
+        o = s.body(a.get("body"))
+        c, _ = matfam.of_body(s.doc, o.Label)
+        setup = store.setup_of(s.doc, o.Label, "print")
+        key = calibration_key(setup, c.get("id"))
+        cals = store.read(s.doc, CALIBRATION, {})
+        if a.get("reset"):
+            gone = cals.pop(key, None)
+            store.write(s.doc, CALIBRATION, cals)
+            return {"reset": key, "was": gone, "note": "Readings go back to the material's own figures."}
+        g = a.get("grams")
+        if not isinstance(g, (int, float)) or g <= 0:
+            raise ToolError("invalid_input", "grams: what the print weighed on the scales (with anything encased in it).")
+        p = properties(s, o, calibrated=False)
+        enc = sum(e[0] for e in p["encased"])
+        body_g = g - enc
+        if body_g <= 0:
+            raise ToolError("invalid_input", f"{g} g is less than what is encased in it ({enc:.2f} g): weigh it with them in.")
+        k = body_g / p["bodyMass"] if p["bodyMass"] > 0 else 0
+        if not 0.3 <= k <= 3.0:
+            raise ToolError("invalid_input", f"The print weighed {g} g against {p['mass']:.2f} g expected (×{k:.2f}): too far to be the same part and settings — check the body, its setup and its material.")
+        cals[key] = {"scale": round(k, 4), "grams": g, "body": o.Label, "expected": round(p["mass"], 2), "encased": round(enc, 2)}
+        store.write(s.doc, CALIBRATION, cals)
+        return {"calibrated": key, "scale": round(k, 4), "expected": round(p["mass"], 2), "weighed": g, "encased": round(enc, 2),
+                "for": f"print setup {setup['name']} ({setup['id']})" if setup else f"solid {c.get('id')}",
+                "note": "Every mass reading of bodies in this setup (mass_properties, part_review, ballast) now matches the scales; reset: true undoes it."}
+
     tgt = {"type": "array", "items": {"type": ["number", "null"]}, "description": "[x, y, z] mm; null for an axis that does not matter"}
     return [
+        Tool(
+            "mass_calibrate",
+            "Calibrate mass to a weighed print: grams (what it weighed, anything encased in it included) for a body; every reading for its print setup (or, unprinted, its material) is then scaled to match — the printer, spool and settings as they really are. Kept with the document; reset: true goes back to the material's figures.",
+            obj({"body": {"type": "string"}, "grams": {"type": "number"}, "reset": {"type": "boolean"}}),
+            mass_calibrate,
+            changes=True,
+        ),
         Tool(
             "mass_properties",
             "Each body's mass (g) in its material — as printed (walls and infill, an estimate) when it is in a print setup, else solid — its centre of mass (mm) and inertia about it (g·mm², principal moments too), with encased parts counted: gen_make's magnets and ballast cut by mass_ballast. A body with no material is taken as PLA and says so.",
