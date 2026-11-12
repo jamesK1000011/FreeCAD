@@ -138,10 +138,44 @@ def tools(session):
             return {"holds": []}
         q = a.get("faces")
         _, picked = _pick_report(o.Shape, q, "faces")
-        st["holds"] = ([] if a.get("replace") else st["holds"]) + [{"faces": q, "kind": "fixed"}]
+        kind = a.get("kind", "fixed")
+        h = {"faces": q, "kind": kind}
+        AX = {"x": 1, "y": 2, "z": 3}
+        if kind == "fixed":
+            note = "Held rigidly: no movement at all on these faces. Real bolts and clamps give a little, so stress right at a hold reads high."
+        elif kind == "slide":
+            n = V(0, 0, 0)
+            for _, f in picked:
+                n += facepick.outward_normal(f) * f.Area
+            if n.Length < 1e-9:
+                raise ToolError("invalid_input", "slide: these faces have no one normal — slide holds a flat face (or faces facing one way).")
+            n.normalize()
+            k = max(range(3), key=lambda i: abs(n[i]))
+            if abs(n[k]) < 0.999:
+                raise ToolError("invalid_input", f"slide: the faces face {[round(c, 3) for c in n]} — a slide holds along x, y or z; turn the part square or use pin with dofs.")
+            h["dofs"], h["values"] = [k + 1], [0.0]
+            note = f"Held only along {'xyz'[k]} (a roller or a smooth floor): free to slide in the face. Add another hold or slide so the part cannot drift."
+        elif kind == "pin":
+            dofs = a.get("dofs")
+            if not dofs or not all(d in AX for d in dofs):
+                raise ToolError("invalid_input", "pin: dofs [\"x\", \"y\", \"z\"] — the directions held (the rest free).")
+            h["dofs"], h["values"] = sorted(AX[d] for d in set(dofs)), [0.0] * len(set(dofs))
+            note = f"Held in {', '.join(sorted(set(dofs)))} only."
+        elif kind == "move":
+            m = a.get("move")
+            if not (isinstance(m, list) and len(m) == 3):
+                raise ToolError("invalid_input", "move: [dx, dy, dz] mm the faces are pushed to (null leaves that direction free).")
+            h["dofs"] = [i + 1 for i in range(3) if m[i] is not None]
+            h["values"] = [float(m[i]) for i in range(3) if m[i] is not None]
+            if not h["dofs"]:
+                raise ToolError("invalid_input", "move: give at least one direction a value.")
+            note = "These faces are moved by that much (a set displacement): the answer reads the force it takes as stress."
+        else:
+            raise ToolError("invalid_input", "kind: fixed | slide (held along the face normal only) | pin (dofs held) | move (set displacement).")
+        st["holds"] = ([] if a.get("replace") else st["holds"]) + [h]
         _save(s.doc, st)
         s.snapshot("fea_hold")
-        return {"held": picked, "holds": len(st["holds"]), "note": "Held rigidly: no movement at all on these faces. Real bolts and clamps give a little, so stress right at a hold reads high."}
+        return {"held": picked, "kind": kind, "holds": len(st["holds"]), "note": note}
 
     TYPICAL_ALPHA = {"pla": 68e-6, "petg": 60e-6, "abs": 90e-6, "asa": 95e-6, "nylon": 110e-6, "pa": 110e-6, "tpu": 150e-6, "pc": 68e-6,
                      "steel": 12e-6, "stainless": 16e-6, "aluminium": 23e-6, "aluminum": 23e-6, "brass": 19e-6, "copper": 17e-6, "titanium": 8.6e-6}
@@ -174,13 +208,23 @@ def tools(session):
             _save(s.doc, st)
             s.snapshot("fea_load")
             return {"loads": []}
-        kinds = [k for k in ("force", "pressure", "gravity", "temperature") if k in a]
+        kinds = [k for k in ("force", "pressure", "gravity", "temperature", "spin") if k in a]
         if len(kinds) != 1:
-            raise ToolError("invalid_input", "One of force (N: [fx, fy, fz] total, or a number pushing into the faces), pressure (MPa, pushing into the faces), gravity (true for 1 g down -z, a number of g, or [gx, gy, gz] in g) or temperature (K the whole part warms by, negative cools; alpha 1/K).")
+            raise ToolError("invalid_input", "One of force (N: [fx, fy, fz] total, or a number pushing into the faces), pressure (MPa, pushing into the faces), gravity (true for 1 g down -z, a number of g, or [gx, gy, gz] in g), temperature (K the whole part warms by, negative cools; alpha 1/K) or spin { rpm, axis, at }.")
         kind = kinds[0]
         ld = {"kind": kind}
         out = {}
-        if kind == "temperature":
+        if kind == "spin":
+            sp = a["spin"]
+            if not isinstance(sp, dict) or not isinstance(sp.get("rpm"), (int, float)):
+                raise ToolError("invalid_input", "spin: { rpm, axis [x,y,z] (z), at [x,y,z] a point on the axis (origin) } — a rotor, a fan, a flywheel.")
+            ax = V(*[float(c) for c in sp.get("axis", [0, 0, 1])])
+            if ax.Length < 1e-9:
+                raise ToolError("invalid_input", "spin.axis: a direction.")
+            ax = ax.multiply(1.0 / ax.Length)
+            ld["spin"] = {"rpm": float(sp["rpm"]), "axis": [ax.x, ax.y, ax.z], "at": [float(c) for c in sp.get("at", [0, 0, 0])]}
+            out["note"] = "Spinning loads every bit of the part outward by its mass: hoop stress grows with rpm² — the material needs a density."
+        elif kind == "temperature":
             dT = a["temperature"]
             if not isinstance(dT, (int, float)) or isinstance(dT, bool):
                 raise ToolError("invalid_input", "temperature: K (°C) the whole part changes by from as it was held — a number, negative to cool.")
@@ -314,17 +358,31 @@ def tools(session):
 
         fixed = set()
         held_faces = set()
+        bounds = {}
         for h in st["holds"]:
             for name, f in resolve(h["faces"]):
                 held_faces.add(name)
-                fixed.update(femmesh.getNodesByFace(f))
-        if len(fixed) < 3:
+                ns = femmesh.getNodesByFace(f)
+                if h.get("kind", "fixed") == "fixed":
+                    fixed.update(ns)
+                else:
+                    for d, v in zip(h["dofs"], h["values"]):
+                        for n in ns:
+                            bounds[(n, d)] = v
+        bounds = [(n, d, v) for (n, d), v in bounds.items() if n not in fixed]
+        if len(fixed) + len({n for n, _, _ in bounds}) < 3:
             raise ToolError("failed", "The held faces hold fewer than 3 mesh nodes: pick bigger faces or a finer mesh.")
+        st["_bounds"] = bounds
         cloads, dloads, gravity = {}, [], None
+        st["_centrif"] = []
         applied = []
         for ld in st["loads"]:
             if ld["kind"] == "temperature":
                 applied.append({"temperature": ld["delta"]})
+                continue
+            if ld["kind"] == "spin":
+                st["_centrif"].append(ld["spin"])
+                applied.append({"spin": ld["spin"]})
                 continue
             if ld["kind"] == "gravity":
                 g = ld["gravity"]
@@ -368,7 +426,7 @@ def tools(session):
         fixed, held_faces, cloads, dloads, gravity, applied = _assemble(st, shape, femmesh, nodes, elems)
         mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
         with open(os.path.join(wd, "job.inp"), "w") as f:
-            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, thermal=_thermal(st, nodes)))
+            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, thermal=_thermal(st, nodes), bounds=st.pop("_bounds", None), centrif=st.pop("_centrif", None)))
         env = dict(os.environ)
         env.setdefault("OMP_NUM_THREADS", str(max(1, min(4, os.cpu_count() or 1))))
         try:
@@ -513,15 +571,20 @@ def tools(session):
         timeout = float(a.get("timeout", 300))
         ccx, wd, femmesh, mesh_text, nodes, elems = _meshed(o, st, timeout, "modes")
         fixed = set()
+        mbounds = set()
         for h in st["holds"]:
             for _, f in facepick.pick(shape, h["faces"], "faces"):
-                fixed.update(femmesh.getNodesByFace(f))
-        free = not fixed
+                if h.get("kind", "fixed") == "fixed":
+                    fixed.update(femmesh.getNodesByFace(f))
+                else:
+                    mbounds.update((n, d, 0.0) for n in femmesh.getNodesByFace(f) for d in h["dofs"])
+        mbounds = [b for b in mbounds if b[0] not in fixed]
+        free = not fixed and not mbounds
         # A free part's first six modes are its rigid motions, near 0 Hz.
         ask = count + (6 if free else 0)
         mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
         with open(os.path.join(wd, "job.inp"), "w") as f:
-            f.write(ccx_io.deck_modes(mesh_text, mat, fixed, ask))
+            f.write(ccx_io.deck_modes(mesh_text, mat, fixed, ask, bounds=mbounds))
         frd, dat = _run(ccx, wd, timeout, "frequency step")
         freqs = ccx_io.read_frequencies(dat)
         shapes = ccx_io.read_frd_blocks(frd, "DISP")
@@ -648,7 +711,7 @@ def tools(session):
         fixed, held_faces, cloads, dloads, gravity, applied = _assemble(st, shape, femmesh, nodes, elems)
         mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
         with open(os.path.join(wd, "job.inp"), "w") as f:
-            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, buckle=count, thermal=_thermal(st, nodes)))
+            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, buckle=count, thermal=_thermal(st, nodes), bounds=st.pop("_bounds", None), centrif=st.pop("_centrif", None)))
         frd, dat = _run(ccx, wd, timeout, "buckling step")
         factors = ccx_io.read_buckling(dat)
         if not factors:
@@ -821,12 +884,15 @@ def tools(session):
         an.addObject(mesh)
         made.append(mesh.Label)
         shape = o.Shape
+        skipped = []
         for h in st["holds"]:
+            if h.get("kind", "fixed") != "fixed":
+                skipped.append(f"a {h['kind']} hold (add it as a displacement constraint in the FEM workbench)")
+                continue
             fx = ObjectsFem.makeConstraintFixed(doc, "Fixed")
             fx.References = [(o, tuple(n for n, _ in facepick.pick(shape, h["faces"], "faces")))]
             an.addObject(fx)
             made.append(fx.Label)
-        skipped = []
         for ld in st["loads"]:
             if ld["kind"] == "pressure":
                 pr = ObjectsFem.makeConstraintPressure(doc, "Pressure")
@@ -847,6 +913,8 @@ def tools(session):
                     skipped.append("the material's expansion coefficient and a thermomechanical solver setting (set them in the FEM workbench)")
                 except Exception:
                     skipped.append("the temperature change (add it in the FEM workbench)")
+            elif ld["kind"] == "spin":
+                skipped.append("the spin (FreeCAD 1.0's centrifugal constraint is Elmer's; CalculiX takes it as *DLOAD CENTRIF)")
             elif ld["kind"] == "gravity":
                 g = ObjectsFem.makeConstraintSelfWeight(doc, "SelfWeight")
                 g.Gravity_x, g.Gravity_y, g.Gravity_z = ld["gravity"]
@@ -884,15 +952,15 @@ def tools(session):
         ),
         Tool(
             "fea_hold",
-            "Hold faces fixed (no movement at all): faces by query — { near: [x,y,z] }, { normal: [0,0,-1], z: 0 }, { faces: [\"Face1\"] }. Adds to the holds (replace: true starts again; clear: true drops them). Answers the faces picked, with area and centre. A rigid hold makes stress no real mount does: peaks at a hold read high.",
-            obj({"faces": query, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}}),
+            "Hold faces: faces by query — { near: [x,y,z] }, { normal: [0,0,-1], z: 0 }, { faces: [\"Face1\"] }; kind fixed (no movement at all, the default) | slide (held only along the face's normal, x/y/z: a roller, a smooth floor, a symmetry plane) | pin (dofs [\"x\",\"y\",\"z\"] held, the rest free) | move (move [dx,dy,dz] mm, null for free: a set displacement, a press fit). Adds to the holds (replace: true starts again; clear: true drops them). Answers the faces picked, with area and centre. A rigid hold makes stress no real mount does: peaks at a hold read high.",
+            obj({"faces": query, "kind": {"type": "string", "enum": ["fixed", "slide", "pin", "move"]}, "dofs": {"type": "array", "items": {"type": "string"}}, "move": {"type": "array"}, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}}),
             fea_hold,
             changes=True,
         ),
         Tool(
             "fea_load",
-            "Load the part: force on faces (N; [fx, fy, fz] in total spread by area, or a number pushing into the faces), pressure on faces (MPa, positive pushes in), gravity (true is 1 g down -z; a number of g; [gx, gy, gz] in g), or temperature (K the whole part warms by, against its holds; alpha 1/K, else the material's). Adds to the loads (replace: true starts again; clear: true drops them).",
-            obj({"faces": query, "force": {}, "pressure": {"type": "number"}, "gravity": {}, "temperature": {"type": "number"}, "alpha": {"type": "number"}, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}}),
+            "Load the part: force on faces (N; [fx, fy, fz] in total spread by area, or a number pushing into the faces), pressure on faces (MPa, positive pushes in), gravity (true is 1 g down -z; a number of g; [gx, gy, gz] in g), or temperature (K the whole part warms by, against its holds; alpha 1/K, else the material's), or spin { rpm, axis [x,y,z], at [x,y,z] } (a rotor's own mass flung outward). Adds to the loads (replace: true starts again; clear: true drops them).",
+            obj({"faces": query, "force": {}, "pressure": {"type": "number"}, "gravity": {}, "temperature": {"type": "number"}, "alpha": {"type": "number"}, "spin": {"type": "object"}, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}}),
             fea_load,
             changes=True,
         ),

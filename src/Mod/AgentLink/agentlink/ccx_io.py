@@ -95,7 +95,7 @@ def _rows(ids, per=12):
     return "\n".join(", ".join(str(i) for i in ids[j:j + per]) for j in range(0, len(ids), per))
 
 
-def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None, thermal=None):
+def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None, thermal=None, bounds=None, centrif=None):
     """The whole input deck: the mesh as written, one material on every
     volume element (Evolumes), the fixed nodes, nodal loads {node: [f]},
     face pressures [(element, face, MPa)], gravity [gx, gy, gz] mm/s² or
@@ -110,12 +110,13 @@ def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None, therm
            # a uniform temperature change: the material's expansion, every node from 0 to delta
            ["*EXPANSION, ZERO=0", f"{thermal['alpha']:.6g}"] if thermal else []) + [
            "*SOLID SECTION, ELSET=Evolumes, MATERIAL=PART",
-           "*NSET, NSET=AGFIX",
-           _rows(sorted(fixed))] + (
+           ] + (["*NSET, NSET=AGFIX", _rows(sorted(fixed))] if fixed else []) + (
            ["*NSET, NSET=AGALL", _rows(sorted(thermal["nodes"])), "*INITIAL CONDITIONS, TYPE=TEMPERATURE", "AGALL, 0.0"] if thermal else []) + [
            "*STEP"] + (["*BUCKLE", f"{int(buckle)}"] if buckle else ["*STATIC"]) + [
-           "*BOUNDARY",
-           "AGFIX, 1, 3, 0.0"]
+           "*BOUNDARY"] + (["AGFIX, 1, 3, 0.0"] if fixed else [])
+    # partial holds: (node, dof 1..3, value mm) — a slide, a pin, a set move
+    for n, k, v in sorted(bounds or []):
+        out.append(f"{n}, {k}, {k}, {v:.9g}")
     cl = []
     for n in sorted(cloads):
         for k in range(3):
@@ -129,6 +130,11 @@ def deck(mesh_text, material, fixed, cloads, dloads, gravity, buckle=None, therm
         g = _norm(gravity)
         if g > 0:
             dl.append(f"Evolumes, GRAV, {g:.9g}, {gravity[0] / g:.9g}, {gravity[1] / g:.9g}, {gravity[2] / g:.9g}")
+    for c in centrif or []:
+        # spinning: omega² (rad/s)², a point on the axis, the axis
+        w2 = (c["rpm"] * 2 * 3.141592653589793 / 60.0) ** 2
+        p, ax = c["at"], c["axis"]
+        dl.append(f"Evolumes, CENTRIF, {w2:.9g}, {p[0]:.9g}, {p[1]:.9g}, {p[2]:.9g}, {ax[0]:.9g}, {ax[1]:.9g}, {ax[2]:.9g}")
     if dl:
         out += ["*DLOAD"] + dl
     if thermal:
@@ -216,7 +222,7 @@ def normal_stress(s, n):
 
 # ---- natural frequencies ---------------------------------------------------------------
 
-def deck_modes(mesh_text, material, fixed, count):
+def deck_modes(mesh_text, material, fixed, count, bounds=None):
     """A frequency step: the lowest `count` modes, held at the fixed nodes
     (none: free, the first six near zero being the rigid motions)."""
     out = [mesh_text.rstrip(), "",
@@ -230,8 +236,10 @@ def deck_modes(mesh_text, material, fixed, count):
     if fixed:
         out += ["*NSET, NSET=AGFIX", _rows(sorted(fixed))]
     out += ["*STEP", "*FREQUENCY", f"{int(count)}"]
-    if fixed:
-        out += ["*BOUNDARY", "AGFIX, 1, 3, 0.0"]
+    if fixed or bounds:
+        out += ["*BOUNDARY"] + (["AGFIX, 1, 3, 0.0"] if fixed else [])
+        # partial holds in a frequency step are held at zero
+        out += [f"{n}, {k}, {k}, 0.0" for n, k, _ in sorted(bounds or [])]
     out += ["*NODE FILE", "U", "*END STEP", ""]
     return "\n".join(out)
 
