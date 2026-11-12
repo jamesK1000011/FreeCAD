@@ -146,3 +146,19 @@ class Sloped(unittest.TestCase):
         # counted floor (>= 1500): 0.75; at 2100: 0.45 -> 0.6 of the counted floor, over the 0.5 asked
         self.assertAlmostEqual(f["share"], 0.6, delta=0.01)
         self.assertEqual(f["state"], "compliant")
+
+
+class Ids(unittest.TestCase):
+    def test_information_rules_as_ids(self):
+        import xml.dom.minidom as md
+
+        from agentlink.code import ids
+
+        ps, _ = packs.load_dir(HERE)
+        rules, *_ = packs.resolve(ps, "XX", "2026-11-12")
+        xml, skipped = ids.write(rules, "example")
+        doc = md.parseString(xml.encode())
+        specs = doc.getElementsByTagName("specification")
+        self.assertTrue(any(s.getAttribute("identifier") == "example.info.wall" for s in specs))
+        self.assertEqual(len(doc.getElementsByTagName("property")), 2)
+        self.assertTrue(any(f == "species" for _, f, _ in skipped))

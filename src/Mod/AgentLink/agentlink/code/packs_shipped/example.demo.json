@@ -4,7 +4,7 @@
     "title": "Example pack: shows the format, not any real code",
     "layer": "model",
     "jurisdiction": "XX",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "effective": "2000-01-01",
     "license": "CC0-1.0",
     "note": "Made-up numbers in the shape a real pack takes. Jurisdiction XX matches no real place: set a project to XX to try the engine. Real packs carry paraphrased rules with citations and are added by the person (code_packs import)."
@@ -197,6 +197,27 @@
       },
       "tags": [
         "geometry"
+      ]
+    },
+    {
+      "id": "example.info.wall",
+      "title": "Every wall has a material, a fire rating and says if it is external",
+      "cite": {
+        "source": "example"
+      },
+      "applies": {
+        "kind": "wall"
+      },
+      "check": "info.required",
+      "params": {
+        "facts": [
+          "material",
+          "Pset_WallCommon.FireRating",
+          "Pset_WallCommon.IsExternal"
+        ]
+      },
+      "tags": [
+        "information"
       ]
     }
   ]

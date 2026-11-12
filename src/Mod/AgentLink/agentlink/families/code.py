@@ -18,6 +18,7 @@ import FreeCAD
 
 from .. import store
 from ..code import DISCLAIMER, beamfem, engine, framing, packs
+from ..code import ids as idsfile
 from ..code.findings import STATES, questions, summary
 from ..protocol import Tool, ToolError
 from ..tools import obj
@@ -144,6 +145,15 @@ def tools(session):
                 if ar is not None:
                     f["area"] = fact(round(float(getattr(ar, "Value", ar)) / 1e6, 3), "measured", "model", unit="m2")
                 subs.append({"id": o.Label, "kind": "space", "use": use, "facts": f})
+            elif t in ("Wall", "Slab", "Roof", "Covering") or pn in ("_Wall", "_Roof"):
+                kind = {"Wall": "wall", "Slab": "slab", "Roof": "roof", "Covering": "covering"}.get(t, "wall")
+                f = {}
+                mat = getattr(o, "Material", None)
+                if mat is not None:
+                    f["material"] = fact(mat.Label, "derived", "model")
+                if hasattr(o, "Width") and kind == "wall":
+                    f["thickness"] = fact(round(float(getattr(o.Width, "Value", o.Width)), 1), "measured", "model", unit="mm")
+                subs.append({"id": o.Label, "kind": kind, "ifc": t, "facts": f})
             elif t in ("Window", "Door") or pn == "_Window":
                 w, h = float(getattr(o, "Width", 0) or 0), float(getattr(o, "Height", 0) or 0)
                 f = {}
@@ -154,6 +164,19 @@ def tools(session):
                     f["clear_height"] = fact(round(h), "derived", "model", pm=50, unit="mm")
                 f["sill_height"] = fact(round(sh.BoundBox.ZMin - level_z(o), 1), "derived", "model", unit="mm", note="from its storey's floor")
                 subs.append({"id": o.Label, "kind": "opening", "ifc": t or "Window", "escape": None, "facts": f})
+        # IFC property sets as facts named "Pset.Property"
+        byid = {x["id"]: x for x in subs}
+        for o in d.Objects:
+            sub = byid.get(o.Label)
+            if sub is None:
+                continue
+            for name, val in (getattr(o, "IfcProperties", {}) or {}).items():
+                parts = str(val).split(";;")
+                if len(parts) >= 3:
+                    sub["facts"][f"{parts[0]}.{name}"] = fact(parts[2], "derived", "model", note="its IFC property")
+            for k in ("StandardCode", "Classification"):
+                if getattr(o, k, ""):
+                    sub["facts"]["classification"] = fact(getattr(o, k), "derived", "model")
         # spacing: the nearest parallel member at about the same height
         for sub, c, ax, dep in members:
             if sub["role"] == "column":
@@ -253,8 +276,23 @@ def tools(session):
             with open(os.path.expanduser(dst), "w", encoding="utf-8") as f:
                 json.dump({k: v for k, v in hit.items() if not k.startswith("_")}, f, indent=2)
             return {"exported": pid, "path": dst}
+        if action == "ids":
+            rules = resolved()[0] if not a.get("id") else {r["id"]: r for p in all_packs()[0] if p["pack"]["id"] == a["id"] for r in p.get("rules") or [] if r.get("op", "add") == "add"}
+            xml, skipped = idsfile.write(rules, a.get("id") or "Agent Link project information rules")
+            dst = a.get("path") or f"{a.get('id') or 'project'}.ids"
+            dst = dst if os.path.isabs(os.path.expanduser(dst)) else os.path.join(s.out_dir, dst)
+            with open(os.path.expanduser(dst), "w", encoding="utf-8") as f:
+                f.write(xml)
+            out = {"ids": dst, "specifications": xml.count("<specification "), "skipped": [{"rule": r, "fact": f, "why": w} for r, f, w in skipped][:30]}
+            try:
+                import ifctester  # noqa: F401
+
+                out["validator"] = "ifctester is installed: ifctester.ids.open(path) checks an IFC against it"
+            except ImportError:
+                out["validator"] = "ifctester is not installed here; any IDS 1.0 checker reads the file"
+            return out
         if action != "list":
-            raise bad("action: list | import (path) | export (id, path) | schema.")
+            raise bad("action: list | import (path) | export (id, path) | ids (the information rules as IDS 1.0: id or the project's) | schema.")
         ps, errs = all_packs()
         return {"packs": [{"id": p["pack"]["id"], "title": p["pack"].get("title"), "layer": p["pack"]["layer"], "jurisdiction": p["pack"]["jurisdiction"],
                            "version": p["pack"]["version"], "effective": p["pack"]["effective"], "rules": len(p.get("rules") or []),
@@ -515,8 +553,8 @@ def tools(session):
     s_ = {"type": "string"}
     num = {"type": "number"}
     return [
-        Tool("code_packs", "Rule packs: action list (the packs found, by layer, jurisdiction, version, effective date) | import (path: a pack .json into your pack folder, checked first) | export (id, path) | schema (the pack format). Packs hold paraphrased, cited rules — never a code's text.",
-             obj({"action": {"type": "string", "enum": ["list", "import", "export", "schema"]}, "path": s_, "id": s_}), code_packs),
+        Tool("code_packs", "Rule packs: action list (the packs found, by layer, jurisdiction, version, effective date) | import (path: a pack .json into your pack folder, checked first) | export (id, path) | ids (the information rules as a buildingSMART IDS 1.0 file: id, or the project's in force) | schema (the pack format). Packs hold paraphrased, cited rules — never a code's text.",
+             obj({"action": {"type": "string", "enum": ["list", "import", "export", "ids", "schema"]}, "path": s_, "id": s_}), code_packs),
         Tool("code_project", "Set the project the checks are for: jurisdiction (hierarchical, US-WA-Pierce-DuPont; XX tries the shipped example), date (permit or design date, YYYY-MM-DD: picks the pack versions in force), include [contractor or owner pack ids], name. Answers the packs used, rules in force, values (loads …) and any layer conflicts.",
              obj({"jurisdiction": s_, "date": s_, "include": {"type": "array", "items": s_}, "occupancy": s_, "name": s_}), code_project, changes=True),
         Tool("code_facts", "What the checks will read: each member, room and opening from the BIM model with its facts (b, d, span, spacing, size, clear heights, sill …) and where each came from — measured, derived, user_supplied, assumed. subject narrows to one. Changes nothing.",

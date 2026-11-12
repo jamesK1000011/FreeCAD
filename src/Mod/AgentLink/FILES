@@ -16,6 +16,7 @@ agentlink/code/beamfem.py
 agentlink/code/engine.py
 agentlink/code/findings.py
 agentlink/code/framing.py
+agentlink/code/ids.py
 agentlink/code/packs.py
 agentlink/code/packs_shipped/example.demo.json
 agentlink/data/slicer-minimal.json
