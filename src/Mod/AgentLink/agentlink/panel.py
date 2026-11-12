@@ -80,9 +80,9 @@ class Pins:
             style = coin.SoMarkerSet()
             co = coin.SoCoordinate3()
             co.point.setValue(0, 0, 0)
-            style.markerIndex = FreeCADGui.getMarkerIndex("CIRCLE_FILLED", 11)
+            style.markerIndex = FreeCADGui.getMarkerIndex("CIRCLE_FILLED", 15)
             font = coin.SoFont()
-            font.size = 14
+            font.size = 20
             txt = coin.SoText2()
             txt.string = f"  {n['id']}"
             for c in (mat, tr, co, style, font, txt):

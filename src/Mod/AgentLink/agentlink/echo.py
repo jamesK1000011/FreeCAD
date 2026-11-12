@@ -285,6 +285,9 @@ class Echo:
             made = _objects(doc, [body.get(k) for k in OUT_KEYS if isinstance(body.get(k), str)])
             if made:
                 _select(made)
+                # Lit for a moment, then the part shows in its own colours again.
+                QtCore, _QtGui, _QtW = _qt()
+                QtCore.QTimer.singleShot(1800, FreeCADGui.Selection.clearSelection)
                 body_obj = next((o for o in made if o.TypeId == "PartDesign::Body"), None)
                 if body_obj is None:
                     body_obj = next((p for o in made for p in o.InList if p.TypeId == "PartDesign::Body"), None)
