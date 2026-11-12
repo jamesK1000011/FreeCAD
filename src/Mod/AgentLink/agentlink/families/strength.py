@@ -859,7 +859,7 @@ def tools(session):
         least = min(bb.XLength, bb.YLength, bb.ZLength)
         if mesh > least / 4:
             warnings.append(f"Coarse mesh ({mesh:g} mm against a least size of {least:.1f} mm): peaks are under-read — fea_setup {{ mesh: {round(mesh / 2, 2)} }} and solve again; if the peak rises by more than 10% keep refining.")
-        if dmag[n_dmax] > 0.05 * max(bb.XLength, bb.YLength, bb.ZLength):
+        if not nonlin and dmag[n_dmax] > 0.05 * max(bb.XLength, bb.YLength, bb.ZLength):
             warnings.append("The displacement is large for the part: a linear solve is rough here.")
         if not str(c["id"]).startswith("custom:"):
             warnings.append(matfam.TYPICAL)

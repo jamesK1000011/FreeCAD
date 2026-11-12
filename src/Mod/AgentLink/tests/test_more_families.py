@@ -455,5 +455,23 @@ class MoreFamilies(Base):
         self.assertEqual(st["values"]["FontSize"], 3.5)
 
 
+    def test_fea_nonlinear(self):
+        self.have("fea_solve")
+        import shutil
+
+        if not (shutil.which("ccx") and shutil.which("gmsh")):
+            self.skipTest("ccx and gmsh are not installed")
+        self.box("Fnl bar", [100, 10, 10], [0, 0, 2400])
+        self.ok("fea_setup", {"body": "Fnl bar", "material": "pla", "mesh": 3})
+        self.ok("fea_hold", {"faces": {"normal": [-1, 0, 0]}})
+        # 95 N at the tip: 57 MPa at the root, past PLA's 50 but short of a plastic hinge (~125 N)
+        self.ok("fea_load", {"faces": {"normal": [1, 0, 0]}, "force": [0, 0, -95]})
+        lin = self.ok("fea_solve", {})
+        self.assertTrue(any("nonlinear: true" in w for w in lin["warnings"]))
+        r = self.ok("fea_solve", {"nonlinear": True})
+        self.assertTrue(r["nonlinear"]["plastic"])
+        self.assertGreater(r["nonlinear"]["plasticStrainMax"], 0)
+        self.assertFalse(any("linear solve is rough" in w for w in r["warnings"]))
+
 if __name__ == "__main__":
     unittest.main()
