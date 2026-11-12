@@ -235,8 +235,8 @@ def grid_mesh(P, cell):
     for k, j in index.items():
         a, b = divmod(k, W)
         r = index.get((a + 1) * W + b)
-        up = index.get(a * W + b + 1)
-        d = index.get((a + 1) * W + b + 1)
+        up = index.get(a * W + b + 1) if b + 1 < W else None  # never wrap to the next row
+        d = index.get((a + 1) * W + b + 1) if b + 1 < W else None
         if r is not None and d is not None and up is not None:
             T += [(j, r, d), (j, d, up)]
         elif r is not None and d is not None:

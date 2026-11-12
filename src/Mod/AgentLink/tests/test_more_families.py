@@ -57,6 +57,21 @@ class MoreFamilies(Base):
         back = self.ok("points_import", {"path": e["path"], "name": "Pt back"})
         self.assertEqual(back["points"], top["points"])
 
+    def test_points_mesh_curve(self):
+        self.have("points_mesh")
+        self.box("Pm plate", [60, 40, 10], [0, 300, 0])
+        self.ok("points_sample", {"object": "Pm plate", "count": 6000, "name": "Pm cloud"})
+        self.ok("points_crop", {"points": "Pm cloud", "box": [[0, 300, 9.9], [60, 340, 10.1]], "replace": False, "name": "Pm top"})
+        m = self.ok("points_mesh", {"points": "Pm top"})
+        self.assertGreater(m["area"], 2400 * 0.85)
+        self.assertLess(m["area"], 2400 * 1.02)
+        self.ok("part_primitive", {"kind": "cylinder", "radius": 20, "height": 30, "at": [200, 300, 0], "name": "Pm cyl"})
+        self.ok("points_sample", {"object": "Pm cyl", "count": 8000, "name": "Pm cc"})
+        self.ok("points_crop", {"points": "Pm cc", "box": [[150, 270, 14.8], [250, 330, 15.2]], "replace": False, "name": "Pm ring"})
+        c = self.ok("points_fit", {"points": "Pm ring", "shape": "curve", "tolerance": 0.3})
+        self.assertTrue(c["closed"])
+        self.assertAlmostEqual(c["length"], 2 * 3.14159 * 20, delta=2)
+
     def test_surface(self):
         self.have("surface_sew")
         self.box("Sf cube", [20, 20, 20], [300, 0, 0])
