@@ -577,7 +577,9 @@ def show():
         else:
             mw.addDockWidget(QtCore.Qt.LeftDockWidgetArea, _panel)
         # Frame the part in the view as it now stands.
-        QtCore.QTimer.singleShot(400, lambda: FreeCADGui.ActiveDocument and FreeCADGui.SendMsgToActiveView("ViewFit"))
+        from .echo import fit
+
+        QtCore.QTimer.singleShot(400, fit)
     _panel.show()
     _panel.raise_()
     return _panel

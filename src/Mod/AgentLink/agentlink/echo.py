@@ -223,6 +223,30 @@ def flash_command(cmd, ms=1300):
                 QtCore.QTimer.singleShot(ms, lambda w=w, old=old: w.setStyleSheet(old))
 
 
+def fit():
+    """Frame the part in the 3D view in front — only a live 3D view of an
+    open document, and not while a restart is reopening documents (a view
+    being made or torn down then crashes FreeCAD in its fit animation)."""
+    try:
+        import FreeCADGui
+
+        from . import restart_mark
+
+        if restart_mark.read() is not None:
+            return False
+        gd = FreeCADGui.ActiveDocument
+        if gd is None or FreeCAD.ActiveDocument is None or gd.Document.Name not in FreeCAD.listDocuments():
+            return False
+        v = gd.ActiveView
+        if v is None or type(v).__name__ != "View3DInventor":
+            return False
+        v.fitAll()
+        return True
+    except Exception as e:
+        FreeCAD.Console.PrintLog(f"Agent Link fit: {e}\n")
+        return False
+
+
 def _objects(doc, names):
     out = []
     for n in names:
@@ -460,8 +484,8 @@ class Echo:
                     gv.setActiveObject("pdbody", body_obj)
             # Follow the work: the view framed on the part after each change
             # (Mod/AgentLink Follow; the Activity tab's check box).
-            if FreeCAD.ParamGet(PREFS).GetBool("Follow", True) and FreeCADGui.ActiveDocument and not name.startswith(("td_", "drawing_")):
-                FreeCADGui.SendMsgToActiveView("ViewFit")
+            if FreeCAD.ParamGet(PREFS).GetBool("Follow", True) and not name.startswith(("td_", "drawing_")):
+                fit()
             FreeCADGui.updateGui()
         except Exception as e:
             FreeCAD.Console.PrintLog(f"Agent Link echo (after {name}): {e}\n")
