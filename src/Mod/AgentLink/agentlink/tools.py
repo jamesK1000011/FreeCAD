@@ -941,7 +941,13 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         calls = fixed
         unknown = [c["tool"] for c in calls if c["tool"] not in server.tools]
         if unknown:
-            raise ToolError("not_found", f"No tool named {', '.join(sorted(set(unknown)))} — nothing was run. tool_groups lists them all.")
+            import difflib
+
+            hints = []
+            for u in sorted(set(unknown)):
+                near = difflib.get_close_matches(u, list(server.tools), n=3, cutoff=0.5)
+                hints.append(f"{u}" + (f" (near: {', '.join(near)})" if near else ""))
+            raise ToolError("not_found", f"No tool named {'; '.join(hints)} — nothing was run. tool_groups lists them all.")
         rollback = a.get("rollback", True)
         stop = a.get("stopOnError", True)
         mark = s.doc.UndoCount
