@@ -167,6 +167,7 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(self._notes_tab(), "Notes")
         tabs.addTab(self._steps_tab(), "Steps")
+        tabs.addTab(self._activity_tab(), "Activity")
         box = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(box)
         lay.setContentsMargins(6, 6, 6, 6)
@@ -299,6 +300,47 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
         except Exception as e:  # a view without a scene (a TechDraw page in front)
             FreeCAD.Console.PrintLog(f"Agent Link pins: {e}\n")
         self.fill_bodies()
+
+    # -- activity: what the agent did, call by call --
+
+    def _activity_tab(self):
+        from . import echo
+
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        row = QtWidgets.QHBoxLayout()
+        prefs = FreeCAD.ParamGet(echo.PREFS)
+        self.echo_on = QtWidgets.QCheckBox("Show the agent's steps")
+        self.echo_on.setToolTip("Workbench, button, selection and a caption for each thing the agent does")
+        self.echo_on.setChecked(prefs.GetBool("Echo", True))
+        self.echo_on.toggled.connect(lambda on: prefs.SetBool("Echo", on))
+        self.pace = QtWidgets.QComboBox()
+        self.pace.setToolTip("How long each step stays up before the agent goes on")
+        paces = [("Fast", 0), ("Normal", 350), ("Slow", 900)]
+        for label, _ms in paces:
+            self.pace.addItem(label)
+        cur = prefs.GetInt("EchoDelay", 350)
+        self.pace.setCurrentIndex(min(range(3), key=lambda i: abs(paces[i][1] - cur)))
+        self.pace.currentIndexChanged.connect(lambda i: prefs.SetInt("EchoDelay", paces[i][1]))
+        row.addWidget(self.echo_on)
+        row.addStretch(1)
+        row.addWidget(self.pace)
+        lay.addLayout(row)
+        self.activity = QtWidgets.QTreeWidget()
+        self.activity.setHeaderLabels(["Time", "Did", "Result"])
+        self.activity.setRootIsDecorated(False)
+        lay.addWidget(self.activity)
+        for e in echo.log():
+            self._add_activity(e)
+        echo.listen(self._add_activity)
+        return w
+
+    def _add_activity(self, e):
+        it = QtWidgets.QTreeWidgetItem([e["time"], ("" if e["ok"] else "✗ ") + e["what"], e.get("result", "")])
+        it.setToolTip(1, e["what"])
+        it.setToolTip(2, e.get("result", ""))
+        self.activity.addTopLevelItem(it)
+        self.activity.scrollToItem(it)
 
     # -- steps --
 

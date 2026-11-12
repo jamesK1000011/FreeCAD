@@ -21,6 +21,7 @@ agentlink/code/packs.py
 agentlink/code/packs_shipped/example.demo.json
 agentlink/commands.py
 agentlink/data/slicer-minimal.json
+agentlink/echo.py
 agentlink/embeds.py
 agentlink/facepick.py
 agentlink/families/__init__.py

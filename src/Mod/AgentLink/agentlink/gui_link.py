@@ -43,6 +43,10 @@ class Link:
             from .server import VERSION
 
             self.server = build_server(self.session, version=VERSION)
+            # Each call shown in the window as it runs (agentlink/echo.py).
+            from . import echo
+
+            echo.wrap(self.server, self.session)
         elif active is not None and active is not self.session.doc:
             s = self.session
             s.doc = active

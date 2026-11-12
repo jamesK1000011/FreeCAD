@@ -87,5 +87,10 @@ def autostart():
         link = Link()
         link.start()
         agentlink_state.link = link
+        # The Agent Link panel up with it: notes, steps and what the agent does.
+        if FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/AgentLink").GetBool("ShowPanel", True):
+            from agentlink import panel
+
+            panel.show()
     except OSError as e:
         FreeCAD.Console.PrintLog(f"Agent Link: link not started ({e})\n")
