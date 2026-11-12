@@ -434,5 +434,26 @@ class MoreFamilies(Base):
         self.assertEqual(ch["material"][1], "Block")
 
 
+    def test_asm_motion_and_draft_extras(self):
+        self.have("asm_motion")
+        self.box("Am plate", [100, 100, 5], [0, 3000, 0])
+        self.box("Am post", [10, 10, 20], [70, 3045, 5])
+        self.box("Am arm", [60, 6, 5], [20, 3047, 5])
+        self.ok("asm_new", {"parts": ["Am plate", "Am post", "Am arm"], "name": "Am asm"})
+        self.ok("asm_ground", {"assembly": "Am asm", "part": "Am post"})
+        self.ok("asm_joint", {"assembly": "Am asm", "kind": "revolute", "name": "Am pivot", "a": {"part": "Am plate", "element": {"kind": "face", "normal": [0, 0, 1]}},
+                              "b": {"part": "Am arm", "element": {"kind": "face", "normal": [0, 0, -1]}}, "reverse": False})
+        self.ok("asm_motion", {"assembly": "Am asm", "action": "save", "name": "Am swing", "keys": [{"Am pivot": 30}, {"Am pivot": 150}]})
+        p = self.ok("asm_motion", {"action": "play", "name": "Am swing", "steps": 4})
+        self.assertEqual(p["frames"], 5)
+        self.assertEqual(p["verdict"], "clear")
+        ex = self.unavailable_skip("asm_export", {"assembly": "Am asm"})
+        self.assertGreater(ex["bytes"], 100)
+        wp = self.ok("draft_plane", {"face": "Am plate.Face6", "name": "Am top"})
+        self.assertEqual(wp["normal"], [0.0, 0.0, 1.0])
+        st = self.ok("draft_style", {"action": "set", "name": "Am shop", "values": {"FontSize": 3.5, "Decimals": 1}})
+        self.assertEqual(st["values"]["FontSize"], 3.5)
+
+
 if __name__ == "__main__":
     unittest.main()
