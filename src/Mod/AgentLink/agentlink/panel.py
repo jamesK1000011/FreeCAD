@@ -450,22 +450,21 @@ _panel = None
 
 
 def show():
-    """Open the panel, docked right; a second call brings it forward."""
+    """Open the panel as a tab beside the tree; a second call brings it forward."""
     global _panel
     mw = FreeCADGui.getMainWindow()
     if _panel is None:
         _panel = Panel()
-        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, _panel)
-        # A side panel, not half the window: the 3D view stays the main thing.
-        def narrow():
-            try:
-                mw.resizeDocks([_panel], [min(340, max(260, mw.width() // 4))], QtCore.Qt.Horizontal)
-            except Exception:
-                pass
-
-        narrow()
-        QtCore.QTimer.singleShot(250, narrow)
-        # The view got narrower: frame the part again.
+        # Beside the tree, as a tab of the left side panel (Model, Tasks):
+        # the 3D view keeps its width, as in ScanRuler's side panels.
+        docks = [d for d in mw.findChildren(QtWidgets.QDockWidget) if d is not _panel and d.isVisible()]
+        left = next((d for d in docks if mw.dockWidgetArea(d) == QtCore.Qt.LeftDockWidgetArea), None)
+        if left is not None:
+            mw.addDockWidget(QtCore.Qt.LeftDockWidgetArea, _panel)
+            mw.tabifyDockWidget(left, _panel)
+        else:
+            mw.addDockWidget(QtCore.Qt.LeftDockWidgetArea, _panel)
+        # Frame the part in the view as it now stands.
         QtCore.QTimer.singleShot(400, lambda: FreeCADGui.ActiveDocument and FreeCADGui.SendMsgToActiveView("ViewFit"))
     _panel.show()
     _panel.raise_()
