@@ -840,7 +840,7 @@ def tools(session):
         Tool(
             "sketch_external",
             "Bring edges of the body's solid into a sketch as outside geometry, to constrain to: edges [\"Edge7\" or a query { type: circle|line, radius, axis, near, inside } as shape_query takes]. Answers their ids (negative, -3 down); a constraint to them follows the part when it changes — a hole lined up with a boss, a pocket kept off a wall.",
-            obj({"sketch": sketch, "edges": {"type": "array"}}, ["edges"]),
+            obj({"sketch": sketch, "edges": {"type": "array", "items": {}}}, ["edges"]),
             sketch_external,
             changes=True,
         ),
@@ -860,7 +860,7 @@ def tools(session):
         Tool(
             "sketch_edit",
             "Edit a sketch: move { geo, vertex (0 the whole, 1/2/3), to [x,y] }, set [{ constraint: id|name, value mm|deg }], construction { geo, on }, rename { constraint, name }, deleteConstraints [id|name], delete [geometry ids — later ids shift down, and their constraints go], fillet { at: [g, v] a corner, or geos [g1, g2] near [[x,y],[x,y]]; radius } (round a corner, the curves trimmed to it), trim { geo, at [x,y] } (cut off the piece there, between crossings), split { geo, at }, mirror { geos, about: \"x\" | \"y\" | \"origin\" | a line id } (symmetric copies). Features built on it recompute; a feature it breaks is refused with FreeCAD's error and nothing kept.",
-            obj({"sketch": sketch, "move": {"type": "object"}, "set": {}, "construction": {"type": "object"}, "rename": {"type": "object"}, "deleteConstraints": {"type": "array"}, "delete": {"type": "array", "items": {"type": "integer"}},
+            obj({"sketch": sketch, "move": {"type": "object"}, "set": {}, "construction": {"type": "object"}, "rename": {"type": "object"}, "deleteConstraints": {"type": "array", "items": {}}, "delete": {"type": "array", "items": {"type": "integer"}},
                  "fillet": {"type": "object"}, "trim": {"type": "object"}, "split": {"type": "object"}, "mirror": {"type": "object"}}),
             sketch_edit,
             changes=True,

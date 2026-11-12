@@ -382,12 +382,12 @@ def tools(session):
         return added(o, "part_from_mesh", {"triangles": m.CountFacets, "sound": snd["ok"], **({"problems": snd["problems"]} if not snd["ok"] else {}),
                                            "note": "Flat triangles merged where they lie in one plane (refine); curved areas stay faceted — for a clean model, fit features instead (ScanRuler's element_fit)."})
 
-    at_n = {"at": {"type": "array"}, "normal": {"type": "array"}}
+    at_n = {"at": {"type": "array", "items": {}}, "normal": {"type": "array", "items": {}}}
     return [
         Tool("part_wire", "A wire, curve or flat face as FreeCAD's own parametric object: kind line (from, to) | circle (radius) | arc (radius, start, end degrees) | ellipse (major, minor) | polygon (sides, radius to corners) | helix (pitch, height, radius, taper, leftHanded) | spiral (growth per turn, turns, radius) | plane (length, width) | bspline (points it passes through, closed); at and normal place it. Profiles and paths for extrude, sweep, loft.",
-             obj({"kind": {"type": "string"}, "from": {"type": "array"}, "to": {"type": "array"}, "radius": {"type": "number"}, "start": {"type": "number"}, "end": {"type": "number"}, "major": {"type": "number"}, "minor": {"type": "number"},
+             obj({"kind": {"type": "string"}, "from": {"type": "array", "items": {}}, "to": {"type": "array", "items": {}}, "radius": {"type": "number"}, "start": {"type": "number"}, "end": {"type": "number"}, "major": {"type": "number"}, "minor": {"type": "number"},
                   "sides": {"type": "integer"}, "pitch": {"type": "number"}, "height": {"type": "number"}, "taper": {"type": "number"}, "leftHanded": {"type": "boolean"}, "growth": {"type": "number"}, "turns": {"type": "number"},
-                  "length": {"type": "number"}, "width": {"type": "number"}, "points": {"type": "array"}, "closed": {"type": "boolean"}, "name": {"type": "string"}, **at_n}, ["kind"]), part_wire, changes=True),
+                  "length": {"type": "number"}, "width": {"type": "number"}, "points": {"type": "array", "items": {}}, "closed": {"type": "boolean"}, "name": {"type": "string"}, **at_n}, ["kind"]), part_wire, changes=True),
         Tool("part_split", "Split bodies (Part's BOPTools, parametric): mode slice (bodies [one], tools [planes, faces or bodies that cut it]) | fragments (bodies: every piece where they overlap, kept apart) | xor (bodies: what is in an odd number of them); explode: true makes each piece a body.",
              obj({"mode": {"type": "string", "enum": ["slice", "fragments", "xor"]}, "bodies": {"type": "array", "items": {"type": "string"}}, "tools": {"type": "array", "items": {"type": "string"}}, "split": {"type": "boolean"}, "explode": {"type": "boolean"}, "name": {"type": "string"}}, ["bodies"]), part_split, changes=True),
         Tool("part_compound", "Group bodies into one compound (kept apart, not fused) — bodies [names]; or explode: a body of several solids into a body each.",
@@ -395,14 +395,14 @@ def tools(session):
         Tool("part_refine", "Merge a body's coplanar and co-cylindrical faces (refine); fix: true also repairs its tolerances and makes a closed shell a solid.",
              obj({"body": {"type": "string"}, "fix": {"type": "boolean"}, "tolerance": {"type": "number"}, "name": {"type": "string"}}), part_refine, changes=True),
         Tool("part_attach", "Attach a primitive or wire to a face or edge so it follows it: to \"Body.Face6\", mode (FlatFace, NormalToEdge, Concentric … default by what it is), offset [x, y, z] and rotate degrees in the face's frame.",
-             obj({"body": {"type": "string"}, "to": {"type": "string"}, "mode": {"type": "string"}, "offset": {"type": "array"}, "rotate": {"type": "number"}}, ["body", "to"]), part_attach, changes=True),
+             obj({"body": {"type": "string"}, "to": {"type": "string"}, "mode": {"type": "string"}, "offset": {"type": "array", "items": {}}, "rotate": {"type": "number"}}, ["body", "to"]), part_attach, changes=True),
         Tool("part_face", "A flat face from closed wires or sketches: from [the outline, then holes].", obj({"from": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}, ["from"]), part_face, changes=True),
         Tool("part_ruled", "A ruled surface between two edges or wires (a and b by name): straight lines from one to the other. reversed: true if it twists.",
              obj({"a": {"type": "string"}, "b": {"type": "string"}, "reversed": {"type": "boolean"}, "name": {"type": "string"}}, ["a", "b"]), part_ruled, changes=True),
         Tool("part_project", "Project a wire, sketch or a body's edges onto a face: shape, onto \"Body.Face6\", direction [x, y, z] (left out: along the face's normals). Lettering wrapped onto a curved face, an outline traced onto a surface.",
-             obj({"shape": {"type": "string"}, "onto": {"type": "string"}, "direction": {"type": "array"}, "name": {"type": "string"}}, ["shape", "onto"]), part_project, changes=True),
+             obj({"shape": {"type": "string"}, "onto": {"type": "string"}, "direction": {"type": "array", "items": {}}, "name": {"type": "string"}}, ["shape", "onto"]), part_project, changes=True),
         Tool("part_slices", "Cross-sections of a body: normal [x, y, z] (default z), count (evenly through it) or at [distances along the normal]; each slice's wires, length and enclosed area, kept as one compound. Layer outlines, laser-cut stacks, area along a length.",
-             obj({"body": {"type": "string"}, "normal": {"type": "array"}, "count": {"type": "integer"}, "at": {"type": "array", "items": {"type": "number"}}, "name": {"type": "string"}}), part_slices, changes=True),
+             obj({"body": {"type": "string"}, "normal": {"type": "array", "items": {}}, "count": {"type": "integer"}, "at": {"type": "array", "items": {"type": "number"}}, "name": {"type": "string"}}), part_slices, changes=True),
         Tool("part_from_mesh", "A mesh made a solid: mesh (an object) or file (STL, OBJ …); tolerance sews it, refine (default) merges flat triangles. For a closed, modest mesh (maxFacets 60000).",
              obj({"mesh": {"type": "string"}, "file": {"type": "string"}, "tolerance": {"type": "number"}, "refine": {"type": "boolean"}, "maxFacets": {"type": "integer"}, "name": {"type": "string"}}), part_from_mesh, changes=True),
     ]

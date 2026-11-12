@@ -388,21 +388,21 @@ def tools(session):
         return out
 
     size_schema = {"type": "object", "description": "Sizes by kind: box length/width/height; cylinder radius/height/angle; sphere radius; cone radius1/radius2/height; ellipsoid radius1..3; torus radius1/radius2; prism sides/circumradius/height; wedge xmin…z2max."}
-    place = {"at": {"type": "array"}, "rotate": {"type": "object"}}
+    place = {"at": {"type": "array", "items": {}}, "rotate": {"type": "object"}}
     return [
         Tool("pd_primitive", "A PartDesign primitive: kind box | cylinder | sphere | cone | ellipsoid | torus | prism | wedge, size { … } (mm), at [x, y, z] and rotate { axis, angle } from the body's origin; subtractive: true cuts it out. Parametric, attached to the body's XY plane.",
              obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": list(PRIMS)}, "size": size_schema, "subtractive": {"type": "boolean"}, "name": {"type": "string"}, **place}, ["kind"]), pd_primitive, changes=True),
         Tool("pd_gear", "An involute gear (kind gear: teeth, module, pressureAngle 20, internal, shift) or a roller-chain sprocket (kind sprocket: teeth, pitch 9.525 for #35 / 12.7 for #40, roller diameter) as a padded PartDesign feature on the body's XY plane: thickness, bore mm, at. Answers the pitch diameter.",
              obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": ["gear", "sprocket"]}, "teeth": {"type": "integer"}, "module": {"type": "number"}, "pressureAngle": {"type": "number"},
                   "internal": {"type": "boolean"}, "rim": {"type": "number"}, "shift": {"type": "number"}, "highPrecision": {"type": "boolean"}, "pitch": {"type": "number"}, "roller": {"type": "number"},
-                  "thickness": {"type": "number"}, "bore": {"type": "number"}, "at": {"type": "array"}, "name": {"type": "string"}}), pd_gear, changes=True),
+                  "thickness": {"type": "number"}, "bore": {"type": "number"}, "at": {"type": "array", "items": {}}, "name": {"type": "string"}}), pd_gear, changes=True),
         Tool("pd_helix", "Sweep a sketch's profile in a helix about an axis (default the sketch's V_Axis; x | y | z, H_Axis, a line's id): two of pitch (mm per turn), height (mm), turns; taper (degrees), growth (mm per turn: a spiral), leftHanded, reversed; subtractive: true cuts it (a thread, a groove). Springs, coils, worm threads.",
              obj({"body": {"type": "string"}, "profile": {"type": "string"}, "axis": {"type": ["string", "integer"]}, "pitch": {"type": "number"}, "height": {"type": "number"}, "turns": {"type": "number"},
                   "taper": {"type": "number"}, "growth": {"type": "number"}, "leftHanded": {"type": "boolean"}, "reversed": {"type": "boolean"}, "subtractive": {"type": "boolean"}, "name": {"type": "string"}}, ["profile"]), pd_helix, changes=True),
         Tool("pd_multitransform", "Repeat features through a chain of steps, each on what the steps before made: steps [{ kind: mirror, plane } | { kind: linear, direction, occurrences, spacing } | { kind: polar, axis, angle, occurrences } | { kind: scale, factor, occurrences }] — a grid is two linear steps; a bolt circle mirrored is polar then mirror.",
              obj({"body": {"type": "string"}, "features": {"type": "array", "items": {"type": "string"}}, "steps": {"type": "array", "items": {"type": "object"}}, "name": {"type": "string"}}, ["features", "steps"]), pd_multitransform, changes=True),
         Tool("pd_datum", "A datum: kind line (at, direction), point (at) or lcs (a coordinate system: at, rotate { axis, angle }) placed from the body's origin; or on: { near: [x,y,z] } a round edge — its axis (line) or centre (point), attached so it follows the model.",
-             obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": ["line", "point", "lcs"]}, "direction": {"type": "array"}, "on": {"type": "object"}, "name": {"type": "string"}, **place}, ["kind"]), pd_datum, changes=True),
+             obj({"body": {"type": "string"}, "kind": {"type": "string", "enum": ["line", "point", "lcs"]}, "direction": {"type": "array", "items": {}}, "on": {"type": "object"}, "name": {"type": "string"}, **place}, ["kind"]), pd_datum, changes=True),
         Tool("pd_binder", "Bring another body's faces (or all of it) into this body as a shape binder, to sketch on or project from: from (body or feature), faces [{ at, normal } …] (none: the whole shape), frozen: true keeps it as it is now.",
              obj({"body": {"type": "string"}, "from": {"type": "string"}, "faces": {"type": "array", "items": {"type": "object"}}, "frozen": {"type": "boolean"}, "name": {"type": "string"}}, ["from"]), pd_binder, changes=True),
         Tool("pd_boolean", "A boolean inside a body with other bodies: op fuse | cut | common, with [body names]. The tool bodies stay editable and are followed.",

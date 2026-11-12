@@ -953,7 +953,7 @@ def tools(session):
         Tool(
             "fea_hold",
             "Hold faces: faces by query — { near: [x,y,z] }, { normal: [0,0,-1], z: 0 }, { faces: [\"Face1\"] }; kind fixed (no movement at all, the default) | slide (held only along the face's normal, x/y/z: a roller, a smooth floor, a symmetry plane) | pin (dofs [\"x\",\"y\",\"z\"] held, the rest free) | move (move [dx,dy,dz] mm, null for free: a set displacement, a press fit). Adds to the holds (replace: true starts again; clear: true drops them). Answers the faces picked, with area and centre. A rigid hold makes stress no real mount does: peaks at a hold read high.",
-            obj({"faces": query, "kind": {"type": "string", "enum": ["fixed", "slide", "pin", "move"]}, "dofs": {"type": "array", "items": {"type": "string"}}, "move": {"type": "array"}, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}}),
+            obj({"faces": query, "kind": {"type": "string", "enum": ["fixed", "slide", "pin", "move"]}, "dofs": {"type": "array", "items": {"type": "string"}}, "move": {"type": "array", "items": {}}, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}}),
             fea_hold,
             changes=True,
         ),
@@ -979,7 +979,7 @@ def tools(session):
         Tool(
             "fea_heat",
             "Steady heat through the study's body: temperatures [{ faces, celsius }] held, heat [{ faces, watts }] going in, air { h W/(m²·K) (10, still air), celsius (25), faces (the rest) } taking it away — air: false for none. Answers the hottest and coolest place and warns when the part passes where its material softens (k from the card, or conductivity here). Conduction and convection only. view_render map heat shows it.",
-            obj({"temperatures": {"type": "array"}, "heat": {"type": "array"}, "air": {}, "conductivity": {"type": "number"}, "timeout": {"type": "number"}}),
+            obj({"temperatures": {"type": "array", "items": {}}, "heat": {"type": "array", "items": {}}, "air": {}, "conductivity": {"type": "number"}, "timeout": {"type": "number"}}),
             fea_heat,
         ),
         Tool("fea_results", "The last solve's answer again, with stale: true when the body or the study changed since.", obj({}), fea_results),
@@ -989,7 +989,7 @@ def tools(session):
         Tool("fea_refine", "A finer mesh near faces (a fillet, a hole's edge, where the peak sits): faces (a query as fea_hold takes), size mm; clear: true drops every region. Kept in the study; the next solve uses it.",
              obj({"faces": {}, "size": {"type": "number"}, "clear": {"type": "boolean"}}), fea_refine, changes=True),
         Tool("fea_probe", "Read the last solve where asked: points [[x,y,z] …] (von Mises and displacement there), line { from, to, samples } (a profile along it), faces (a query as fea_hold takes: max, mean and where on them). Changes nothing.",
-             obj({"points": {"type": "array"}, "line": {"type": "object"}, "faces": {}}), fea_probe),
+             obj({"points": {"type": "array", "items": {}}, "line": {"type": "object"}, "faces": {}}), fea_probe),
         Tool("fea_export", "Write the last solve out: formats [vtu (ParaView, FreeCAD FEM post-processing), csv (every node: position, von Mises, displacement)], name.",
              obj({"formats": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}), fea_export),
         Tool("fea_native", "Build the study as FreeCAD's own FEM analysis (Analysis, CalculiX solver, material, Gmsh mesh, fixed / force / pressure / self-weight constraints), to open and run in the FEM workbench.",

@@ -590,7 +590,7 @@ def tools(session):
         Tool(
             "part_loft",
             "A solid through two or more profiles in order (each a sketch, face, { points } or { circle }); ruled: straight between them; closed: back to the first. Trap: profiles with the same number of edges, started at matching corners, loft without a twist. op / into as part_extrude.",
-            obj({"profiles": {"type": "array"}, "body": body, "ruled": {"type": "boolean"}, "closed": {"type": "boolean"}, "solid": {"type": "boolean"}, **common_in}, ["profiles"]),
+            obj({"profiles": {"type": "array", "items": {}}, "body": body, "ruled": {"type": "boolean"}, "closed": {"type": "boolean"}, "solid": {"type": "boolean"}, **common_in}, ["profiles"]),
             part_loft,
             changes=True,
         ),
