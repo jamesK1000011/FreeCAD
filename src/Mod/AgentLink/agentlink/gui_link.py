@@ -48,6 +48,12 @@ class Link:
             from . import echo
 
             echo.wrap(self.server, self.session)
+        elif getattr(self.session, "keep_doc", False):
+            # An extension holds the session on a document of its own
+            # (agentlink/ext.py): kept whatever the person brings to the front.
+            if self.session.doc.Name not in FreeCAD.listDocuments():
+                self.session.keep_doc = False
+                self.session.doc = active or FreeCAD.newDocument("AgentLink")
         elif active is not None and active is not self.session.doc:
             s = self.session
             s.doc = active

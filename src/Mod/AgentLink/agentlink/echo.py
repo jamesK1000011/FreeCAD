@@ -238,7 +238,7 @@ def fit():
         if gd is None or FreeCAD.ActiveDocument is None or gd.Document.Name not in FreeCAD.listDocuments():
             return False
         v = gd.ActiveView
-        if v is None or type(v).__name__ != "View3DInventor":
+        if v is None or not hasattr(v, "getSceneGraph") or not hasattr(v, "fitAll"):
             return False
         v.fitAll()
         return True
@@ -283,11 +283,16 @@ class Echo:
         self.s = session
         self.t0 = None
 
+    def live(self):
+        """Shown in the window, unless an extension asks for the window to
+        be left alone (session.window_quiet, agentlink/ext.py)."""
+        return not getattr(self.s, "window_quiet", False)
+
     def before(self, tool, args):
         self.t0 = time.time()
         if tool is None or tool.name in ("batch", "session_state", "tool_groups", "guide_read"):
             return
-        if not enabled():
+        if not enabled() or not self.live():
             return
         shown = tool.changes or tool.name.startswith(SHOWN)
         if not shown:
@@ -459,9 +464,9 @@ class Echo:
         except Exception:
             body = {}
         if name != "batch":
-            _note({"time": datetime.datetime.now().strftime("%H:%M:%S"), "tool": name, "ok": ok, "what": _describe(name, args), "result": summary,
+            _note({"time": datetime.datetime.now().strftime("%H:%M:%S"), "tool": name, "ok": ok, "what": (getattr(self.s, "activity_tag", "") or "") + _describe(name, args), "result": summary,
                    "ms": int((time.time() - (self.t0 or time.time())) * 1000)})
-        if not (enabled() and ok and tool is not None and tool.changes) or name == "batch":
+        if not (enabled() and ok and tool is not None and tool.changes and self.live()) or name == "batch":
             return
         try:
             import FreeCADGui

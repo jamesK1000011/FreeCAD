@@ -180,6 +180,17 @@ class Panel(Tabs, QtWidgets.QDockWidget if QtWidgets else object):
         box = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(box)
         lay.setContentsMargins(6, 6, 6, 6)
+        # Extensions' widgets above the tabs (agentlink/ext.py).
+        from . import ext
+
+        self.extras = []
+        for make in ext.panel_widgets:
+            try:
+                wdg = make(self)
+                lay.addWidget(wdg)
+                self.extras.append(wdg)
+            except Exception as e:
+                FreeCAD.Console.PrintLog(f"Agent Link panel extension: {e}\n")
         lay.addWidget(tabs)
         credit = QtWidgets.QLabel(CREDIT)
         credit.setWordWrap(True)
@@ -289,6 +300,12 @@ class Panel(Tabs, QtWidgets.QDockWidget if QtWidgets else object):
     _filling = False
 
     def refresh(self, force=False):
+        for wdg in getattr(self, "extras", []):
+            try:
+                if hasattr(wdg, "refresh"):
+                    wdg.refresh()
+            except Exception:
+                pass
         doc = _doc()
         notes = nf.notes_of(doc)["notes"] if doc else []
         key = (doc.Name if doc else None, repr(notes), self.show_pins.isChecked())

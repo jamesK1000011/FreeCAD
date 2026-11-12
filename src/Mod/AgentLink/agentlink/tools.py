@@ -1025,4 +1025,10 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
     for t in core:
         t.group = "core"
         server.add(t)
+    # Extensions installed beside this add-on (agentlink/ext.py).
+    from . import ext
+
+    for t in ext.tools(session):
+        server.add(t)
+    ext.install_all(server, session)
     return server

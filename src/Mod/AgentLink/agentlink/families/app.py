@@ -442,6 +442,11 @@ def tools(session):
                 panel._panel.stop()
         except Exception:
             pass
+        # Extensions tidy up first (a document of their own not kept).
+        from .. import ext
+
+        ext.restarting(s)
+
         def changed(d):
             # "Modified" is the window's own flag (the * on the tab); isTouched
             # clears at each recompute, so it misses most changes.

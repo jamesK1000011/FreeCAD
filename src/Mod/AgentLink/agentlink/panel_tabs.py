@@ -96,11 +96,6 @@ def manual_steps(rows):
 class Tabs:
     """Mixed into the Panel: needs self._call(name, args)."""
 
-    def _doc_now(self):
-        from .panel import _doc
-
-        return _doc()
-
     # -- setups: how each part is made --
 
     def _setups_tab(self):
