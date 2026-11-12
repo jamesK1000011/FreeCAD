@@ -1955,10 +1955,11 @@ def tools(session):
             n = doc().addObject("TechDraw::DrawViewAnnotation", "Note")
             page.addView(n)
             n.Text = str(a["text"]).split("\n")
-            n.TextSize = float(a.get("size", 3.5))
+            size = float(a.get("size", 3.5))
+            n.TextSize = size
             right = at[0] >= vx + p[0]
-            w = max(len(x) for x in n.Text) * n.TextSize * 0.55
-            n.X, n.Y = at[0] + (w / 2 + 1.5 if right else -w / 2 - 1.5), at[1] + n.TextSize * 0.35
+            w = max(len(x) for x in n.Text) * size * 0.55
+            n.X, n.Y = at[0] + (w / 2 + 1.5 if right else -w / 2 - 1.5), at[1] + size * 0.35
             out["note"] = n.Name
         recompute()
         return done("td_leader", out)
@@ -2011,9 +2012,10 @@ def tools(session):
         n = doc().addObject("TechDraw::DrawViewAnnotation", "Note")
         page.addView(n)
         n.Text = [text]
-        n.TextSize = float(a.get("size", 3.5))
-        w = len(text) * n.TextSize * 0.55
-        n.X, n.Y = at[0] + w / 2 + 1.5, at[1] + n.TextSize * 0.35
+        size = float(a.get("size", 3.5))
+        n.TextSize = size
+        w = len(text) * size * 0.55
+        n.X, n.Y = at[0] + w / 2 + 1.5, at[1] + size * 0.35
         recompute()
         return done("td_area", {"face": f"{label}.{sub}", "area": num(val, 4), "unit": unit, "text": text, "leader": ln.Name, "note": n.Name})
 
