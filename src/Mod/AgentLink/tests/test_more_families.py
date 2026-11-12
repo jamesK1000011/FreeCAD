@@ -202,8 +202,6 @@ class MoreFamilies(Base):
         self.assertEqual(data["tools"][0]["diameter"], 6.0)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
     def test_part_more(self):
         self.box("Pm B", [40, 30, 20], [500, 0, 0])
@@ -411,3 +409,7 @@ if __name__ == "__main__":
             r = self.ok("fea_shell", {"object": "Sh plate", "thickness": 5, "material": "pla", "holds": [{"edges": "boundary", "kind": kind}], "pressure": 0.001, "mesh": 10})
             want = alpha * 0.001 * 200 ** 4 / D
             self.assertAlmostEqual(r["deflectionMaxMm"], want, delta=want * 0.1, msg=kind)
+
+
+if __name__ == "__main__":
+    unittest.main()

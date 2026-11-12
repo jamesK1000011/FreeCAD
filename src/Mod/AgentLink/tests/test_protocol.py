@@ -95,8 +95,6 @@ class Protocol(unittest.TestCase):
         self.assertIn("a whole number", out["error"]["message"])
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class Synonyms(unittest.TestCase):
@@ -107,3 +105,7 @@ class Synonyms(unittest.TestCase):
         args = {"centre": [0, 0, 0], "body": "Box"}
         check_input(sch, args)
         self.assertEqual(args, {"center": [0, 0, 0], "object": "Box"})
+
+
+if __name__ == "__main__":
+    unittest.main()

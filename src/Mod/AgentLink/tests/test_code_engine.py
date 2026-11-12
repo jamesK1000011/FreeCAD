@@ -115,8 +115,6 @@ class Engine(unittest.TestCase):
         self.assertTrue(f["questions"])
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class BeamFem(unittest.TestCase):
@@ -162,3 +160,7 @@ class Ids(unittest.TestCase):
         self.assertTrue(any(s.getAttribute("identifier") == "example.info.wall" for s in specs))
         self.assertEqual(len(doc.getElementsByTagName("property")), 2)
         self.assertTrue(any(f == "species" for _, f, _ in skipped))
+
+
+if __name__ == "__main__":
+    unittest.main()
