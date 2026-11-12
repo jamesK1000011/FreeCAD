@@ -102,6 +102,7 @@ agentlink/meshdist.py
 agentlink/meshformats.py
 agentlink/millsim.py
 agentlink/packing.py
+agentlink/paths.py
 agentlink/printability.py
 agentlink/printers.py
 agentlink/printmass.py
@@ -158,6 +159,7 @@ tests/test_model_more.py
 tests/test_more_families.py
 tests/test_param.py
 tests/test_parts.py
+tests/test_paths.py
 tests/test_printer.py
 tests/test_printmass.py
 tests/test_protocol.py

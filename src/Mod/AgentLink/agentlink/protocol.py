@@ -112,7 +112,7 @@ def compact(obj):
 
 
 class Server:
-    def __init__(self, name, version, tools, instructions="", run=None, groups=None, resources=None):
+    def __init__(self, name, version, tools, instructions="", run=None, groups=None, resources=None, guard=None):
         self.name = name
         self.version = version
         self.tools = {t.name: t for t in tools}
@@ -123,6 +123,8 @@ class Server:
         # The groups listed now; None lists every tool.
         self.groups = groups
         self.resources = resources
+        # A check on a call's arguments before it runs (where files may go).
+        self.guard = guard
         # Notifications to send after the reply in hand (list_changed).
         self.outbox = []
 
@@ -186,6 +188,8 @@ class Server:
         t0 = time.time()
         try:
             check_input(tool.schema, args)
+            if self.guard is not None:
+                self.guard(tool, args)
             out = self.run(tool, lambda: tool.fn(args))
         except ToolError as e:
             return self.refusal(e.code, e.message)

@@ -870,7 +870,10 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         window = bool(FreeCAD.GuiUp)
     except Exception:
         window = False
-    server = Server(name, version, tools, instructions(lean, window), run=session.execute, groups=set(LEAN) if lean else None, resources=Resources(session))
+    from . import paths
+
+    server = Server(name, version, tools, instructions(lean, window), run=session.execute, groups=set(LEAN) if lean else None, resources=Resources(session),
+                    guard=lambda tool, args: paths.guard(tool, args, session.out_dir))
     s = session
 
     def tool_groups(a):
