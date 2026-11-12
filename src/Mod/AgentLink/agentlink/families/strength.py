@@ -72,6 +72,27 @@ def _dir(v):
     raise ToolError("invalid_input", "buildDir: +x, -x, +y, -y, +z, -z or [x, y, z].")
 
 
+def _nonlinear(text, cards, a):
+    """A deck made nonlinear: large deflections (NLGEOM) in increments, and
+    each material elastic-plastic from its yield to its tensile strength
+    (or a little past yield) at elongation (5 % unless the card says)."""
+    import re
+
+    text = text.replace("*STEP\n*STATIC", "*STEP, NLGEOM, INC=300\n*STATIC\n0.05, 1.0, 1e-6, 0.25", 1)
+    text = text.replace("*STEP, INC=200\n*STATIC\n0.1, 1.0, 1e-5, 1.0", "*STEP, NLGEOM, INC=300\n*STATIC\n0.05, 1.0, 1e-6, 0.25", 1)
+    if not a.get("elasticOnly"):
+        for name, c in cards.items():
+            y = c.get("yield")
+            if not y:
+                continue
+            uts = float(c.get("uts") or float(y) * 1.1)
+            elong = float(c.get("elongation") or 5) / 100.0
+            plastic = f"*PLASTIC\n{float(y):.6g}, 0\n{max(uts, float(y) * 1.001):.6g}, {elong:.6g}"
+            text = re.sub(rf"(\*MATERIAL, NAME={name}\n\*ELASTIC\n[^\n]*\n)", lambda m: m.group(1) + plastic + "\n", text, count=1)
+    text = text.replace("*EL FILE\nS\n", "*EL FILE\nS, PEEQ\n", 1)
+    return text
+
+
 def _need_study(session):
     st = _study(session.doc)
     if not st:
@@ -761,6 +782,9 @@ def tools(session):
             Emin = min(float(pc["E"]) for pc in part_cards)
             text = ccx_io.parts_deck(text, defs, ties=join if st.get("join") == "tie" else (), contacts=join if st.get("join") == "contact" else (),
                                      contact_slope=Emin * 50, friction=st.get("friction", 0))
+        nonlin = bool(a.get("nonlinear"))
+        if nonlin:
+            text = _nonlinear(text, {"PART": c} if not st.get("parts") else {f"MP{k + 1}": pc for k, pc in enumerate(part_cards)}, a)
         with open(os.path.join(wd, "job.inp"), "w") as f:
             f.write(text)
         env = dict(os.environ)
@@ -803,10 +827,19 @@ def tools(session):
             "displacementMax": {"mm": round(dmag[n_dmax], 4), **where(n_dmax)},
         }
         warnings = []
+        if nonlin:
+            try:
+                pe = ccx_io.read_frd_blocks(open(frd).read(), "PE")
+                peeq = max((v[0] for v in pe[-1].values()), default=0.0) if pe else 0.0
+            except Exception:
+                peeq = None
+            out["nonlinear"] = {"geometry": True, "plastic": bool(y) and not a.get("elasticOnly"), **({"plasticStrainMax": round(peeq, 5)} if peeq is not None else {})}
+            if peeq:
+                warnings.append(f"It yields: plastic strain up to {peeq * 100:.2f} % — it takes a permanent set there.")
         if y:
             out["safety"] = round(y / smax, 2) if smax > 0 else None
-            if smax > y:
-                warnings.append(f"Past yield ({smax:.1f} over {y:g} MPa): a linear solve is not right past yield — the part yields or breaks there.")
+            if smax > y and not nonlin:
+                warnings.append(f"Past yield ({smax:.1f} over {y:g} MPa): a linear solve is not right past yield — the part yields or breaks there (nonlinear: true follows it into yield).")
         else:
             warnings.append("The card has no yield strength: no safety factor — material_set custom with the supplier's yieldMPa.")
         if st.get("buildDir"):
@@ -1329,8 +1362,8 @@ def tools(session):
         ),
         Tool(
             "fea_solve",
-            "Solve the study: Gmsh meshes the body (second-order tetrahedra), CalculiX solves it linear static. Answers the largest von Mises stress (MPa) and where, the largest displacement (mm) and where, the safety factor against yield, and for a printed part the tension across the layers against half the yield (a simplification), with warnings. " + TRAPS + " Needs ccx and gmsh installed (timeout s, 300).",
-            obj({"timeout": {"type": "number"}}),
+            "Solve the study: Gmsh meshes the body (second-order tetrahedra), CalculiX solves it linear static. Answers the largest von Mises stress (MPa) and where, the largest displacement (mm) and where, the safety factor against yield, and for a printed part the tension across the layers against half the yield (a simplification), with warnings. nonlinear: true follows large deflections and each material into yield (elastic-plastic from yield to its tensile strength; elasticOnly: true keeps it elastic) and answers the plastic strain — for a part loaded past yield, a thin part that bends far, or contact. " + TRAPS + " Needs ccx and gmsh installed (timeout s, 300).",
+            obj({"timeout": {"type": "number"}, "nonlinear": {"type": "boolean"}, "elasticOnly": {"type": "boolean"}}),
             fea_solve,
         ),
         Tool(
