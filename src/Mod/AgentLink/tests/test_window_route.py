@@ -43,6 +43,60 @@ class WindowRoute(unittest.TestCase):
         self.assertTrue(w.call(json.dumps({"jsonrpc": "2.0", "id": 8, "method": "tools/call"})))
         srv.close()
 
+    def test_restarting_window_is_waited_for(self):
+        """A restart mark standing: the call waits for the window to listen
+        again instead of going to the hidden FreeCAD."""
+        import tempfile
+        import time
+
+        from agentlink import restart_mark
+
+        mark = os.path.join(tempfile.mkdtemp(), "mark")
+        os.environ["AGENTLINK_RESTART_MARK"] = mark
+        try:
+            restart_mark.write(["/nowhere/a.FCStd"])
+            port = _free_port()
+            supervise.WINDOW_PORT = port
+
+            def late():
+                time.sleep(1.2)
+                srv = socket.socket()
+                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                srv.bind(("127.0.0.1", port))
+                srv.listen(1)
+                conn, _ = srv.accept()
+                f = conn.makefile("rw", encoding="utf-8", newline="\n")
+                for line in f:
+                    f.write(json.dumps({"jsonrpc": "2.0", "id": json.loads(line)["id"], "result": {"where": "window"}}) + "\n")
+                    f.flush()
+                    restart_mark.clear()
+
+            threading.Thread(target=late, daemon=True).start()
+            got = []
+            t0 = time.time()
+            self.assertTrue(supervise.Window(got.append).call(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call"})))
+            self.assertGreater(time.time() - t0, 1.0)
+            self.assertEqual(json.loads(got[0])["result"]["where"], "window")
+        finally:
+            restart_mark.clear()
+            os.environ.pop("AGENTLINK_RESTART_MARK", None)
+
+    def test_stale_mark_is_ignored(self):
+        import tempfile
+
+        from agentlink import restart_mark
+
+        mark = os.path.join(tempfile.mkdtemp(), "mark")
+        os.environ["AGENTLINK_RESTART_MARK"] = mark
+        try:
+            with open(mark, "w") as f:
+                json.dump({"t": 0, "reopens": []}, f)
+            supervise.WINDOW_PORT = _free_port()
+            self.assertFalse(supervise.Window(lambda line: None).call(json.dumps({"jsonrpc": "2.0", "id": 4, "method": "tools/call"})))
+            self.assertFalse(os.path.exists(mark))
+        finally:
+            os.environ.pop("AGENTLINK_RESTART_MARK", None)
+
 
 def _free_port():
     s = socket.socket()

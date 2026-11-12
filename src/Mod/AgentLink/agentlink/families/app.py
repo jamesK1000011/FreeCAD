@@ -457,6 +457,11 @@ def tools(session):
                 d.save()
                 saved.append(d.FileName)
         reopen = [d.FileName for d in FreeCAD.listDocuments().values() if d.FileName]
+        # Calls wait for the window (and these documents) instead of going to
+        # the hidden FreeCAD meanwhile; the one in front is in front again.
+        from .. import restart_mark
+
+        restart_mark.write(reopen, active=getattr(s.doc, "FileName", None) or None)
         FreeCAD.saveParameter()
         exe = sys.executable
         bundle = exe.split(".app/")[0] + ".app" if ".app/" in exe else None
@@ -476,7 +481,7 @@ def tools(session):
 
             app = QtWidgets.QApplication.instance()
         QtCore.QTimer.singleShot(300, app.quit)
-        return {"restarting": True, "saved": saved, "reopens": reopen, "note": "FreeCAD quits and opens again in a few seconds, its link on by itself; the calls in between go to the hidden FreeCAD."}
+        return {"restarting": True, "saved": saved, "reopens": reopen, "note": "FreeCAD quits and opens again in a few seconds with these documents, its link on by itself; calls meanwhile wait for it (up to 90 s)."}
 
     return [
         Tool("pref_get", "Read FreeCAD's settings: a parameter group (path, e.g. \"BaseApp/Preferences/View\") with its values and subgroups, or one setting (name). Anything Edit > Preferences shows lives here.",

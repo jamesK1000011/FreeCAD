@@ -92,7 +92,35 @@ class Link:
             if line.strip():
                 self.inbox.put((line, f))
 
+    def _back(self):
+        """After app_restart: False while the documents it is reopening are
+        not all open yet (the calls wait in the inbox); then the one that was
+        in front is put in front again and the mark taken away."""
+        from . import restart_mark
+
+        m = restart_mark.read()
+        if m is None:
+            return True
+        open_ = {os.path.abspath(d.FileName) for d in FreeCAD.listDocuments().values() if d.FileName}
+        if any(os.path.abspath(p) not in open_ for p in m.get("reopens") or [] if os.path.isfile(p)):
+            return False
+        want = m.get("active")
+        d = next((d for d in FreeCAD.listDocuments().values() if want and d.FileName and os.path.abspath(d.FileName) == os.path.abspath(want)), None)
+        if d is not None:
+            try:
+                FreeCAD.setActiveDocument(d.Name)
+                if FreeCAD.GuiUp:
+                    import FreeCADGui
+
+                    FreeCADGui.setActiveDocument(d.Name)
+            except Exception:
+                pass
+        restart_mark.clear()
+        return True
+
     def _drain(self):
+        if not self.inbox.empty() and not self._back():
+            return
         while True:
             try:
                 line, f = self.inbox.get_nowait()

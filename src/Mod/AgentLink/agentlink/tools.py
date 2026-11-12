@@ -154,6 +154,7 @@ class Session:
             "step": len(self.steps),
             "outDir": self.out_dir,
             "where": getattr(self, "where", "hidden"),
+            **({"note": "The hidden FreeCAD answered: the FreeCAD window is closed, or its link is off or still starting, so this is not the document on screen."} if getattr(self, "where", "hidden") == "hidden" and os.environ.get("AGENTLINK_SUPERVISED") else {}),
             **({"launcher": _launcher()} if a.get("launcher") else {}),
         }
 

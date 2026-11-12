@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 
+from . import restart_mark
+
 FLAG = "AGENTLINK_SUPERVISED"
 WINDOW_PORT = int(os.environ.get("AGENTLINK_WINDOW_PORT", "7318"))
 
@@ -43,7 +45,11 @@ class Window:
         """Send one call to the window and pass its answer on. False when the
         window isn't there (or went away before answering): the hidden
         FreeCAD takes the call."""
-        if self.off or not self._open():
+        if self.off:
+            return False
+        # The window restarting (app_restart, agentlink_update): wait for it
+        # rather than let the hidden FreeCAD answer for the document on screen.
+        if not self._open() and not restart_mark.wait_until(self._open):
             return False
         try:
             mid = json.loads(line).get("id")
