@@ -52,6 +52,12 @@ ELMER_EQUATIONS = {"elasticity": "makeEquationElasticity", "deformation": "makeE
                    "magnetodynamic2d": "makeEquationMagnetodynamic2D"}
 
 
+FLUIDS = {"air": {"Name": "Air", "Density": "1.204 kg/m^3", "DynamicViscosity": "1.81e-5 Pa*s", "KinematicViscosity": "1.5e-5 m^2/s",
+                  "ThermalConductivity": "0.0257 W/m/K", "SpecificHeat": "1005 J/kg/K", "SpecificHeatRatio": "1.4"},
+          "water": {"Name": "Water", "Density": "998 kg/m^3", "DynamicViscosity": "1.0e-3 Pa*s", "KinematicViscosity": "1.0e-6 m^2/s",
+                    "ThermalConductivity": "0.6 W/m/K", "SpecificHeat": "4182 J/kg/K"}}
+
+
 def _setq(o, prop, text, number):
     """A quantity set as text with its unit, or as a plain SI number where
     this FreeCAD's property is a float."""
@@ -1273,6 +1279,8 @@ def tools(session):
             bad = [e for e in eqs if e not in ELMER_EQUATIONS]
             if bad:
                 raise ToolError("invalid_input", f"equations: {', '.join(bad)} unknown — " + ", ".join(ELMER_EQUATIONS) + ".")
+            if str(a.get("fluid", "air")).lower() not in FLUIDS:
+                raise ToolError("invalid_input", "fluid: " + " or ".join(FLUIDS) + " (with flow, the body is the fluid's space).")
             for key, eq in (("temperatures", "heat"), ("heat", "heat"), ("potentials", "electrostatic")):
                 if a.get(key) and eq not in eqs:
                     raise ToolError("invalid_input", f"{key} need the {eq} equation: equations [..., {eq}].")
@@ -1297,27 +1305,34 @@ def tools(session):
             solver = mk_solver(doc)
             an.addObject(solver)
             made.append(solver.Label)
-        mo = ObjectsFem.makeMaterialSolid(doc, "Material")
-        props = {"Name": c.get("name", st["material"])}
-        if c.get("E"):
-            props["YoungsModulus"] = f"{float(c['E'])} MPa"
-        if c.get("nu"):
-            props["PoissonRatio"] = str(float(c["nu"]))
-        if c.get("density"):
-            # cards keep g/cm³: FreeCAD's material wants kg/m³
-            props["Density"] = f"{float(c['density']) * 1000} kg/m^3"
-        if c.get("k"):
-            props["ThermalConductivity"] = f"{float(c['k'])} W/m/K"
-        props["SpecificHeat"] = f"{float(c.get('cp', 1500))} J/kg/K"
-        if c.get("alpha"):
-            props["ThermalExpansionCoefficient"] = f"{float(c['alpha'])} 1/K"
-        props["RelativePermittivity"] = str(float(c.get("permittivity", 1)))
-        mo.Material = props
-        if kind != "elmer":
-            # Elmer reads a material without references as every body's
-            mo.References = [(o, "")]
-        an.addObject(mo)
-        made.append(mo.Label)
+        fluid = kind == "elmer" and "flow" in eqs
+        if fluid:
+            mo = ObjectsFem.makeMaterialFluid(doc, "Fluid")
+            mo.Material = dict(FLUIDS[str(a.get("fluid", "air")).lower()])
+            an.addObject(mo)
+            made.append(mo.Label)
+        else:
+            mo = ObjectsFem.makeMaterialSolid(doc, "Material")
+            props = {"Name": c.get("name", st["material"])}
+            if c.get("E"):
+                props["YoungsModulus"] = f"{float(c['E'])} MPa"
+            if c.get("nu"):
+                props["PoissonRatio"] = str(float(c["nu"]))
+            if c.get("density"):
+                # cards keep g/cm³: FreeCAD's material wants kg/m³
+                props["Density"] = f"{float(c['density']) * 1000} kg/m^3"
+            if c.get("k"):
+                props["ThermalConductivity"] = f"{float(c['k'])} W/m/K"
+            props["SpecificHeat"] = f"{float(c.get('cp', 1500))} J/kg/K"
+            if c.get("alpha"):
+                props["ThermalExpansionCoefficient"] = f"{float(c['alpha'])} 1/K"
+            props["RelativePermittivity"] = str(float(c.get("permittivity", 1)))
+            mo.Material = props
+            if kind != "elmer":
+                # Elmer reads a material without references as every body's
+                mo.References = [(o, "")]
+            an.addObject(mo)
+            made.append(mo.Label)
         mesh = ObjectsFem.makeMeshGmsh(doc, "Mesh")
         mesh.Shape = o
         mesh.CharacteristicLengthMax = f"{float(st['mesh'])} mm"
@@ -1455,8 +1470,11 @@ def tools(session):
         from femsolver.elmer import writer as ew
         if hasattr(solver, "WorkingDirectory"):
             solver.WorkingDirectory = wd
-        w = ew.Writer(solver, wd, testmode=True)
-        (getattr(w, "write_solver_input", None) or getattr(w, "write"))()
+        try:
+            w = ew.Writer(solver, wd, testmode=True)
+            (getattr(w, "write_solver_input", None) or getattr(w, "write"))()
+        except Exception as e:
+            raise ToolError("invalid_state", f"Elmer's writer refused the case: {e}")
         unv = os.path.join(wd, "mesh.unv")
         mesh.FemMesh.write(unv)
         out = {"files": wd, "mesh": {"nodes": mesh.FemMesh.NodeCount, "volumes": mesh.FemMesh.VolumeCount}, "solved": False}
@@ -1545,10 +1563,10 @@ def tools(session):
              obj({"points": {"type": "array", "items": {}}, "line": {"type": "object"}, "faces": {}}), fea_probe),
         Tool("fea_export", "Write the last solve out: formats [vtu (ParaView, FreeCAD FEM post-processing), csv (every node: position, von Mises, displacement)], name.",
              obj({"formats": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}), fea_export),
-        Tool("fea_native", "Build the study as FreeCAD's own FEM analysis (Analysis, solver, material, Gmsh mesh, fixed / force / pressure / self-weight constraints), to open and run in the FEM workbench. solver elmer (multiphysics) takes equations [elasticity, heat, flow, electrostatic, electricforce, flux, staticcurrent, magnetodynamic, deformation (nonlinear elasticity)] together, temperatures [{ faces, celsius }] and heat [{ faces, watts }] for heat, potentials [{ faces, volts }] for electrostatics; write: true meshes it and writes Elmer's case (case.sif), run: true solves it where ElmerSolver is installed.",
+        Tool("fea_native", "Build the study as FreeCAD's own FEM analysis (Analysis, solver, material, Gmsh mesh, fixed / force / pressure / self-weight constraints), to open and run in the FEM workbench. solver elmer (multiphysics) takes equations [elasticity, heat, flow, electrostatic, electricforce, flux, staticcurrent, magnetodynamic, deformation (nonlinear elasticity)] together, temperatures [{ faces, celsius }] and heat [{ faces, watts }] for heat, potentials [{ faces, volts }] for electrostatics; with flow the body is the fluid's space (fluid air | water; inlets and walls are set in the FEM workbench); write: true meshes it and writes Elmer's case (case.sif), run: true solves it where ElmerSolver is installed.",
              obj({"name": {"type": "string"}, "solver": {"type": "string", "enum": ["calculix", "elmer"]},
                   "equations": {"type": "array", "items": {"type": "string", "enum": list(ELMER_EQUATIONS)}},
                   "temperatures": {"type": "array", "items": {"type": "object"}}, "heat": {"type": "array", "items": {"type": "object"}},
-                  "potentials": {"type": "array", "items": {"type": "object"}},
+                  "potentials": {"type": "array", "items": {"type": "object"}}, "fluid": {"type": "string", "enum": list(FLUIDS)},
                   "write": {"type": "boolean"}, "run": {"type": "boolean"}, "timeout": {"type": "number"}}), fea_native, changes=True),
     ]
