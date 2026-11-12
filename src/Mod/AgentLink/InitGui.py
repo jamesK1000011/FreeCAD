@@ -10,13 +10,14 @@ class AgentLinkWorkbench(FreeCADGui.Workbench):
     ToolTip = "Drive FreeCAD from an agent"
 
     def Initialize(self):
-        from agentlink.commands import _Panel, _StartLink, _StopLink
+        from agentlink.commands import _Panel, _Shot, _StartLink, _StopLink
 
         FreeCADGui.addCommand("AgentLink_Start", _StartLink())
         FreeCADGui.addCommand("AgentLink_Stop", _StopLink())
         FreeCADGui.addCommand("AgentLink_Panel", _Panel())
-        self.appendToolbar("Agent Link", ["AgentLink_Start", "AgentLink_Stop", "AgentLink_Panel"])
-        self.appendMenu("Agent Link", ["AgentLink_Start", "AgentLink_Stop", "AgentLink_Panel"])
+        FreeCADGui.addCommand("AgentLink_Shot", _Shot())
+        self.appendToolbar("Agent Link", ["AgentLink_Start", "AgentLink_Stop", "AgentLink_Panel", "AgentLink_Shot"])
+        self.appendMenu("Agent Link", ["AgentLink_Start", "AgentLink_Stop", "AgentLink_Panel", "AgentLink_Shot"])
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

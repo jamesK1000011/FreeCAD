@@ -75,6 +75,7 @@ agentlink/flat2d.py
 agentlink/frame.py
 agentlink/gdt.py
 agentlink/geometry.py
+agentlink/grab.py
 agentlink/gridfinity.py
 agentlink/gui_link.py
 agentlink/guides/assembly.md
@@ -127,6 +128,7 @@ agentlink/render.py
 agentlink/server.py
 agentlink/sheetfile.py
 agentlink/sheets.py
+agentlink/shots.py
 agentlink/slicer.py
 agentlink/slicer_presets.py
 agentlink/slicers.py

@@ -50,6 +50,19 @@ class _Panel:
         panel.show()
 
 
+class _Shot:
+    def GetResources(self):
+        return {"MenuText": "Screenshot for the agent", "ToolTip": "Take the window as you see it, mark it up and leave it for the agent (Alt+Shift+S)", "Accel": "Alt+Shift+S"}
+
+    def IsActive(self):
+        return True
+
+    def Activated(self):
+        from agentlink import shots
+
+        shots.take()
+
+
 def autostart():
     """Turn the link on when the FreeCAD window opens, so an agent's calls
     land in it without a click (Preferences: Mod/AgentLink AutoStart, on by
@@ -60,6 +73,12 @@ def autostart():
         return
     import agentlink_state
 
+    try:
+        import FreeCADGui
+
+        FreeCADGui.addCommand("AgentLink_Shot", _Shot())
+    except Exception:
+        pass
     if agentlink_state.link is not None:
         return
     try:

@@ -9,6 +9,7 @@
 # window until someone closes it, and the agent with it: those are refused,
 # with the tool that does the same job named.
 
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -384,29 +385,9 @@ def tools(session):
             target = next((d for d in docks if d.windowTitle().lower() == want or d.objectName().lower() == want), None)
             if target is None:
                 raise ToolError("not_found", "Panels: " + ", ".join(sorted(d.windowTitle() for d in docks if d.windowTitle())))
-        gui.updateGui()
-        pix = target.grab()
-        # The 3D view is drawn by OpenGL, which a widget grab leaves blank:
-        # render it the way view_snapshot does and paint it in its place.
-        try:
-            import tempfile
+        from ..grab import grab_window
 
-            from PySide import QtCore, QtGui
-
-            QtW = getattr(__import__("PySide", fromlist=["QtWidgets"]), "QtWidgets", QtGui)
-            gd = gui.ActiveDocument
-            view = gd.activeView() if gd else None
-            gl = next((w for w in target.findChildren(QtW.QWidget) if w.isVisible() and type(w).__name__ in ("QuarterWidget", "QOpenGLWidget", "QGLWidget")), None)
-            if view is not None and gl is not None and hasattr(view, "saveImage"):
-                tmp = os.path.join(tempfile.gettempdir(), "agentlink_view.png")
-                ratio = getattr(pix, "devicePixelRatio", lambda: 1.0)()
-                view.saveImage(tmp, int(gl.width() * ratio), int(gl.height() * ratio), "Current")
-                img = QtGui.QImage(tmp)
-                painter = QtGui.QPainter(pix)
-                painter.drawImage(QtCore.QRect(gl.mapTo(target, QtCore.QPoint(0, 0)), gl.size()), img)
-                painter.end()
-        except Exception as e:
-            FreeCAD.Console.PrintLog(f"Agent Link window_snapshot: 3D view not painted in ({e})\n")
+        pix = grab_window(target)
         out = os.path.expanduser(a.get("path") or os.path.join(s.out_dir, "window.png"))
         if not os.path.isabs(out):
             out = os.path.join(s.out_dir, out)
@@ -417,6 +398,33 @@ def tools(session):
             with open(out, "rb") as f:
                 res["_png"] = f.read()
         return res
+
+    def _shots():
+        try:
+            with open(os.path.join(os.path.expanduser("~/AgentLink"), "shots", "index.json"), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return []
+
+    def snapshot_latest(a):
+        rows = _shots()
+        if not rows:
+            raise ToolError("not_found", "No screenshots yet: the person takes one with the camera button (Agent Link toolbar) or Alt+Shift+S.")
+        k = int(a.get("index", 1))
+        if not 1 <= k <= len(rows):
+            raise ToolError("invalid_input", f"index: 1 to {len(rows)}.")
+        r = dict(rows[-k])
+        path = r["original"] if a.get("original") else r["path"]
+        r.pop("marks", None)
+        if os.path.isfile(path):
+            with open(path, "rb") as f:
+                r["_png"] = f.read()
+        if not r.get("done"):
+            r["note"] = (r.get("note") or "") + " (the person is still marking it up)"
+        return r
+
+    def snapshot_list(a):
+        return {"shots": [{k: v for k, v in r.items() if k != "marks"} for r in reversed(_shots())]}
 
     def app_restart(a):
         """Quit this FreeCAD and start it again (new add-on code, a theme):
@@ -485,6 +493,9 @@ def tools(session):
              obj({"objects": {"type": "array", "items": {"type": "string"}}, "clear": {"type": "boolean"}}), selection),
         Tool("window_snapshot", "A picture of the whole FreeCAD window as the person sees it (toolbars, tree, panels, 3D view), or part: one panel by its title; drawn by FreeCAD itself, in the background. path (a .png). Window only.",
              obj({"part": {"type": "string"}, "path": {"type": "string"}, "inline": {"type": "boolean"}}), window_snapshot),
+        Tool("snapshot_latest", "The person's newest screenshot (index 2, 3 … older ones) as a picture with their marks (original: true without), with its note, numbered pins and their comments, workbench and time. Only the person takes them (camera button, Alt+Shift+S).",
+             obj({"index": {"type": "integer"}, "original": {"type": "boolean"}}), snapshot_latest),
+        Tool("snapshot_list", "The person's screenshots, newest first, without pictures: time, note, pins, saved path.", obj({}), snapshot_list),
         Tool("app_restart", "Quit this FreeCAD window and open it again (new add-ons, a theme, settings that need a restart): settings written, changed documents saved and reopened; one never saved is refused unless discard: true. Window only.",
              obj({"discard": {"type": "boolean"}}), app_restart),
         Tool("workbench", "The workbenches, the active one, and activate: a name (Part Design, BIM, FEM …). Window only.", obj({"activate": {"type": "string"}}), workbench),
