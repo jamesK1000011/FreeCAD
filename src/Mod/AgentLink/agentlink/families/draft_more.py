@@ -446,7 +446,100 @@ def tools(session):
         return finish(named(fb, a.get("name"), "Facebinder"), "draft_facebinder", {"note": "It follows the faces; extrusion makes a skin of that thickness (a gasket, a pad on a face)."})
 
     xyz = {"type": "array", "items": {}}
+    # ---- working-plane proxies and annotation styles ----
+
+    def draft_plane(a):
+        """A saved working plane (Draft's working-plane proxy): at a point
+        with a normal, or on a face of a body; the sketches and Draft shapes
+        that follow can be laid on it."""
+        if a.get("face"):
+            label, sub, f = picks.resolve(s, a["face"])
+            if not sub or not sub.startswith("Face") or f.findPlane() is None:
+                raise ToolError("invalid_input", "face: a flat face (\"Box.Face6\").")
+            u0, u1, v0, v1 = f.ParameterRange
+            n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+            at = f.CenterOfMass
+        else:
+            at = picks.vec3(a.get("at", [0, 0, 0]), "at")
+            n = picks.direction(a.get("normal", [0, 0, 1]), "normal")
+        rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), n)
+        if a.get("rotate"):
+            rot = rot.multiply(FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), float(a["rotate"])))
+        pl = FreeCAD.Placement(at, rot)
+        mk = getattr(Draft, "make_workingplaneproxy", None) or getattr(Draft, "makeWorkingPlaneProxy", None)
+        if mk is None:
+            raise ToolError("unavailable", "This FreeCAD's Draft has no working-plane proxy.")
+        o = mk(pl)
+        o.Label = s.unique(a.get("name") or "Working plane", o)
+        s.doc.recompute()
+        s.snapshot("draft_plane")
+        x = rot.multVec(FreeCAD.Vector(1, 0, 0))
+        return {"plane": o.Label, "origin": [round(c, 3) for c in at], "normal": [round(c, 4) for c in n], "xAxis": [round(c, 4) for c in x], "step": len(s.steps),
+                "note": "In FreeCAD's window a double-click on it makes it the working plane; here it records the plane for drawings and sketches to use."}
+
+    STYLE_KEYS = {"ArrowSize": float, "ArrowType": str, "Decimals": int, "DimOvershoot": float, "ExtLines": float, "ExtOvershoot": float, "FontName": str, "FontSize": float,
+                  "LineColor": int, "LineSpacing": float, "LineWidth": int, "ScaleMultiplier": float, "ShowLine": bool, "ShowUnit": bool, "TextColor": int,
+                  "TextSpacing": float, "UnitOverride": str}
+
+    def draft_style(a):
+        """Annotation styles as Draft keeps them (the document's Meta
+        Draft_Style_<name>): set, list, delete, and apply to dimensions, labels
+        and texts."""
+        import json
+
+        d = s.doc
+        meta = dict(d.Meta or {})
+        action = a.get("action", "list")
+        styles = {k[len("Draft_Style_"):]: json.loads(v) for k, v in meta.items() if k.startswith("Draft_Style_")}
+        if action == "list":
+            return {"styles": styles}
+        name = a.get("name")
+        if not name:
+            raise ToolError("invalid_input", "name: the style's name.")
+        if action == "delete":
+            meta.pop("Draft_Style_" + name, None)
+            d.Meta = meta
+            s.snapshot("draft_style")
+            return {"deleted": name}
+        if action == "set":
+            vals = dict(styles.get(name, {}))
+            for k, v in (a.get("values") or {}).items():
+                if k not in STYLE_KEYS:
+                    raise ToolError("invalid_input", f"values.{k}: one of {', '.join(STYLE_KEYS)}.")
+                vals[k] = STYLE_KEYS[k](v)
+                if k in ("ArrowSize", "ArrowType"):  # newer Draft keeps start and end apart
+                    vals[k + "Start"] = vals[k + "End"] = vals[k]
+            meta["Draft_Style_" + name] = json.dumps(vals)
+            d.Meta = meta
+            s.snapshot("draft_style")
+            return {"style": name, "values": vals}
+        if action == "apply":
+            if name not in styles:
+                raise ToolError("not_found", f"style {name!r}: draft_style list names them.")
+            done, later = [], []
+            for r in a.get("objects") or []:
+                o = picks.find(d, r)
+                vo = getattr(o, "ViewObject", None)
+                if vo is not None and hasattr(vo, "AnnotationStyle"):
+                    try:
+                        vo.AnnotationStyle = name
+                        done.append(o.Label)
+                        continue
+                    except Exception:
+                        pass
+                if "AgentLinkStyle" not in o.PropertiesList:
+                    o.addProperty("App::PropertyString", "AgentLinkStyle", "AgentLink", "The Draft annotation style to show it in")
+                o.AgentLinkStyle = name
+                later.append(o.Label)
+            s.snapshot("draft_style")
+            return {"style": name, "applied": done, **({"recorded": later, "note": "No window here to show styles: recorded on them for when the file opens in FreeCAD."} if later else {})}
+        raise ToolError("invalid_input", "action: list | set (name, values) | apply (name, objects) | delete (name).")
+
     return [
+        Tool("draft_plane", "A saved working plane (Draft's working-plane proxy): at [x,y,z] with normal, or on a flat face (\"Box.Face6\"); rotate degrees about its normal; name. Records a plane to draw and sketch on.",
+             obj({"at": {"type": "array", "items": {"type": "number"}}, "normal": {"type": "array", "items": {"type": "number"}}, "face": {"type": "string"}, "rotate": {"type": "number"}, "name": {"type": "string"}}), draft_plane, changes=True),
+        Tool("draft_style", "Draft annotation styles, kept in the document as Draft keeps them: action list | set (name, values { FontSize, FontName, ArrowSize, ArrowType, Decimals, ShowUnit, UnitOverride, LineWidth, TextColor, ScaleMultiplier, ExtLines, ExtOvershoot, DimOvershoot, LineSpacing, TextSpacing, ShowLine, LineColor }) | apply (name, objects: dimensions, labels, texts) | delete.",
+             obj({"action": {"type": "string", "enum": ["list", "set", "apply", "delete"]}, "name": {"type": "string"}, "values": {"type": "object"}, "objects": {"type": "array", "items": {"type": "string"}}}), draft_style, changes=True),
         Tool("draft_shape", "A Draft 2D shape (parametric, editable in Draft): kind wire | bspline | bezier (points, closed) | rectangle (length, height) | circle (radius) | arc (radius, start, end) | ellipse (major, minor) | polygon (sides, radius, inscribed) | point (at); at and normal place it; face: true fills a closed one.",
              obj({"kind": {"type": "string"}, "points": {"type": "array", "items": {}}, "closed": {"type": "boolean"}, "length": {"type": "number"}, "height": {"type": "number"}, "radius": {"type": "number"}, "start": {"type": "number"}, "end": {"type": "number"},
                   "major": {"type": "number"}, "minor": {"type": "number"}, "sides": {"type": "integer"}, "inscribed": {"type": "boolean"}, "face": {"type": "boolean"}, "at": xyz, "normal": xyz, "name": {"type": "string"}}, ["kind"]), draft_shape, changes=True),
