@@ -240,8 +240,8 @@ def read_reactions(dat):
     return out
 
 
-def solve(ccx, workdir, members, supports, loads, gravity=None, n=8, timeout=300):
-    text, book = build(members, supports, loads, gravity, n)
+def solve(ccx, workdir, members, supports, loads, gravity=None, n=8, timeout=300, tol=1.0):
+    text, book = build(members, supports, loads, gravity, n, tol)
     os.makedirs(workdir, exist_ok=True)
     for f in os.listdir(workdir):
         if f.startswith("frame."):

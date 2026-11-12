@@ -596,7 +596,7 @@ def tools(session):
         if not a.get("supports"):
             raise ToolError("invalid_input", "supports [{ at [x,y,z] a member's end, kind pinned | fixed | roller }]: a frame with none flies off.")
         try:
-            res = FR.solve(ccx, wd, members, a.get("supports"), loads, g, int(a.get("elements", 8)), float(a.get("timeout", 300)))
+            res = FR.solve(ccx, wd, members, a.get("supports"), loads, g, int(a.get("elements", 8)), float(a.get("timeout", 300)), tol)
         except (ValueError, KeyError) as e:
             raise ToolError("invalid_input", str(e))
         except RuntimeError as e:
@@ -612,9 +612,6 @@ def tools(session):
         worst = min((r for r in res["members"] if r.get("safety")), key=lambda r: r["safety"], default=None)
         out = {**res, "members": res["members"], "elements": "B32 beams, expanded to solids by CalculiX", "worst": worst["member"] if worst else None,
                "note": "Joints between members are rigid; pinned and roller supports are held about the member's own axis. A frame model is a sizing look, not the connection design."}
-        total = sum(abs(x) for sp in res["supports"] for x in sp.get("reactionN", [])[2:3])
-        if total:
-            out["reactionTotalZN"] = round(total, 1)
         return out
 
     def fea_solve(a):
@@ -1188,7 +1185,7 @@ def tools(session):
         return out
 
     return [
-        Tool("fea_frame", "A frame of straight members by beam elements (CalculiX B32): members [{ name, from, to, section { kind rect (b, d) | circ (d) | pipe (d, t) | box (b, d, t) }, material }] or bodies [box-like BIM members: their centre lines and sizes]; supports [{ at a member's end, kind pinned | fixed | roller }]; loads [{ member, w N/mm down (or [wx,wy,wz]) | kPa with width mm }, { at a joint, force [fx,fy,fz] N }], gravity (own weight). Answers each member's stress along it, von Mises and safety, its deflection (span over deflection; deflectionLimit 360 judges it) and each support's reaction. Beams, rafters, portal frames, trusses, shelving.",
+        Tool("fea_frame", "A frame of straight members by beam elements (CalculiX B32): members [{ name, from, to, section { kind rect (b, d) | circ (d) | pipe (d, t) | box (b, d, t) }, material }] or bodies [box-like BIM members: their centre lines and sizes]; supports [{ at a member's end (within tolerance mm: 1, or the largest section with bodies), kind pinned | fixed | roller }]; loads [{ member, w N/mm down (or [wx,wy,wz]) | kPa with width mm }, { at a joint, force [fx,fy,fz] N }], gravity (own weight). Answers each member's stress along it, von Mises and safety, its deflection (span over deflection; deflectionLimit 360 judges it) and each support's reaction. Beams, rafters, portal frames, trusses, shelving.",
              obj({"members": {"type": "array", "items": {"type": "object"}}, "bodies": {"type": "array", "items": {"type": "string"}}, "material": {"type": "string"}, "supports": {"type": "array", "items": {"type": "object"}},
                   "loads": {"type": "array", "items": {"type": "object"}}, "gravity": {"type": "boolean"}, "deflectionLimit": {"type": "number"}, "tolerance": {"type": "number"},
                   "elements": {"type": "integer"}, "name": {"type": "string"}, "timeout": {"type": "number"}}), fea_frame),
