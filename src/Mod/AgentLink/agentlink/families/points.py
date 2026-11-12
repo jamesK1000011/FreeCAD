@@ -188,7 +188,7 @@ def spacing(P):
     return float(np.median(nn))
 
 
-def ring_order(P, gap_deg=30.0):
+def ring_order(P, gap_deg=45.0):
     """The points in order round their centre when they make a loop (no
     gap wider than gap_deg seen from the centre, all well away from it):
     else None."""
