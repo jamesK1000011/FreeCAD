@@ -292,6 +292,42 @@ def tools(session):
         switch(d)
         return {"document": d.Name, "label": d.Label, "previous": old, "note": "The previous document stays open; doc_open { path } returns to it if saved."}
 
+    def doc_close(a):
+        refs = a.get("documents") or [s.doc.Name]
+        if isinstance(refs, str):
+            refs = [refs]
+        docs = FreeCAD.listDocuments().values()
+        picked = []
+        for r in refs:
+            rp = os.path.abspath(where(r)) if isinstance(r, str) and r.lower().endswith(".fcstd") else None
+            d = next((x for x in docs if x.Name == r or x.Label == r or (rp and os.path.abspath(x.FileName or "") == rp)), None)
+            if d is None:
+                raise ToolError("not_found", f"{r!r}: no open document by that name, label or path — open: {', '.join(x.Label for x in docs)}.")
+            if d not in picked:
+                picked.append(d)
+
+        def changed(d):
+            try:
+                import FreeCADGui
+
+                gd = FreeCADGui.getDocument(d.Name) if FreeCAD.GuiUp else None
+            except Exception:
+                gd = None
+            # Never saved and not empty counts too: headless has no * on a tab.
+            return bool(getattr(gd, "Modified", False)) or d.isTouched() or (not d.FileName and len(d.Objects) > 0)
+
+        unsaved = [d.Label for d in picked if changed(d)]
+        if unsaved and not a.get("discard"):
+            raise ToolError("invalid_state", "Changed since saved: " + ", ".join(unsaved) + " — doc_save first, or discard: true to lose the changes.")
+        closed = []
+        for d in picked:
+            closed.append(d.Label)
+            FreeCAD.closeDocument(d.Name)
+        left = list(FreeCAD.listDocuments().values())
+        if s.doc.Name not in FreeCAD.listDocuments():
+            switch(left[-1] if left else FreeCAD.newDocument("Unnamed"))
+        return {"closed": closed, "document": s.doc.Name, "open": [d.Label for d in FreeCAD.listDocuments().values()]}
+
     def doc_open(a):
         p = where(a.get("path"))
         if not os.path.isfile(p):
@@ -695,6 +731,8 @@ def tools(session):
     objref = {"type": "string", "description": "An object's name or label."}
     return [
         Tool("doc_new", "Start a new, empty FreeCAD document and work in it from now on; the one before stays open (save it first: doc_save). Not undoable, and not in a batch's rollback.", obj({"name": {"type": "string"}}), doc_new),
+        Tool("doc_close", "Close open documents (documents: names, labels or .FCStd paths; the current one when left out); one changed since saved is refused unless discard: true. Work moves to another open document. Not undoable.",
+             obj({"documents": {"type": "array", "items": {"type": "string"}}, "discard": {"type": "boolean"}}), doc_close),
         Tool("doc_open", "Open a FreeCAD document (.FCStd, path) and work in it from now on — recomputed, with any object's error listed. Other formats come in with import_file. Not undoable.", obj({"path": {"type": "string"}}, ["path"]), doc_open),
         Tool("doc_save", "Save the document as .FCStd: path (relative goes in the session's folder), else where it was saved, else <label>.FCStd there. What setup and part_spec recorded is saved with it.", obj({"path": {"type": "string"}}), doc_save),
         Tool("object_list", "Every object in the document: name, label, type, visible, parents (what uses it) and its shape (volume, area, faces, solids, size for a solid; faces and edges else) or mesh. type: a part of the type to keep (\"Part::\", \"Sketch\").", obj({"type": {"type": "string"}}), object_list),

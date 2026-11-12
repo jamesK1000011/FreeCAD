@@ -35,6 +35,23 @@ class Doc(unittest.TestCase):
             self.assertTrue(err, f"{name} should be refused: {out}")
         return out
 
+    def test_close(self):
+        a = self.call("doc_new", {"name": "CloseA"})
+        self.call("part_primitive", {"kind": "box", "size": [5, 5, 5], "name": "Box"})
+        self.call("doc_save", {"path": "close_a.FCStd"})
+        b = self.call("doc_new", {"name": "CloseB"})
+        self.call("part_primitive", {"kind": "box", "size": [5, 5, 5], "name": "Box"})
+        # B never saved and changed: refused, then closed with discard.
+        self.call("doc_close", {}, ok=False)
+        out = self.call("doc_close", {"discard": True})
+        self.assertEqual(out["closed"], ["CloseB"])
+        self.assertNotIn(b["document"], FreeCAD.listDocuments())
+        self.assertNotEqual(self.session.doc.Name, b["document"])
+        out = self.call("doc_close", {"documents": [os.path.join(self.dir, "close_a.FCStd")]})
+        self.assertEqual(out["closed"], ["CloseA"])
+        self.assertNotIn(a["document"], FreeCAD.listDocuments())
+        self.call("doc_close", {"documents": ["Nope"]}, ok=False)
+
     def test_objects_and_properties(self):
         n = self.call("doc_new", {"name": "Parts"})
         self.assertEqual(self.session.doc.Name, n["document"])
