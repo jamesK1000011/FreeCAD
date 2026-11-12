@@ -4,34 +4,200 @@
     "title": "Example pack: shows the format, not any real code",
     "layer": "model",
     "jurisdiction": "XX",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "effective": "2000-01-01",
     "license": "CC0-1.0",
     "note": "Made-up numbers in the shape a real pack takes. Jurisdiction XX matches no real place: set a project to XX to try the engine. Real packs carry paraphrased rules with citations and are added by the person (code_packs import)."
   },
   "values": {
-    "load.live.floor": {"value": 1.9, "unit": "kPa", "stricter": "higher"},
-    "load.dead.floor": {"value": 0.5, "unit": "kPa", "stricter": "higher"},
-    "load.live.attic_storage": {"value": 1.0, "unit": "kPa", "stricter": "higher"},
-    "load.dead.attic_storage": {"value": 0.5, "unit": "kPa", "stricter": "higher"},
-    "load.live.habitable_attic": {"value": 1.4, "unit": "kPa", "stricter": "higher"},
-    "load.dead.habitable_attic": {"value": 0.5, "unit": "kPa", "stricter": "higher"},
-    "load.dead.roof": {"value": 0.7, "unit": "kPa", "stricter": "higher"},
-    "load.snow.ground": {"value": 1.2, "unit": "kPa", "stricter": "higher"},
-    "load.snow.roof_factor": {"value": 0.7, "stricter": "higher"}
+    "load.live.floor": {
+      "value": 1.9,
+      "unit": "kPa",
+      "stricter": "higher"
+    },
+    "load.dead.floor": {
+      "value": 0.5,
+      "unit": "kPa",
+      "stricter": "higher"
+    },
+    "load.live.attic_storage": {
+      "value": 1.0,
+      "unit": "kPa",
+      "stricter": "higher"
+    },
+    "load.dead.attic_storage": {
+      "value": 0.5,
+      "unit": "kPa",
+      "stricter": "higher"
+    },
+    "load.live.habitable_attic": {
+      "value": 1.4,
+      "unit": "kPa",
+      "stricter": "higher"
+    },
+    "load.dead.habitable_attic": {
+      "value": 0.5,
+      "unit": "kPa",
+      "stricter": "higher"
+    },
+    "load.dead.roof": {
+      "value": 0.7,
+      "unit": "kPa",
+      "stricter": "higher"
+    },
+    "load.snow.ground": {
+      "value": 1.2,
+      "unit": "kPa",
+      "stricter": "higher"
+    },
+    "load.snow.roof_factor": {
+      "value": 0.7,
+      "stricter": "higher"
+    }
   },
   "rules": [
-    {"id": "example.framing.member", "title": "Joists, rafters and beams carry their loads", "cite": {"source": "example"},
-     "applies": {"kind": "member"}, "check": "framing.member", "params": {"min_span_ratio_live": 360, "min_span_ratio_total": 240}, "tags": ["framing"]},
-    {"id": "example.framing.spacing", "title": "Framing members no farther apart than the limit", "cite": {"source": "example"},
-     "applies": {"kind": "member", "role": ["joist", "rafter"]}, "check": "framing.spacing", "params": {"max_spacing_mm": 610}, "tags": ["framing"]},
-    {"id": "example.space.ceiling", "title": "Habitable rooms have a minimum ceiling height", "cite": {"source": "example"},
-     "applies": {"kind": "space", "use": ["habitable", "habitable_attic"]}, "check": "fact.at_least", "params": {"fact": "clear_height", "min_height_mm": 2100}, "tags": ["geometry"]},
-    {"id": "example.opening.escape_area", "title": "Sleeping rooms have an escape opening of a minimum clear area", "cite": {"source": "example"},
-     "applies": {"kind": "opening", "escape": true}, "check": "fact.at_least", "params": {"fact": "clear_area", "min_area_mm2": 500000}, "tags": ["geometry"]},
-    {"id": "example.opening.sill", "title": "An escape opening's sill no higher than the limit", "cite": {"source": "example"},
-     "applies": {"kind": "opening", "escape": true}, "check": "fact.at_most", "params": {"fact": "sill_height", "max_height_mm": 1100}, "tags": ["geometry"]},
-    {"id": "example.info.member", "title": "Every member says what it is and what it is made of", "cite": {"source": "example"},
-     "applies": {"kind": "member"}, "check": "info.required", "params": {"facts": ["size", "species", "grade"]}, "tags": ["information"]}
+    {
+      "id": "example.framing.member",
+      "title": "Joists, rafters and beams carry their loads",
+      "cite": {
+        "source": "example"
+      },
+      "applies": {
+        "kind": "member"
+      },
+      "check": "framing.member",
+      "params": {
+        "min_span_ratio_live": 360,
+        "min_span_ratio_total": 240
+      },
+      "tags": [
+        "framing"
+      ]
+    },
+    {
+      "id": "example.framing.spacing",
+      "title": "Framing members no farther apart than the limit",
+      "cite": {
+        "source": "example"
+      },
+      "applies": {
+        "kind": "member",
+        "role": [
+          "joist",
+          "rafter"
+        ]
+      },
+      "check": "framing.spacing",
+      "params": {
+        "max_spacing_mm": 610
+      },
+      "tags": [
+        "framing"
+      ]
+    },
+    {
+      "id": "example.opening.escape_area",
+      "title": "Sleeping rooms have an escape opening of a minimum clear area",
+      "cite": {
+        "source": "example"
+      },
+      "applies": {
+        "kind": "opening",
+        "escape": true
+      },
+      "check": "fact.at_least",
+      "params": {
+        "fact": "clear_area",
+        "min_area_mm2": 500000
+      },
+      "tags": [
+        "geometry"
+      ]
+    },
+    {
+      "id": "example.opening.sill",
+      "title": "An escape opening's sill no higher than the limit",
+      "cite": {
+        "source": "example"
+      },
+      "applies": {
+        "kind": "opening",
+        "escape": true
+      },
+      "check": "fact.at_most",
+      "params": {
+        "fact": "sill_height",
+        "max_height_mm": 1100
+      },
+      "tags": [
+        "geometry"
+      ]
+    },
+    {
+      "id": "example.info.member",
+      "title": "Every member says what it is and what it is made of",
+      "cite": {
+        "source": "example"
+      },
+      "applies": {
+        "kind": "member"
+      },
+      "check": "info.required",
+      "params": {
+        "facts": [
+          "size",
+          "species",
+          "grade"
+        ]
+      },
+      "tags": [
+        "information"
+      ]
+    },
+    {
+      "id": "example.space.sloped",
+      "title": "In a sloped attic room, a share of the floor has the full height",
+      "cite": {
+        "source": "example"
+      },
+      "applies": {
+        "kind": "space",
+        "use": [
+          "habitable",
+          "habitable_attic"
+        ]
+      },
+      "check": "space.height_share",
+      "params": {
+        "min_height_mm": 2100,
+        "min_share": 0.5,
+        "min_any_mm": 1500
+      },
+      "tags": [
+        "geometry"
+      ]
+    },
+    {
+      "id": "example.space.ceiling",
+      "title": "Habitable rooms have a minimum ceiling height somewhere",
+      "cite": {
+        "source": "example"
+      },
+      "applies": {
+        "kind": "space",
+        "use": [
+          "habitable",
+          "habitable_attic"
+        ]
+      },
+      "check": "fact.at_least",
+      "params": {
+        "fact": "clear_height",
+        "min_height_mm": 2100
+      },
+      "tags": [
+        "geometry"
+      ]
+    }
   ]
 }

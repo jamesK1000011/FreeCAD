@@ -133,3 +133,16 @@ class BeamFem(unittest.TestCase):
         print(f"\nbeam fem: {r} hand: {hand_d:.3f} mm {hand_s:.3f} MPa", file=sys.stderr)
         self.assertAlmostEqual(r["deflection_mm"], hand_d, delta=hand_d * 0.1)
         self.assertAlmostEqual(r["stress_MPa"], hand_s, delta=hand_s * 0.15)
+
+
+class Sloped(unittest.TestCase):
+    def test_share(self):
+        ps, _ = packs.load_dir(HERE)
+        rules, values, _, _ = packs.resolve(ps, "XX", "2026-11-12")
+        # an attic room 4 m across, walls 1 m, ridge 3 m: the share with h is (3000 - h) / 2000
+        prof = {str(h): round(max(0.0, min(1.0, (3000 - h) / 2000)), 4) for h in range(1000, 3001, 50)}
+        sp = {"id": "Attic", "kind": "space", "use": "habitable_attic", "facts": {"height_profile": {"value": prof, "provenance": "measured"}}}
+        f = next(x for x in engine.run(rules, values, [sp]) if x["rule"] == "example.space.sloped")
+        # counted floor (>= 1500): 0.75; at 2100: 0.45 -> 0.6 of the counted floor, over the 0.5 asked
+        self.assertAlmostEqual(f["share"], 0.6, delta=0.01)
+        self.assertEqual(f["state"], "compliant")

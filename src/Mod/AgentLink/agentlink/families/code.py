@@ -134,7 +134,12 @@ def tools(session):
             elif t == "Space" or pn == "_Space":
                 bb = sh.BoundBox
                 use = str(getattr(o, "SpaceType", "") or "").lower().replace(" ", "_") or None
-                f = {"clear_height": fact(round(bb.ZLength, 1), "measured", "model", note="the space's own height: its lowest ceiling point is given by code_answer where it slopes")}
+                f = {"clear_height": fact(round(bb.ZLength, 1), "measured", "model", note="the space's tallest clear height")}
+                prof = height_profile(sh)
+                if prof:
+                    f["height_profile"] = fact(prof, "measured", "model", note="share of the floor area with at least each clear height (mm)")
+                    f["min_clear_height"] = fact(min(int(h) for h, share in prof.items() if share > 0.999) if any(v > 0.999 for v in prof.values()) else 0, "measured", "model",
+                                                 note="the height every part of the floor has above it")
                 ar = getattr(o, "Area", None)
                 if ar is not None:
                     f["area"] = fact(round(float(getattr(ar, "Value", ar)) / 1e6, 3), "measured", "model", unit="m2")
@@ -165,6 +170,32 @@ def tools(session):
             if best:
                 sub["facts"]["spacing"] = fact(round(best, 1), "derived", "model", note="to the nearest parallel member")
         return subs
+
+    def height_profile(sh):
+        """Share of the floor's area with at least each clear height, every
+        50 mm: slices of the room's solid, as a sloped ceiling cuts it."""
+        import Part
+
+        if not sh.Solids:
+            return None
+        bb = sh.BoundBox
+        floor = None
+        try:
+            floor = sh.common(Part.makeBox(bb.XLength + 2, bb.YLength + 2, 1.0, V(bb.XMin - 1, bb.YMin - 1, bb.ZMin))).Volume / 1.0
+        except Exception:
+            return None
+        if not floor:
+            return None
+        out = {}
+        h = 1000
+        while h <= min(bb.ZLength, 4000) + 1e-6:
+            try:
+                sl = sh.common(Part.makeBox(bb.XLength + 2, bb.YLength + 2, 1.0, V(bb.XMin - 1, bb.YMin - 1, bb.ZMin + h - 1.0))).Volume
+            except Exception:
+                sl = 0.0
+            out[str(h)] = round(min(sl / floor, 1.0), 4)
+            h += 50
+        return out
 
     def level_z(o):
         for p in o.InList:

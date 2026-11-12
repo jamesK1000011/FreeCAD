@@ -92,6 +92,42 @@ CHECKS["fact.at_least"] = lambda r, s, v: _limit(r, s, v, "fact.at_least")
 CHECKS["fact.at_most"] = lambda r, s, v: _limit(r, s, v, "fact.at_most")
 
 
+@check("space.height_share")
+def _height_share(rule, subj, values):
+    """A share of a room's floor needs at least a clear height (a sloped
+    attic: most of the floor at the full height, the rest lower): params
+    min_height_mm, min_share (0..1); with min_any_mm, floor lower than it
+    does not count toward the room at all."""
+    p = rule.get("params") or {}
+    f = get(subj.get("facts", {}), "height_profile")
+    if f is None:
+        return finding(rule, subj["id"], "insufficient_information", "the room's heights are not known",
+                       questions=[ask(subj["id"], "height_profile", "model the room as a space (bim_space) under its roof, or give its lowest and highest clear heights")])
+    prof = {float(k): float(v) for k, v in f["value"].items()}
+    hs = sorted(prof)
+
+    def share(h):
+        if h <= hs[0]:
+            return prof[hs[0]]
+        if h >= hs[-1]:
+            return prof[hs[-1]] if h == hs[-1] else 0.0
+        for a, b in zip(hs, hs[1:]):
+            if a <= h <= b:
+                return prof[a] + (prof[b] - prof[a]) * (h - a) / (b - a)
+        return 0.0
+    need_h, need_s = float(p.get("min_height_mm", 0)), float(p.get("min_share", 0.5))
+    base = share(float(p["min_any_mm"])) if p.get("min_any_mm") else 1.0
+    got = share(need_h) / base if base else 0.0
+    tol = float(rule.get("tolerance") or 25)
+    lo, hi = share(need_h + tol) / base if base else 0, share(max(need_h - tol, 0)) / base if base else 0
+    state = "compliant" if lo >= need_s else "non_compliant" if hi < need_s else "manual_review_required"
+    extra = {"share": round(got, 3), "limit": need_s, "height_mm": need_h, "ratio": round(need_s / got, 3) if got else None}
+    if state == "manual_review_required":
+        extra["questions"] = [ask(subj["id"], "height_profile", f"measure the ceiling heights carefully: {got:.0%} of the floor has {need_h:g} mm, the limit is {need_s:.0%}")]
+    state, extra = _bound(rule, subj, state, ["height_profile"], extra)
+    return finding(rule, subj["id"], state, f"{got:.0%} of the counted floor has at least {need_h:g} mm (needs {need_s:.0%})", **extra)
+
+
 @check("info.required")
 def _required(rule, subj, values):
     names = (rule.get("params") or {}).get("facts") or rule.get("needs") or []
