@@ -798,6 +798,9 @@ def tools(session):
         if "*ERROR" in log or not os.path.isfile(frd):
             err = [l.strip() for l in log.splitlines() if "ERROR" in l][:2] or log.strip().splitlines()[-2:]
             hint = " The part may be free to move: hold more faces." if any("singular" in l.lower() or "zero pivot" in l.lower() for l in log.splitlines()) else ""
+            if nonlin and any("increment size smaller" in l.lower() for l in log.splitlines()):
+                hint += (" It stopped finding equilibrium as the load rose: past its strength the part gives way (it would collapse or break) — "
+                         "less load, a stronger material or a larger section; or contact that never closes.")
             raise ToolError("failed", f"CalculiX refused the job: {' | '.join(err)}.{hint}")
         with open(frd) as f:
             disp, stress = ccx_io.read_frd(f.read())
