@@ -167,6 +167,7 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(self._notes_tab(), "Notes")
         tabs.addTab(self._steps_tab(), "Steps")
+        tabs.addTab(self._review_tab(), "Review")
         tabs.addTab(self._activity_tab(), "Activity")
         box = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(box)
@@ -303,6 +304,92 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
             FreeCAD.Console.PrintLog(f"Agent Link pins: {e}\n")
         self.fill_bodies()
 
+    # -- review: the part's verdict, as ScanRuler's review panel --
+
+    def _review_tab(self):
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        row = QtWidgets.QHBoxLayout()
+        self.review_pick = QtWidgets.QComboBox()
+        self.review_pick.setToolTip("The body to review")
+        go = QtWidgets.QPushButton("Check")
+        go.setToolTip("Soundness, printability (or the setup's process), mass and any strength results")
+        go.clicked.connect(self.review)
+        row.addWidget(self.review_pick, 1)
+        row.addWidget(go)
+        lay.addLayout(row)
+        self.verdict = QtWidgets.QLabel("")
+        self.verdict.setStyleSheet("font-weight: 600; font-size: 14px; padding: 4px;")
+        lay.addWidget(self.verdict)
+        self.findings = QtWidgets.QTreeWidget()
+        self.findings.setHeaderLabels(["", "Finding", "Do"])
+        self.findings.setRootIsDecorated(False)
+        self.findings.setColumnWidth(0, 28)
+        self.findings.itemClicked.connect(self._finding_picked)
+        lay.addWidget(self.findings, 1)
+        self.figures = QtWidgets.QLabel("")
+        self.figures.setWordWrap(True)
+        lay.addWidget(self.figures)
+        return w
+
+    def _call(self, name, args):
+        """A tool, run as the agent's would be (so it is shown and logged)."""
+        import json
+
+        import agentlink_state
+
+        link = agentlink_state.link
+        if link is None or link.server is None:
+            from .tools import Session, build_server
+
+            server = build_server(Session(doc=_doc()))
+        else:
+            link._ready()
+            server = link.server
+        r = server.call({"name": name, "arguments": args})
+        return not r.get("isError"), json.loads(r["content"][0]["text"])
+
+    def review(self):
+        body = self.review_pick.currentText()
+        if not body:
+            return
+        ok, out = self._call("part_review", {"body": body})
+        self.findings.clear()
+        if not ok:
+            self.verdict.setText("Could not review: " + (out.get("error") or {}).get("message", ""))
+            return
+        v = out.get("verdict", "?")
+        colour = {"pass": "#3fae5a", "warn": "#e0a020", "fail": "#d94a4a"}.get(v, "palette(text)")
+        self.verdict.setText(f"<span style='color:{colour}'>{v.upper()}</span> — {body}, made by {out.get('process', 'unknown')}")
+        self._last_findings = out.get("findings") or []
+        for f in self._last_findings:
+            sev = {"error": "✗", "warning": "!", "info": "·"}.get(str(f.get("severity", "")).lower(), "·")
+            it = QtWidgets.QTreeWidgetItem([sev, str(f.get("message") or f.get("what") or f.get("id", "")), str(f.get("fix") or f.get("do") or "")])
+            it.setToolTip(1, it.text(1))
+            it.setToolTip(2, it.text(2))
+            self.findings.addTopLevelItem(it)
+        if not self._last_findings:
+            self.findings.addTopLevelItem(QtWidgets.QTreeWidgetItem(["", "Nothing found", ""]))
+        fig = out.get("figures") or {}
+        self.figures.setText("  ·  ".join(f"{k} {v}" for k, v in fig.items()) + (f"\n{out.get('processFrom')}" if out.get("processFrom") else ""))
+
+    def _finding_picked(self, item, _col):
+        """A finding with a place: point the view at it."""
+        k = self.findings.indexOfTopLevelItem(item)
+        f = (getattr(self, "_last_findings", None) or [None] * (k + 1))[k] if k >= 0 else None
+        at = (f or {}).get("at")
+        if isinstance(at, list) and len(at) == 3:
+            v = FreeCADGui.ActiveDocument.activeView() if FreeCADGui.ActiveDocument else None
+            if v is not None and hasattr(v, "viewPosition"):
+                try:
+                    cam = v.getCameraNode()
+                    cam.focalDistance.getValue()
+                    from pivy import coin
+
+                    cam.pointAt(coin.SbVec3f(*at), coin.SbVec3f(0, 0, 1))
+                except Exception:
+                    pass
+
     # -- activity: what the agent did, call by call --
 
     def _activity_tab(self):
@@ -379,6 +466,13 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
         doc = _doc()
         names = [o.Label for o in doc.Objects if o.TypeId == "PartDesign::Body"] if doc else []
         have = [self.body_pick.itemText(i) for i in range(self.body_pick.count())]
+        solids = [o.Label for o in doc.Objects if hasattr(o, "Shape") and o.TypeId in ("PartDesign::Body", "Part::Feature", "Part::Box", "Part::Cylinder") and not any(p.TypeId == "PartDesign::Body" for p in o.InList)] if doc else []
+        if [self.review_pick.itemText(i) for i in range(self.review_pick.count())] != solids:
+            keep = self.review_pick.currentText()
+            self.review_pick.clear()
+            self.review_pick.addItems(solids)
+            if keep in solids:
+                self.review_pick.setCurrentIndex(solids.index(keep))
         if names != have:
             cur = self.body_pick.currentText()
             self.body_pick.blockSignals(True)
