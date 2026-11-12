@@ -32,6 +32,7 @@
 | OpenSCAD: a .scad or .csg in, code run, CSG out, a hull | `scad_import`, `scad_code`, `scad_export`, `scad_op` | `start` |
 | A robot arm: reach along a path, KUKA KRL out | `robot_new`, `robot_path`, `robot_trajectory`, `robot_run`, `robot_export` | `start` |
 | A building: walls, windows, doors, slabs, roof, stairs, rooms, levels, quantities, IFC | `bim_wall`, `bim_opening`, `bim_structure`, `bim_roof`, `bim_level`, `bim_schedule`, `bim_export` | `bim` |
+| A building change checked against code rules for planning (never approval), spans with a beam FEM, the engineer's packet | `code_project`, `code_check`, `code_missing`, `code_answer`, `code_span`, `code_packet` | `code` |
 | Parts put together, a lid on its box | `asm_new`, `asm_joint`, `asm_check` | `assembly` |
 | Toolpaths and G-code for a mill | `cam_job`, `cam_op`, `cam_sim`, `cam_post` | `cam` |
 | A print: slice it, pause for magnets | `setup`, `slice`, `slice_with` | `slice` |

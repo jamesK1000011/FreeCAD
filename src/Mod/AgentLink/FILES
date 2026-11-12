@@ -74,6 +74,7 @@ agentlink/gui_link.py
 agentlink/guides/assembly.md
 agentlink/guides/bim.md
 agentlink/guides/cam.md
+agentlink/guides/code.md
 agentlink/guides/cut.md
 agentlink/guides/doc.md
 agentlink/guides/draft.md

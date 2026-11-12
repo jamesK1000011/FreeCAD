@@ -315,3 +315,30 @@ if __name__ == "__main__":
         for ax in r["axes"]:
             self.assertGreaterEqual(ax["from"], -180.0)
             self.assertLessEqual(ax["to"], 180.0)
+
+    def test_code_checks(self):
+        self.have("code_check")
+        for i, y in enumerate((5000, 5600, 6200)):
+            self.ok("bim_structure", {"kind": "beam", "from": [0, y, 2400], "to": [3600, y, 2400], "width": 38, "depth": 140, "name": f"Cd joist {i}"})
+        self.ok("code_project", {"jurisdiction": "XX", "date": "2026-11-12", "name": "Cd loft"})
+        names = ["Cd joist 0", "Cd joist 1", "Cd joist 2"]
+        f = self.ok("code_facts", {"subject": "Cd joist 1"})["subjects"][0]["facts"]
+        self.assertEqual(f["size"]["value"], "2x6")
+        self.assertAlmostEqual(f["spacing"]["value"], 600, delta=1)
+        m = self.ok("code_missing", {"fresh": True})
+        self.assertTrue(any(q["fact"] == "truss" and len(q["subjects"]) >= 3 for q in m["questions"]))
+        self.ok("code_answer", {"subjects": names, "facts": {"use": "habitable_attic", "truss": False, "role": "joist", "species": "demo", "grade": "demo",
+                                                             "span": {"value": 3500, "pm": 50}, "design.Fb": 6, "design.Fv": 1, "design.E": 9000, "design.Fc_perp": 4}})
+        c = self.ok("code_check", {"subjects": names})
+        st = {(x["subject"], x["rule"]): x for x in c["findings"]}
+        mem = st[("Cd joist 1", "example.framing.member")]
+        self.assertEqual(mem["state"], "non_compliant")
+        self.assertAlmostEqual(mem["ratios"]["bending"], 14.06 / 6.9, delta=0.01)
+        self.ok("code_answer", {"subject": "Cd joist 2", "facts": {"truss": True}})
+        g = self.ok("code_check", {"subjects": ["Cd joist 2"], "tags": ["framing"]})
+        self.assertEqual(next(x for x in g["findings"] if x["rule"] == "example.framing.member")["state"], "manual_review_required")
+        p = self.ok("code_packet", {"name": "Cd loft"})
+        self.assertIn("structural.md", p["files"])
+        sp = self.ok("code_span", {"size": "2x8", "span": 3500, "spacing": 600, "use": "habitable_attic", "design": {"Fb": 6, "Fv": 1, "E": 9000}, "fem": True})
+        if "deflection_mm" in sp["fem"]:
+            self.assertLess(abs(sp["fem"]["difference"]["deflection"]), 0.05)
