@@ -141,6 +141,25 @@ class MoreFamilies(Base):
         mid = self.ok("fea_probe", {"points": [[50, 705, 5]]})["points"][0]["vonMisesMPa"]
         self.assertAlmostEqual(mid, 3500 * 68e-6 * 50, delta=1.5)  # E·alpha·dT
 
+    def test_fea_spin(self):
+        self.have("fea_probe")
+        import shutil
+
+        if not (shutil.which("ccx") and shutil.which("gmsh")):
+            self.skipTest("ccx and gmsh are not installed")
+        # a quarter of a spinning PLA disk on symmetry slides: centre (3+nu)/8 rho w2 R2
+        self.ok("part_primitive", {"kind": "cylinder", "radius": 100, "height": 5, "name": "Sp disk"})
+        self.box("Sp q", [120, 120, 10], [0, 0, -2])
+        self.ok("part_boolean", {"op": "common", "base": "Sp disk", "tools": ["Sp q"]})
+        self.ok("fea_setup", {"body": "Sp disk", "material": "PLA", "mesh": 5})
+        for n in ([-1, 0, 0], [0, -1, 0], [0, 0, -1]):
+            self.ok("fea_hold", {"faces": {"normal": n}, "kind": "slide"})
+        self.ok("fea_load", {"spin": {"rpm": 10000}})
+        r = self.ok("fea_solve", {})
+        w2 = (10000 * 2 * 3.14159265 / 60) ** 2
+        rho = 1.24e-9
+        self.assertAlmostEqual(r["vonMisesMax"]["MPa"], (3.36 / 8) * rho * w2 * 1e4, delta=0.6)
+
     def test_techdraw_marks_hatch(self):
         self.have("td_hatch")
         self.box("Td plate", [60, 40, 10], [0, 1000, 0])
