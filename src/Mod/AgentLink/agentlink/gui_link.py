@@ -28,6 +28,7 @@ class Link:
         self.timer = None
         self.session = None
         self.server = None
+        self.going = False
 
     def _ready(self):
         """The session, made at the first call (so a link turned on as the
@@ -90,7 +91,7 @@ class Link:
         f = conn.makefile("rw", encoding="utf-8", newline="\n")
         for line in f:
             if line.strip():
-                self.inbox.put((line, f))
+                self.inbox.put((line, f, conn))
 
     def _back(self):
         """After app_restart: False while the documents it is reopening are
@@ -101,6 +102,30 @@ class Link:
         m = restart_mark.read()
         if m is None:
             return True
+        if restart_mark.going(m):
+            self.going = True
+            # This window is quitting to start again (app_restart): no more
+            # calls here. Each connection dropped, so the caller waits for
+            # the new window instead of this one answering from no document.
+            if self.sock:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+                self.sock = None
+            while True:
+                try:
+                    _line, _f, conn = self.inbox.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    import socket as _s
+
+                    conn.shutdown(_s.SHUT_RDWR)
+                    conn.close()
+                except OSError:
+                    pass
+            return False
         open_ = {os.path.abspath(d.FileName) for d in FreeCAD.listDocuments().values() if d.FileName}
         if any(os.path.abspath(p) not in open_ for p in m.get("reopens") or [] if os.path.isfile(p)):
             return False
@@ -123,14 +148,35 @@ class Link:
             return
         while True:
             try:
-                line, f = self.inbox.get_nowait()
+                line, f, conn = self.inbox.get_nowait()
             except queue.Empty:
                 return
+            if self.going:
+                # Quitting (app_restart answered just before): dropped, so
+                # the caller sends it to the window that comes up next.
+                try:
+                    import socket as _s
+
+                    conn.shutdown(_s.SHUT_RDWR)
+                    conn.close()
+                except OSError:
+                    pass
+                continue
             try:
                 self._ready()
                 reply = self.server.handle(json.loads(line))
             except ValueError:
                 reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "not JSON"}}
+            if not self.going and "app_restart" in line:
+                from . import restart_mark
+
+                self.going = restart_mark.going(restart_mark.read())
+                if self.going and self.sock:
+                    try:
+                        self.sock.close()
+                    except OSError:
+                        pass
+                    self.sock = None
             try:
                 if reply is not None:
                     f.write(compact(reply) + "\n")

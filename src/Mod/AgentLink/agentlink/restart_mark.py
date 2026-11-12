@@ -22,7 +22,7 @@ def write(reopens, active=None):
     try:
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
-            json.dump({"t": time.time(), "reopens": list(reopens), "active": active}, f)
+            json.dump({"t": time.time(), "reopens": list(reopens), "active": active, "pid": os.getpid()}, f)
     except OSError:
         pass
 
@@ -39,6 +39,11 @@ def read():
         clear()
         return None
     return m
+
+
+def going(m):
+    """This process wrote the mark: it is the window going down."""
+    return bool(m) and m.get("pid") == os.getpid()
 
 
 def clear():
