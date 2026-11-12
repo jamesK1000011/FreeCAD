@@ -264,7 +264,16 @@ def tools(s):
             sh.fix(tol, tol, tol)
         else:
             raise bad("op: reverse | solid | sew | fix.")
-        o = picks.bake(s, b, sh, a.get("name"))
+        if op == "reverse":
+            if b.TypeId == "Part::Feature" and not a.get("name"):
+                b.Shape = sh
+                o = b
+            else:
+                o = add(s, sh, a.get("name") or f"{b.Label} reversed")
+            doc(s).recompute()
+        else:
+            o = picks.bake(s, b, sh, a.get("name"))
+        sh = o.Shape
         s.snapshot("part_fix")
         out = {"body": o.Label, "op": op, **shape_stats(sh), "valid": bool(sh.isValid()), "closed": bool(sh.Shells and all(x.isClosed() for x in sh.Shells))}
         if notes:
@@ -273,8 +282,9 @@ def tools(s):
 
     def datum(a):
         kind = a.get("kind", "plane")
-        types = {"point": ["Part::DatumPoint"], "line": ["Part::DatumLine"], "plane": ["Part::DatumPlane"],
-                 "csys": ["Part::LocalCoordinateSystem", "App::LocalCoordinateSystem"]}
+        types = {"point": ["Part::DatumPoint", "PartDesign::Point"], "line": ["Part::DatumLine", "PartDesign::Line"],
+                 "plane": ["Part::DatumPlane", "PartDesign::Plane"],
+                 "csys": ["Part::LocalCoordinateSystem", "PartDesign::CoordinateSystem"]}
         if kind not in types:
             raise bad("kind: point | line | plane | csys.")
         pl = picks.placement(a)
@@ -282,11 +292,13 @@ def tools(s):
             n = picks.direction(a["normal"], "normal")
             pl.Rotation = FreeCAD.Rotation(V(0, 0, 1), n)
         o = None
+        tried = []
         for t in types[kind]:
             try:
                 o = doc(s).addObject(t, kind.capitalize())
                 break
-            except Exception:
+            except Exception as e:
+                tried.append(f"{t}: {e}")
                 continue
         made = "datum"
         if o is None:
@@ -300,10 +312,16 @@ def tools(s):
                 sh = Part.makePlane(100, 100, V(-50, -50, 0))
             else:
                 sh = Part.makeCompound([Part.makeLine(V(), V(20, 0, 0)), Part.makeLine(V(), V(0, 20, 0)), Part.makeLine(V(), V(0, 0, 20))])
-            o = doc(s).addObject("Part::Feature", kind.capitalize())
+            o = doc(s).addObject("Part::FeaturePython", kind.capitalize())
+            try:
+                o.addExtension("Part::AttachExtensionPython")
+            except Exception as e:
+                tried.append(f"attach: {e}")
             o.Shape = sh
         o.Placement = pl
-        if a.get("to") and hasattr(o, "AttachmentSupport") or a.get("to") and hasattr(o, "Support"):
+        if a.get("to") and not (hasattr(o, "AttachmentSupport") or hasattr(o, "Support")):
+            raise ToolError("invalid_state", "This FreeCAD cannot attach a datum here: " + "; ".join(tried))
+        if a.get("to"):
             label, sub, _ = picks.resolve(s, a["to"])
             target = picks.find(doc(s), label)
             prop = "AttachmentSupport" if hasattr(o, "AttachmentSupport") else "Support"
