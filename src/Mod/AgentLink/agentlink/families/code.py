@@ -154,6 +154,21 @@ def tools(session):
                 if hasattr(o, "Width") and kind == "wall":
                     f["thickness"] = fact(round(float(getattr(o.Width, "Value", o.Width)), 1), "measured", "model", unit="mm")
                 subs.append({"id": o.Label, "kind": kind, "ifc": t, "facts": f})
+            elif t in ("Stair", "Stairs") or pn == "_Stairs":
+                # A flight's rise and going from its own sizes; headroom and
+                # handrails are the person's to say (code_answer).
+                q = lambda n: float(getattr(getattr(o, n, 0), "Value", getattr(o, n, 0)) or 0)
+                steps = int(getattr(o, "NumberOfSteps", 0) or 0)
+                f = {}
+                if steps >= 2 and q("Height"):
+                    f["riser_height"] = fact(round(q("Height") / steps, 1), "derived", "model", unit="mm", note="its height over its steps")
+                if steps >= 2 and q("Length"):
+                    f["tread_depth"] = fact(round(q("Length") / (steps - 1), 1), "derived", "model", unit="mm", note="its run over its treads (the going)")
+                if q("Width"):
+                    f["width"] = fact(round(q("Width"), 1), "measured", "model", unit="mm")
+                if q("Height"):
+                    f["rise"] = fact(round(q("Height"), 1), "measured", "model", unit="mm")
+                subs.append({"id": o.Label, "kind": "stair", "ifc": "Stair", "facts": f})
             elif t in ("Window", "Door") or pn == "_Window":
                 w, h = float(getattr(o, "Width", 0) or 0), float(getattr(o, "Height", 0) or 0)
                 f = {}

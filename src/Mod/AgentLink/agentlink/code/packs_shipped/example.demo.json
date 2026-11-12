@@ -1,224 +1,365 @@
 {
-  "pack": {
-    "id": "example.demo",
-    "title": "Example pack: shows the format, not any real code",
-    "layer": "model",
-    "jurisdiction": "XX",
-    "version": "0.3.0",
-    "effective": "2000-01-01",
-    "license": "CC0-1.0",
-    "note": "Made-up numbers in the shape a real pack takes. Jurisdiction XX matches no real place: set a project to XX to try the engine. Real packs carry paraphrased rules with citations and are added by the person (code_packs import)."
+ "pack": {
+  "id": "example.demo",
+  "title": "Example pack: shows the format, not any real code",
+  "layer": "model",
+  "jurisdiction": "XX",
+  "version": "0.4.0",
+  "effective": "2000-01-01",
+  "license": "CC0-1.0",
+  "note": "Made-up numbers in the shape a real pack takes. Jurisdiction XX matches no real place: set a project to XX to try the engine. Real packs carry paraphrased rules with citations and are added by the person (code_packs import)."
+ },
+ "values": {
+  "load.live.floor": {
+   "value": 1.9,
+   "unit": "kPa",
+   "stricter": "higher"
   },
-  "values": {
-    "load.live.floor": {
-      "value": 1.9,
-      "unit": "kPa",
-      "stricter": "higher"
-    },
-    "load.dead.floor": {
-      "value": 0.5,
-      "unit": "kPa",
-      "stricter": "higher"
-    },
-    "load.live.attic_storage": {
-      "value": 1.0,
-      "unit": "kPa",
-      "stricter": "higher"
-    },
-    "load.dead.attic_storage": {
-      "value": 0.5,
-      "unit": "kPa",
-      "stricter": "higher"
-    },
-    "load.live.habitable_attic": {
-      "value": 1.4,
-      "unit": "kPa",
-      "stricter": "higher"
-    },
-    "load.dead.habitable_attic": {
-      "value": 0.5,
-      "unit": "kPa",
-      "stricter": "higher"
-    },
-    "load.dead.roof": {
-      "value": 0.7,
-      "unit": "kPa",
-      "stricter": "higher"
-    },
-    "load.snow.ground": {
-      "value": 1.2,
-      "unit": "kPa",
-      "stricter": "higher"
-    },
-    "load.snow.roof_factor": {
-      "value": 0.7,
-      "stricter": "higher"
-    }
+  "load.dead.floor": {
+   "value": 0.5,
+   "unit": "kPa",
+   "stricter": "higher"
   },
-  "rules": [
-    {
-      "id": "example.framing.member",
-      "title": "Joists, rafters and beams carry their loads",
-      "cite": {
-        "source": "example"
-      },
-      "applies": {
-        "kind": "member"
-      },
-      "check": "framing.member",
-      "params": {
-        "min_span_ratio_live": 360,
-        "min_span_ratio_total": 240
-      },
-      "tags": [
-        "framing"
-      ]
-    },
-    {
-      "id": "example.framing.spacing",
-      "title": "Framing members no farther apart than the limit",
-      "cite": {
-        "source": "example"
-      },
-      "applies": {
-        "kind": "member",
-        "role": [
-          "joist",
-          "rafter"
-        ]
-      },
-      "check": "framing.spacing",
-      "params": {
-        "max_spacing_mm": 610
-      },
-      "tags": [
-        "framing"
-      ]
-    },
-    {
-      "id": "example.opening.escape_area",
-      "title": "Sleeping rooms have an escape opening of a minimum clear area",
-      "cite": {
-        "source": "example"
-      },
-      "applies": {
-        "kind": "opening",
-        "escape": true
-      },
-      "check": "fact.at_least",
-      "params": {
-        "fact": "clear_area",
-        "min_area_mm2": 500000
-      },
-      "tags": [
-        "geometry"
-      ]
-    },
-    {
-      "id": "example.opening.sill",
-      "title": "An escape opening's sill no higher than the limit",
-      "cite": {
-        "source": "example"
-      },
-      "applies": {
-        "kind": "opening",
-        "escape": true
-      },
-      "check": "fact.at_most",
-      "params": {
-        "fact": "sill_height",
-        "max_height_mm": 1100
-      },
-      "tags": [
-        "geometry"
-      ]
-    },
-    {
-      "id": "example.info.member",
-      "title": "Every member says what it is and what it is made of",
-      "cite": {
-        "source": "example"
-      },
-      "applies": {
-        "kind": "member"
-      },
-      "check": "info.required",
-      "params": {
-        "facts": [
-          "size",
-          "species",
-          "grade"
-        ]
-      },
-      "tags": [
-        "information"
-      ]
-    },
-    {
-      "id": "example.space.sloped",
-      "title": "In a sloped attic room, a share of the floor has the full height",
-      "cite": {
-        "source": "example"
-      },
-      "applies": {
-        "kind": "space",
-        "use": [
-          "habitable",
-          "habitable_attic"
-        ]
-      },
-      "check": "space.height_share",
-      "params": {
-        "min_height_mm": 2100,
-        "min_share": 0.5,
-        "min_any_mm": 1500
-      },
-      "tags": [
-        "geometry"
-      ]
-    },
-    {
-      "id": "example.space.ceiling",
-      "title": "Habitable rooms have a minimum ceiling height somewhere",
-      "cite": {
-        "source": "example"
-      },
-      "applies": {
-        "kind": "space",
-        "use": [
-          "habitable",
-          "habitable_attic"
-        ]
-      },
-      "check": "fact.at_least",
-      "params": {
-        "fact": "clear_height",
-        "min_height_mm": 2100
-      },
-      "tags": [
-        "geometry"
-      ]
-    },
-    {
-      "id": "example.info.wall",
-      "title": "Every wall has a material, a fire rating and says if it is external",
-      "cite": {
-        "source": "example"
-      },
-      "applies": {
-        "kind": "wall"
-      },
-      "check": "info.required",
-      "params": {
-        "facts": [
-          "material",
-          "Pset_WallCommon.FireRating",
-          "Pset_WallCommon.IsExternal"
-        ]
-      },
-      "tags": [
-        "information"
-      ]
-    }
-  ]
+  "load.live.attic_storage": {
+   "value": 1.0,
+   "unit": "kPa",
+   "stricter": "higher"
+  },
+  "load.dead.attic_storage": {
+   "value": 0.5,
+   "unit": "kPa",
+   "stricter": "higher"
+  },
+  "load.live.habitable_attic": {
+   "value": 1.4,
+   "unit": "kPa",
+   "stricter": "higher"
+  },
+  "load.dead.habitable_attic": {
+   "value": 0.5,
+   "unit": "kPa",
+   "stricter": "higher"
+  },
+  "load.dead.roof": {
+   "value": 0.7,
+   "unit": "kPa",
+   "stricter": "higher"
+  },
+  "load.snow.ground": {
+   "value": 1.2,
+   "unit": "kPa",
+   "stricter": "higher"
+  },
+  "load.snow.roof_factor": {
+   "value": 0.7,
+   "stricter": "higher"
+  }
+ },
+ "rules": [
+  {
+   "id": "example.framing.member",
+   "title": "Joists, rafters and beams carry their loads",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "member"
+   },
+   "check": "framing.member",
+   "params": {
+    "min_span_ratio_live": 360,
+    "min_span_ratio_total": 240
+   },
+   "tags": [
+    "framing"
+   ]
+  },
+  {
+   "id": "example.framing.spacing",
+   "title": "Framing members no farther apart than the limit",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "member",
+    "role": [
+     "joist",
+     "rafter"
+    ]
+   },
+   "check": "framing.spacing",
+   "params": {
+    "max_spacing_mm": 610
+   },
+   "tags": [
+    "framing"
+   ]
+  },
+  {
+   "id": "example.opening.escape_area",
+   "title": "Sleeping rooms have an escape opening of a minimum clear area",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "opening",
+    "escape": true
+   },
+   "check": "fact.at_least",
+   "params": {
+    "fact": "clear_area",
+    "min_area_mm2": 500000
+   },
+   "tags": [
+    "geometry"
+   ]
+  },
+  {
+   "id": "example.opening.sill",
+   "title": "An escape opening's sill no higher than the limit",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "opening",
+    "escape": true
+   },
+   "check": "fact.at_most",
+   "params": {
+    "fact": "sill_height",
+    "max_height_mm": 1100
+   },
+   "tags": [
+    "geometry"
+   ]
+  },
+  {
+   "id": "example.info.member",
+   "title": "Every member says what it is and what it is made of",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "member"
+   },
+   "check": "info.required",
+   "params": {
+    "facts": [
+     "size",
+     "species",
+     "grade"
+    ]
+   },
+   "tags": [
+    "information"
+   ]
+  },
+  {
+   "id": "example.space.sloped",
+   "title": "In a sloped attic room, a share of the floor has the full height",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "space",
+    "use": [
+     "habitable",
+     "habitable_attic"
+    ]
+   },
+   "check": "space.height_share",
+   "params": {
+    "min_height_mm": 2100,
+    "min_share": 0.5,
+    "min_any_mm": 1500
+   },
+   "tags": [
+    "geometry"
+   ]
+  },
+  {
+   "id": "example.space.ceiling",
+   "title": "Habitable rooms have a minimum ceiling height somewhere",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "space",
+    "use": [
+     "habitable",
+     "habitable_attic"
+    ]
+   },
+   "check": "fact.at_least",
+   "params": {
+    "fact": "clear_height",
+    "min_height_mm": 2100
+   },
+   "tags": [
+    "geometry"
+   ]
+  },
+  {
+   "id": "example.info.wall",
+   "title": "Every wall has a material, a fire rating and says if it is external",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "wall"
+   },
+   "check": "info.required",
+   "params": {
+    "facts": [
+     "material",
+     "Pset_WallCommon.FireRating",
+     "Pset_WallCommon.IsExternal"
+    ]
+   },
+   "tags": [
+    "information"
+   ]
+  },
+  {
+   "id": "example.stair.riser",
+   "title": "A stair's risers no taller than the limit",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "stair"
+   },
+   "check": "fact.at_most",
+   "params": {
+    "fact": "riser_height",
+    "max_height_mm": 200
+   },
+   "tags": [
+    "geometry",
+    "stairs"
+   ]
+  },
+  {
+   "id": "example.stair.tread",
+   "title": "A stair's treads at least the limit deep",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "stair"
+   },
+   "check": "fact.at_least",
+   "params": {
+    "fact": "tread_depth",
+    "min_depth_mm": 250
+   },
+   "tags": [
+    "geometry",
+    "stairs"
+   ]
+  },
+  {
+   "id": "example.stair.width",
+   "title": "A stair at least the limit wide",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "stair"
+   },
+   "check": "fact.at_least",
+   "params": {
+    "fact": "width",
+    "min_width_mm": 900
+   },
+   "tags": [
+    "geometry",
+    "stairs"
+   ]
+  },
+  {
+   "id": "example.stair.headroom",
+   "title": "Headroom over a stair at least the limit",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "stair"
+   },
+   "check": "fact.at_least",
+   "params": {
+    "fact": "headroom",
+    "min_height_mm": 2000
+   },
+   "ask": "measure the clear height above the stair's nosings, at the lowest point",
+   "tags": [
+    "geometry",
+    "stairs"
+   ]
+  },
+  {
+   "id": "example.stair.handrail",
+   "title": "A stair rising more than a few steps says whether it has a handrail",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "stair"
+   },
+   "check": "info.required",
+   "params": {
+    "facts": [
+     "handrail"
+    ]
+   },
+   "tags": [
+    "information",
+    "stairs"
+   ]
+  },
+  {
+   "id": "example.garage.wall",
+   "title": "A wall between a garage and the home carries a fire-resisting lining at least the limit thick",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "wall",
+    "separates_garage": true
+   },
+   "check": "fact.at_least",
+   "params": {
+    "fact": "lining_mm",
+    "min_thickness_mm": 12
+   },
+   "ask": "the thickness of the board lining the garage side (gypsum or similar), in mm",
+   "tags": [
+    "fire",
+    "garage"
+   ]
+  },
+  {
+   "id": "example.garage.door",
+   "title": "A door between a garage and the home says it is solid or fire-rated and self-closing",
+   "cite": {
+    "source": "example"
+   },
+   "applies": {
+    "kind": "opening",
+    "separates_garage": true
+   },
+   "check": "info.required",
+   "params": {
+    "facts": [
+     "fire_rated_or_solid",
+     "self_closing"
+    ]
+   },
+   "tags": [
+    "fire",
+    "garage",
+    "information"
+   ]
+  }
+ ]
 }

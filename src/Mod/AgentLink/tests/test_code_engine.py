@@ -114,6 +114,20 @@ class Engine(unittest.TestCase):
         self.assertEqual(f["state"], "manual_review_required")
         self.assertTrue(f["questions"])
 
+    def test_stairs_and_garage(self):
+        st = {"id": "Stairs", "kind": "stair", "facts": {"riser_height": 214.3, "tread_depth": 270, "width": 1000}}
+        wall = {"id": "Garage wall", "kind": "wall", "facts": {"separates_garage": True}}
+        other = {"id": "Wall 2", "kind": "wall", "facts": {}}
+        out = engine.run(self.rules, self.values, [st, wall, other])
+        got = {(f["subject"], f["rule"]): f["state"] for f in out}
+        self.assertEqual(got[("Stairs", "example.stair.riser")], "non_compliant")
+        self.assertEqual(got[("Stairs", "example.stair.tread")], "compliant")
+        self.assertEqual(got[("Stairs", "example.stair.width")], "compliant")
+        self.assertEqual(got[("Stairs", "example.stair.headroom")], "insufficient_information")
+        self.assertEqual(got[("Stairs", "example.stair.handrail")], "insufficient_information")
+        self.assertEqual(got[("Garage wall", "example.garage.wall")], "insufficient_information")
+        self.assertNotIn(("Wall 2", "example.garage.wall"), got)
+
 
 
 

@@ -10,6 +10,10 @@ These tools check a BIM model against rule packs and say what an engineer will w
 5. `code_missing`: the questions that would decide what is open. Ask the person a few at a time, in plain words. Never guess a value they should measure. Store their answers with `code_answer` (`subjects` for one answer to several), then check again.
 6. `code_packet` when the open items are engineer's calls: the folder for the professional. Run `bim_export` and `td_export` first and pass their paths so the model and drawings go in.
 
+## Stairs and garages
+- A `bim_stairs` flight gives its riser height, tread depth (the going) and width from its own sizes; headroom and whether it has a handrail are the person's to say (`code_answer`).
+- Which walls and doors separate the garage from the home is never guessed: ask, then answer `separates_garage: true` on each. Their checks (the lining's thickness, a solid or fire-rated self-closing door) apply only after that.
+
 ## Information and IDS
 - Rules of the information kind ask that the model carries data: a wall's material, its fire rating (`Pset_WallCommon.FireRating`, set with `bim_ifc properties`). `code_packs { action: "ids" }` writes those rules as a buildingSMART IDS 1.0 file, which any IDS checker (ifctester, Bonsai) runs against the exported IFC.
 
