@@ -37,6 +37,7 @@ NAMES = [
     "electronics",
     "share",
     "view",
+    "notes",
     "meshobj",
     "assembly",
     "assembly_more",

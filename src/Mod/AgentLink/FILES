@@ -47,6 +47,7 @@ agentlink/families/meshobj.py
 agentlink/families/mill.py
 agentlink/families/model.py
 agentlink/families/model_more.py
+agentlink/families/notes.py
 agentlink/families/openscad.py
 agentlink/families/param.py
 agentlink/families/part_more.py
@@ -114,6 +115,7 @@ agentlink/meshdist.py
 agentlink/meshformats.py
 agentlink/millsim.py
 agentlink/packing.py
+agentlink/panel.py
 agentlink/paths.py
 agentlink/printability.py
 agentlink/printers.py

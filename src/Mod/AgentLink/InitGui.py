@@ -38,6 +38,19 @@ class _StopLink:
         agentlink_state.link = None
 
 
+class _Panel:
+    def GetResources(self):
+        return {"MenuText": "Notes and steps", "ToolTip": "Notes pinned to the parts, and the build played step by step"}
+
+    def IsActive(self):
+        return True
+
+    def Activated(self):
+        from agentlink import panel
+
+        panel.show()
+
+
 class AgentLinkWorkbench(FreeCADGui.Workbench):
     MenuText = "Agent Link"
     ToolTip = "Drive FreeCAD from an agent"
@@ -45,8 +58,9 @@ class AgentLinkWorkbench(FreeCADGui.Workbench):
     def Initialize(self):
         FreeCADGui.addCommand("AgentLink_Start", _StartLink())
         FreeCADGui.addCommand("AgentLink_Stop", _StopLink())
-        self.appendToolbar("Agent Link", ["AgentLink_Start", "AgentLink_Stop"])
-        self.appendMenu("Agent Link", ["AgentLink_Start", "AgentLink_Stop"])
+        FreeCADGui.addCommand("AgentLink_Panel", _Panel())
+        self.appendToolbar("Agent Link", ["AgentLink_Start", "AgentLink_Stop", "AgentLink_Panel"])
+        self.appendMenu("Agent Link", ["AgentLink_Start", "AgentLink_Stop", "AgentLink_Panel"])
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

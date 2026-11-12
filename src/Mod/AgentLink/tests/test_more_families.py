@@ -506,5 +506,33 @@ class MoreFamilies(Base):
             self.assertIn("Temperature = Real 353.15", sif)
             self.assertTrue(os.path.exists(os.path.join(r["files"], "mesh.unv")))
 
+    def test_notes_and_steps(self):
+        self.have("note_add")
+        self.box("Nt box", [20, 20, 20], [0, 0, 2800])
+        n = self.ok("note_add", {"text": "Is this face the mount?", "body": "Nt box", "faces": {"normal": [0, 0, 1]}})["note"]
+        self.assertEqual(n["by"], "agent")
+        self.assertAlmostEqual(n["at"][2], 2820, delta=0.01)
+        from agentlink.families import notes as nf
+
+        p = nf.add_note(self.session.doc, [1, 2, 3], "Make it 2 mm thicker", "person")
+        lst = self.ok("note_list", {})
+        self.assertEqual(lst["waiting"], [p["id"]])
+        self.ok("note_answer", {"id": p["id"], "text": "Done: 4 mm now"})
+        self.ok("note_done", {"id": p["id"]})
+        self.assertEqual(len(self.ok("note_list", {"open": True})["notes"]), 1)
+        self.ok("note_delete", {"id": n["id"]})
+        self.assertEqual(len(self.ok("note_list", {})["notes"]), 1)
+
+        self.ok("pd_body_new", {"name": "St body"})
+        self.ok("pd_primitive", {"body": "St body", "kind": "box", "size": {"length": 30, "width": 20, "height": 10}})
+        self.ok("pd_primitive", {"body": "St body", "kind": "cylinder", "size": {"radius": 4, "height": 10}, "at": [15, 10, 0], "subtractive": True})
+        st = self.ok("steps_list", {"body": "St body"})
+        self.assertEqual(st["count"], 2)
+        self.assertAlmostEqual(st["steps"][0]["change"], 6000, delta=1)
+        self.assertLess(st["steps"][1]["change"], 0)
+        r = self.ok("steps_render", {"body": "St body", "inline": False, "width": 240, "height": 180})
+        self.assertEqual(len(r["files"]), 2)
+        self.assertTrue(os.path.getsize(r["sheet"]) > 0)
+
 if __name__ == "__main__":
     unittest.main()
