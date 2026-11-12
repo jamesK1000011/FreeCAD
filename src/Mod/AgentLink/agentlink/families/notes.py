@@ -245,7 +245,7 @@ def tools(session):
              obj({"open": {"type": "boolean"}}), note_list),
         Tool("note_answer", "Answer a note (the person's question or request): id, text.", obj({"id": {"type": "integer"}, "text": {"type": "string"}}, ["id", "text"]), note_answer, changes=True),
         Tool("note_done", "Tick a note off (done: false opens it again).", obj({"id": {"type": "integer"}, "done": {"type": "boolean"}}, ["id"]), note_done, changes=True),
-        Tool("note_delete", "Take a note out.", obj({"id": {"type": "integer"}}, ["id"]), note_delete, changes=True),
+        Tool("note_delete", "Take a note out of the document, the person's or the agent's (note_done only ticks it off).", obj({"id": {"type": "integer"}}, ["id"]), note_delete, changes=True),
         Tool("steps_list", "A PartDesign body's history in order: each feature with its key value, the volume after it and what it added or took away (sketches: true lists the sketches too).",
              obj({"body": {"type": "string"}, "sketches": {"type": "boolean"}}), steps_list),
         Tool("steps_render", "The build played back as pictures: a picture a feature, framed on the finished part so it grows in place, each captioned with its step, type and what it did; a contact sheet of them (sheet: false leaves it out). view (iso), width, height, path (a folder).",

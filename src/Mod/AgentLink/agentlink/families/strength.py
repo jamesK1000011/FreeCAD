@@ -1441,7 +1441,8 @@ def tools(session):
             # "DFlux" in FreeCAD 1.0, "Flux" later
             kinds = hf.getEnumerationsOfProperty("ConstraintType") or []
             hf.ConstraintType = next((k for k in ("DFlux", "Flux") if k in kinds), "DFlux")
-            _setq(hf, "DFlux", f"{float(hq['watts']) / area} W/m^2", float(hq["watts"]) / area)
+            flux = "DFlux" if "DFlux" in hf.PropertiesList else "DistributedHeatFlux"
+            _setq(hf, flux, f"{float(hq['watts']) / area} W/m^2", float(hq["watts"]) / area)
             an.addObject(hf)
             made.append(hf.Label)
         for i, pq in enumerate(a.get("potentials") or []):
