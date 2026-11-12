@@ -177,6 +177,74 @@ def vec(x):
     return FreeCAD.Vector(*[float(c) for c in x])
 
 
+def spacing(P):
+    """The typical distance between neighbouring points (a surface's: a
+    sample's nearest gaps scaled back to the whole count)."""
+    k = min(len(P), 2000)
+    Q = P[np.random.default_rng(0).choice(len(P), k, replace=False)]
+    d = np.sqrt(((Q[:, None, :] - Q[None, :, :]) ** 2).sum(-1))
+    np.fill_diagonal(d, np.inf)
+    nn = d.min(axis=1) * np.sqrt(k / len(P)) if len(P) > k else d.min(axis=1)
+    return float(np.median(nn))
+
+
+def chain_order(P):
+    """An order along a line of points: start at one end (farthest from the
+    centre along the main axis) and walk to the nearest unvisited point."""
+    n = len(P)
+    if n < 3:
+        return np.arange(n)
+    c = P.mean(axis=0)
+    _, _, vt = np.linalg.svd(P - c, full_matrices=False)
+    t = (P - c) @ vt[0]
+    if n > 3000:
+        return np.argsort(t)
+    left = np.ones(n, dtype=bool)
+    i = int(np.argmin(t))
+    out = [i]
+    left[i] = False
+    for _ in range(n - 1):
+        d = ((P - P[i]) ** 2).sum(axis=1)
+        d[~left] = np.inf
+        i = int(np.argmin(d))
+        out.append(i)
+        left[i] = False
+    return np.array(out)
+
+
+def grid_mesh(P, cell):
+    """A height field's triangles: the points binned on the plane of their
+    two widest axes, one vertex (the mean) per occupied cell, two triangles
+    per square of four occupied cells."""
+    c = P.mean(axis=0)
+    _, _, vt = np.linalg.svd(P - c, full_matrices=False)
+    u, v = (P - c) @ vt[0], (P - c) @ vt[1]
+    iu = np.floor((u - u.min()) / cell).astype(int)
+    iv = np.floor((v - v.min()) / cell).astype(int)
+    key = iu * (iv.max() + 1) + iv
+    order = np.argsort(key)
+    uniq, start = np.unique(key[order], return_index=True)
+    ends = list(start[1:]) + [len(order)]
+    V = np.array([P[order[s:e]].mean(axis=0) for s, e in zip(start, ends)])
+    index = {int(k): j for j, k in enumerate(uniq)}
+    W = iv.max() + 1
+    T = []
+    for k, j in index.items():
+        a, b = divmod(k, W)
+        r = index.get((a + 1) * W + b)
+        up = index.get(a * W + b + 1)
+        d = index.get((a + 1) * W + b + 1)
+        if r is not None and d is not None and up is not None:
+            T += [(j, r, d), (j, d, up)]
+        elif r is not None and d is not None:
+            T.append((j, r, d))
+        elif d is not None and up is not None:
+            T.append((j, d, up))
+        elif r is not None and up is not None:
+            T.append((j, r, up))
+    return V, T
+
+
 def tools(session):
     s = session
     doc = lambda: s.doc  # noqa: E731
@@ -271,13 +339,7 @@ def tools(session):
         P = array_of(o)
         out = reading(o, P)
         if len(P) >= 2:
-            k = min(len(P), 2000)
-            idx = np.random.default_rng(0).choice(len(P), k, replace=False)
-            Q = P[idx]
-            d = np.sqrt(((Q[:, None, :] - Q[None, :, :]) ** 2).sum(-1))
-            np.fill_diagonal(d, np.inf)
-            nn = d.min(axis=1) * np.sqrt(k / len(P)) if len(P) > k else d.min(axis=1)
-            out["spacing"] = round(float(np.median(nn)), 4)
+            out["spacing"] = round(spacing(P), 4)
             out["centre"] = [round(float(x), 3) for x in P.mean(axis=0)]
         return out
 
@@ -343,10 +405,10 @@ def tools(session):
                 f = fitting.sphere(P)
             elif kind == "cylinder":
                 f = fitting.cylinder(P, a.get("axis"))
-            elif kind == "surface":
+            elif kind in ("surface", "curve"):
                 f = None
             else:
-                raise bad("shape: plane | sphere | cylinder | surface (a free B-spline).")
+                raise bad("shape: plane | sphere | cylinder | surface (a free B-spline) | curve (a B-spline through a line of points).")
         except fitting.FitError as e:
             raise ToolError("failed", str(e))
         r3 = lambda v: [round(float(x), 4) for x in v]  # noqa: E731
@@ -373,6 +435,26 @@ def tools(session):
             out.update({"degree": ud, "poles": [nu, nv], "rms": round(float(np.sqrt(np.mean(d * d))), 4), "max": round(float(d.max()), 4),
                         "sampled": int(len(d)), "area": round(face.Area, 3)})
             body = face
+        elif kind == "curve":
+            order = chain_order(P)
+            Q = P[order]
+            # thin to the spacing the fit can use
+            step = max(1, len(Q) // 400)
+            Q = Q[::step]
+            if len(Q) < 4:
+                raise bad("curve: four or more points along a line.")
+            tol = float(a.get("tolerance", 0.1))
+            c = Part.BSplineCurve()
+            try:
+                c.approximate(Points=[vec(q) for q in Q], DegMax=int(a.get("degree", 3)), Tolerance=tol)
+            except Exception as e:
+                raise ToolError("failed", f"No curve through these points: {e}")
+            edge = c.toShape()
+            d = np.array([edge.distToShape(Part.Vertex(vec(p)))[0] for p in P[np.random.default_rng(0).choice(len(P), min(len(P), 400), replace=False)]])
+            out.update({"length": round(edge.Length, 3), "poles": c.NbPoles, "degree": c.Degree, "closed": bool((Q[0] - Q[-1]) @ (Q[0] - Q[-1]) < (4 * tol) ** 2),
+                        "rms": round(float(np.sqrt(np.mean(d * d))), 4), "max": round(float(d.max()), 4)})
+            body = edge
+            a = dict(a, make=True)
         elif kind == "plane":
             out.update({"centre": r3(f["centre"]), "normal": r3(f["normal"])})
             if a.get("make"):
@@ -396,7 +478,7 @@ def tools(session):
         tol = a.get("tolerance")
         if tol is not None:
             out["verdict"] = "fits" if out["max"] <= float(tol) else "does not fit"
-        if body is not None and (a.get("make") or kind == "surface"):
+        if body is not None and (a.get("make") or kind in ("surface", "curve")):
             b = doc().addObject("Part::Feature", "Fit")
             b.Label = s.unique(a.get("name") or f"{o.Label} {kind}")
             b.Shape = body
@@ -418,6 +500,54 @@ def tools(session):
             out["readBack"] = int(len(back))
         return out
 
+    def points_merge(a):
+        refs = a.get("points")
+        if not isinstance(refs, list) or len(refs) < 2:
+            raise bad("points: two or more clouds to join.")
+        P = np.vstack([array_of(cloud(r)) for r in refs])
+        o = make(P, a.get("name") or "Merged points")
+        if a.get("remove"):
+            for r in refs:
+                doc().removeObject(cloud(r).Name)
+        s.snapshot("points_merge")
+        return {"points": o.Label, "count": int(len(P)), "step": len(s.steps)}
+
+    def points_mesh(a):
+        o = cloud(a.get("points"))
+        P = array_of(o)
+        method = a.get("method", "height")
+        import Mesh
+        if method == "height":
+            cell = float(a.get("cell") or max(spacing(P) * 2, 1e-3))
+            V, T = grid_mesh(P, cell)
+            if not T:
+                raise ToolError("failed", f"No triangles at a {cell:g} mm cell: a larger cell, or the points are not a surface seen from one side.")
+            m = Mesh.Mesh([[tuple(V[i]) for i in tri] for tri in T])
+            note = f"A height field on the points' own plane, one vertex per {cell:g} mm cell: for a scan of one side (terrain, a panel, a face)."
+        elif method == "hull":
+            from .. import hull3d
+            Vh, Th = hull3d.hull(P)
+            m = Mesh.Mesh([[tuple(Vh[i]) for i in tri] for tri in Th])
+            note = "The convex hull: the shrink-wrap round every point."
+        elif method == "poisson":
+            try:
+                import ReverseEngineering as RE
+                pk = Points.Points()
+                pk.addPoints([tuple(p) for p in P.tolist()])
+                m = RE.poissonReconstruction(pk, Depth=int(a.get("depth", 8)))
+            except Exception as e:
+                raise ToolError("unavailable", f"Poisson reconstruction is not in this FreeCAD build ({e}): method height or hull.")
+            note = "Poisson reconstruction: a closed surface through the cloud."
+        else:
+            raise bad("method: height (one side, gridded) | hull (convex) | poisson (needs FreeCAD built with PCL).")
+        mo = doc().addObject("Mesh::Feature", "Mesh")
+        mo.Mesh = m
+        mo.Label = s.unique(a.get("name") or f"{o.Label} mesh")
+        doc().recompute()
+        s.snapshot("points_mesh")
+        return {"mesh": mo.Label, "method": method, "facets": int(m.CountFacets), "points": int(m.CountPoints),
+                "area": round(m.Area, 3), "closed": bool(m.isSolid()), "note": note, "step": len(s.steps)}
+
     pts = {"type": "string", "description": "The point cloud (the only one when left out)."}
     return [
         Tool("points_import", "Read a point cloud: path .asc / .xyz / .txt / .csv (x y z a line), .pcd, .ply, .e57; every n-th point kept (every), scale (to mm).",
@@ -428,9 +558,13 @@ def tools(session):
         Tool("points_crop", "Keep the points within a box [[min], [max]], near [x,y,z] within radius, and/or above a plane { at, normal } (outside: true keeps the rest); thin mm keeps one point per cell; specks { radius mm, least } drops stray points with fewer than least neighbours within radius. replace: false makes a new cloud.",
              obj({"points": pts, "box": {"type": "array"}, "near": {"type": "array"}, "radius": {"type": "number"}, "plane": {"type": "object"}, "outside": {"type": "boolean"},
                   "thin": {"type": "number"}, "specks": {"type": "object"}, "replace": {"type": "boolean"}, "name": {"type": "string"}}), points_crop, changes=True),
-        Tool("points_fit", "Fit a shape through the points: plane (centre, normal), sphere (centre, diameter), cylinder (base, axis, diameter, length; axis a hint), or surface (a B-spline: degree 3, poles 6, smooth) — with rms and max distance of the points from it; tolerance mm gives a verdict. make: true makes the shape a body (a surface always is). Crop to the feature first.",
-             obj({"points": pts, "shape": {"type": "string", "enum": ["plane", "sphere", "cylinder", "surface"]}, "axis": {"type": "array"}, "tolerance": {"type": "number"},
+        Tool("points_fit", "Fit a shape through the points: plane (centre, normal), sphere (centre, diameter), cylinder (base, axis, diameter, length; axis a hint), surface (a B-spline: degree 3, poles 6, smooth) or curve (a B-spline edge through a line of points — an edge scan, a path: tolerance mm, degree) — with rms and max distance of the points from it; tolerance mm gives a verdict. make: true makes the shape a body (a surface always is). Crop to the feature first.",
+             obj({"points": pts, "shape": {"type": "string", "enum": ["plane", "sphere", "cylinder", "surface", "curve"]}, "axis": {"type": "array"}, "tolerance": {"type": "number"},
                   "make": {"type": "boolean"}, "degree": {"type": "integer"}, "poles": {"type": "integer"}, "smooth": {"type": "boolean"}, "weight": {"type": "number"},
                   "iterations": {"type": "integer"}, "name": {"type": "string"}}), points_fit, changes=True),
+        Tool("points_merge", "Join point clouds into one: points [names]; remove: true drops the originals.",
+             obj({"points": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "boolean"}, "name": {"type": "string"}}, ["points"]), points_merge, changes=True),
+        Tool("points_mesh", "A mesh through a point cloud: method height (one side of a surface — terrain, a panel, a scanned face — gridded at cell mm, twice the spacing by default) | hull (the convex shrink-wrap) | poisson (a closed surface, FreeCAD built with PCL; depth). Then meshobj_repair / part_from_mesh.",
+             obj({"points": pts, "method": {"type": "string", "enum": ["height", "hull", "poisson"]}, "cell": {"type": "number"}, "depth": {"type": "integer"}, "name": {"type": "string"}}), points_mesh, changes=True),
         Tool("points_export", "Write a point cloud: path .ply (binary), .pcd, .asc / .xyz, .csv.", obj({"points": pts, "path": {"type": "string"}}), points_export),
     ]
