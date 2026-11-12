@@ -327,15 +327,6 @@ def tools(s):
             prop = "AttachmentSupport" if hasattr(o, "AttachmentSupport") else "Support"
             setattr(o, prop, [(target, sub or "")])
             mode = a.get("mode")
-            if not mode:
-                try:
-                    eng = Part.AttachEngine(o.AttacherType)
-                    eng.References = [(target, sub or "")]
-                    sug = eng.suggestMapModes()
-                    mode = sug.get("bestFitMode") or sug.get("BestFitMode")
-                except Exception as e:
-                    tried.append(f"suggest: {e}")
-                    mode = None
             if not mode or mode == "Deactivated":
                 elt = (sub or "")[:4]
                 mode = {("point", "Vert"): "Vertex", ("point", "Edge"): "CenterOfCurvature", ("point", "Face"): "CenterOfMass",
@@ -354,7 +345,7 @@ def tools(s):
         s.snapshot("part_datum")
         return {"datum": o.Label, "kind": kind, "type": o.TypeId, "made": made,
                 "placement": picks.placement_json(o.Placement), **({"mode": o.MapMode} if a.get("to") else {}),
-                **({"notes": tried} if tried and a.get("to") else {})}
+                **({"notes": tried} if a.get("to") and getattr(o, "MapMode", "") == "Deactivated" else {})}
 
     body = {"type": "string"}
     return [

@@ -170,3 +170,22 @@ class MoreFamilies(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_part_more(self):
+        self.box("Pm B", [40, 30, 20], [500, 0, 0])
+        self.ok("part_primitive", {"kind": "cylinder", "radius": 5, "height": 40, "at": [520, 15, -10], "name": "Pm C"})
+        self.ok("part_boolean", {"op": "cut", "base": "Pm B", "tools": ["Pm C"]})
+        sec = self.ok("part_section", {"body": "Pm B", "plane": {"normal": [0, 0, 1], "at": [0, 0, 10]}, "face": True})
+        self.assertAlmostEqual(sec["area_mm2"], 1200 - 78.54, delta=0.1)
+        self.ok("part_wire", {"kind": "polygon", "sides": 6, "radius": 10, "name": "Pm hex"})
+        band = self.ok("part_offset2d", {"shape": "Pm hex", "distance": 2, "fill": True})
+        self.assertAlmostEqual(band["area_mm2"], 120 + 3.14159 * 4, delta=0.1)
+        d = self.ok("part_defeature", {"body": "Pm B", "faces": ["Face7"], "name": "Pm plain"})
+        self.assertAlmostEqual(d["volume_mm3"], 24000, delta=0.5)
+        faces = [f"Pm plain.Face{i}" for i in range(1, 7)]
+        sol = self.ok("part_extract", {"refs": faces, "build": "solid", "name": "Pm rebuilt"})
+        self.assertEqual(sol["solids"], 1)
+        r = self.ok("part_fix", {"body": "Pm rebuilt", "op": "reverse"})
+        self.assertLess(r["volume_mm3"], 0)
+        dt = self.ok("part_datum", {"kind": "csys", "to": "Pm plain.Face6", "at": [5, 0, 0]})
+        self.assertEqual(dt["placement"]["at"][2], 20.0)
