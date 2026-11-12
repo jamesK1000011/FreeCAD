@@ -10,6 +10,9 @@ These tools check a BIM model against rule packs and say what an engineer will w
 5. `code_missing`: the questions that would decide what is open. Ask the person a few at a time, in plain words. Never guess a value they should measure. Store their answers with `code_answer` (`subjects` for one answer to several), then check again.
 6. `code_packet` when the open items are engineer's calls: the folder for the professional. Run `bim_export` and `td_export` first and pass their paths so the model and drawings go in.
 
+## Information and IDS
+- Rules of the information kind ask that the model carries data: a wall's material, its fire rating (`Pset_WallCommon.FireRating`, set with `bim_ifc properties`). `code_packs { action: "ids" }` writes those rules as a buildingSMART IDS 1.0 file, which any IDS checker (ifctester, Bonsai) runs against the exported IFC.
+
 ## Structural
 - `code_span` checks one wood member by hand (bending, shear, deflection, bearing). Use it for what-ifs ("would a 2x8 do?"). Design values (Fb, Fv, E, Fc_perp) come from the person: the species and grade on the stamp and its table or supplier sheet. None are assumed.
 - `code_fem` (or `fem: true`) builds a CalculiX beam model beside the hand check. It is a rough look: if the two differ by more than 15 %, the inputs disagree somewhere.

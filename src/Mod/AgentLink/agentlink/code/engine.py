@@ -133,7 +133,13 @@ def _required(rule, subj, values):
     names = (rule.get("params") or {}).get("facts") or rule.get("needs") or []
     gone = missing(rule, subj, names)
     if gone:
-        return finding(rule, subj["id"], "insufficient_information", f"missing: {', '.join(gone)}", questions=[ask(subj["id"], n, f"give {n}") for n in gone])
+        def wording(n):
+            if "." in n and n.split(".", 1)[0].lower().startswith(("pset", "qto")):
+                return f"its {n.split('.', 1)[1]} ({n}): ask the person, then set it with bim_ifc properties"
+            if n == "material":
+                return "what it is made of: bim_material, or code_answer"
+            return f"its {n.replace('_', ' ')}"
+        return finding(rule, subj["id"], "insufficient_information", f"missing: {', '.join(gone)}", questions=[ask(subj["id"], n, wording(n)) for n in gone])
     return finding(rule, subj["id"], "compliant", "all present")
 
 
