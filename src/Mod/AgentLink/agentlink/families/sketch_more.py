@@ -355,6 +355,142 @@ def tools(session):
 
     geo_ids = {"type": "array", "items": {"type": "integer"}}
     sk_ref = {"type": "string", "description": "The sketch's name; may be left out when there is one."}
+    # ---- B-spline editing, merging, mirroring, attachment ----
+
+    def sketch_bspline(a):
+        sk = sketch(a)
+        g = a.get("geo")
+        if not isinstance(g, int) or not 0 <= g < len(sk.Geometry) or "BSpline" not in type(sk.Geometry[g]).__name__:
+            raise bad("geo: a B-spline's id (sketch_to_bspline converts other curves).")
+        op = a.get("op")
+        snap = kept(sk)
+        try:
+            if op == "degree":
+                by = int(a.get("by", 1))
+                if by > 0:
+                    sk.increaseBSplineDegree(g, by)
+                elif by < 0:
+                    if not hasattr(sk, "decreaseBSplineDegree"):
+                        raise ToolError("unavailable", "This FreeCAD cannot lower a B-spline's degree.")
+                    sk.decreaseBSplineDegree(g, -by)
+            elif op == "knot":
+                if a.get("param") is not None:
+                    sk.insertBSplineKnot(g, float(a["param"]), int(a.get("multiplicity", 1)))
+                else:
+                    sk.modifyBSplineKnotMultiplicity(g, int(a.get("knot", 1)), int(a.get("by", 1)))
+            else:
+                raise bad("op: degree (by +1 / -1) | knot (param: insert one there, multiplicity; or knot index, by: its multiplicity up or down).")
+        except ToolError:
+            raise
+        except Exception as e:
+            restore(sk, snap)
+            raise ToolError("failed", f"Sketcher refused: {e}") from None
+        doc().recompute()
+        bs = [x for x in sk.Geometry if "BSpline" in type(x).__name__]
+        geo = sk.Geometry[g] if g < len(sk.Geometry) and "BSpline" in type(sk.Geometry[g]).__name__ else bs[-1]
+        return done(sk, "sketch_bspline", {"geo": g, "degree": int(geo.Degree), "poles": int(geo.NbPoles), "knots": [round(k, 4) for k in geo.getKnots()],
+                                           "multiplicities": list(geo.getMultiplicities())})
+
+    def copy_frame(src, sk):
+        sup = pc.support_prop(src)
+        if getattr(src, sup, None):
+            setattr(sk, pc.support_prop(sk), getattr(src, sup))
+            sk.MapMode = src.MapMode
+            sk.MapReversed = src.MapReversed
+            sk.AttachmentOffset = src.AttachmentOffset
+        else:
+            sk.Placement = src.Placement
+
+    def new_beside(src):
+        body = next((p for p in src.InList if p.TypeId == "PartDesign::Body"), None)
+        return body.newObject("Sketcher::SketchObject", "Sketch") if body else doc().addObject("Sketcher::SketchObject", "Sketch")
+
+    def sketch_merge(a):
+        refs = a.get("sketches")
+        if not isinstance(refs, list) or len(refs) < 2:
+            raise bad("sketches: two or more to merge into a new one (on the first one's plane).")
+        srcs = [pc.sketch_of(doc(), r, None) for r in refs]
+        first = srcs[0]
+        sk = new_beside(first)
+        copy_frame(first, sk)
+        sk.Label = s.unique(a.get("name") or "Merged sketch")
+        inv = first.Placement.inverse()
+        for src in srcs:
+            base = len(sk.Geometry)
+            m = inv.multiply(src.Placement).toMatrix()
+            gs = []
+            for gg in src.Geometry:
+                c = gg.copy()
+                c.transform(m)
+                gs.append(c)
+            if gs:
+                sk.addGeometry(gs, False)
+                for i in range(len(gs)):
+                    if src.getConstruction(i):
+                        sk.setConstruction(base + i, True)
+            for c in src.Constraints:
+                try:
+                    cc = c.clone() if hasattr(c, "clone") else c
+                    if cc.First >= 0:
+                        cc.First += base
+                    if getattr(cc, "Second", -2000) >= 0:
+                        cc.Second += base
+                    if getattr(cc, "Third", -2000) >= 0:
+                        cc.Third += base
+                    sk.addConstraint(cc)
+                except Exception:
+                    pass
+        if a.get("remove"):
+            for src in srcs:
+                doc().removeObject(src.Name)
+        return done(sk, "sketch_merge", {"sketch": sk.Label, "from": [x.Label for x in srcs]})
+
+    def sketch_mirror(a):
+        src = sketch(a)
+        about = a.get("about", "y")
+        M = FreeCAD.Matrix()
+        if about == "y":
+            M.A11 = -1
+        elif about == "x":
+            M.A22 = -1
+        elif about == "origin":
+            M.A11 = M.A22 = -1
+        else:
+            raise bad("about: x (flip over the x axis) | y | origin.")
+        sk = new_beside(src)
+        copy_frame(src, sk)
+        gs = []
+        for gg in src.Geometry:
+            c = gg.copy()
+            c.transform(M)
+            gs.append(c)
+        if gs:
+            sk.addGeometry(gs, False)
+            for i in range(len(gs)):
+                if src.getConstruction(i):
+                    sk.setConstruction(i, True)
+        sk.Label = s.unique(a.get("name") or f"{src.Label} mirrored")
+        return done(sk, "sketch_mirror", {"sketch": sk.Label, "from": src.Label, "about": about, "note": "Geometry only: constrain the copy (sketch_validate autoconstrain) to edit it by sizes."})
+
+    def sketch_attach(a):
+        sk = sketch(a)
+        b = next((p for p in sk.InList if p.TypeId == "PartDesign::Body"), None)
+        if b is None:
+            raise ToolError("invalid_state", f"{sk.Label} is in no body: attach works on a body's sketch.")
+        if ("plane" in a) == ("face" in a):
+            raise bad("plane (XY, XZ, YZ, a datum plane) or face { at, normal }: one.")
+        link, what = pc.plane_ref(b, a["plane"] if "plane" in a else a["face"], "plane")
+        setattr(sk, pc.support_prop(sk), [(link[0], link[1][0])])
+        sk.MapMode = "FlatFace"
+        sk.MapReversed = bool(a.get("flip", False))
+        off = float(a.get("offset", 0))
+        rot = float(a.get("rotate", 0))
+        sk.AttachmentOffset = FreeCAD.Placement(V(0, 0, off), FreeCAD.Rotation(V(0, 0, 1), rot))
+        doc().recompute()
+        if not sk.isValid():
+            raise ToolError("failed", f"{sk.Label} would not attach to {what}: {sk.getStatusString()}.")
+        return done(sk, "sketch_attach", {"sketch": sk.Label, "on": what, "offset": off, "rotate": rot})
+
     return [
         Tool("sketch_copy", "Copy geometry in a sketch (move: true moves it instead): geometry [ids] (default every non-construction one), and by [dx, dy] (clone: true keeps copies equal to the originals), rotate { center, angle } or scale { center, factor }.",
              obj({"sketch": sk_ref, "geometry": geo_ids, "by": {"type": "array"}, "rotate": {"type": "object"}, "scale": {"type": "object"}, "move": {"type": "boolean"}, "clone": {"type": "boolean"}}), sketch_copy, changes=True),
@@ -369,6 +505,15 @@ def tools(session):
         Tool("sketch_project", "Bring edges of a binder, datum or another sketch into this sketch as external geometry: from, edges [\"Edge3\" | { near, kind }] (default all), defining: true makes them part of the profile.",
              obj({"sketch": sk_ref, "from": {"type": "string"}, "edges": {"type": "array"}, "defining": {"type": "boolean"}}, ["from"]), sketch_project, changes=True),
         Tool("sketch_to_bspline", "Convert geometry to B-splines (to reshape by poles, or join): geometry [ids].", obj({"sketch": sk_ref, "geometry": geo_ids}), sketch_to_bspline, changes=True),
+        Tool("sketch_bspline", "Edit a B-spline in a sketch: geo, op degree (by: +1 raises, -1 lowers) | knot (param: insert a knot there, multiplicity; or knot: its index and by: raise/lower its multiplicity — a corner at 0 continuity).",
+             obj({"sketch": {"type": "string"}, "geo": {"type": "integer"}, "op": {"type": "string", "enum": ["degree", "knot"]}, "by": {"type": "integer"}, "param": {"type": "number"},
+                  "knot": {"type": "integer"}, "multiplicity": {"type": "integer"}}, ["geo", "op"]), sketch_bspline, changes=True),
+        Tool("sketch_merge", "Merge sketches into a new one on the first's plane, geometry and constraints kept: sketches [names]; remove: true deletes the originals.",
+             obj({"sketches": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "boolean"}, "name": {"type": "string"}}, ["sketches"]), sketch_merge, changes=True),
+        Tool("sketch_mirror", "A mirrored copy of a whole sketch as a new sketch on the same plane: about y (left-right) | x (up-down) | origin.",
+             obj({"sketch": {"type": "string"}, "about": {"type": "string", "enum": ["x", "y", "origin"]}, "name": {"type": "string"}}), sketch_mirror, changes=True),
+        Tool("sketch_attach", "Move a sketch onto another plane (Sketcher's map/reorient): plane XY | XZ | YZ | a datum plane, or face { at, normal }; offset mm along its normal, rotate deg in it, flip.",
+             obj({"sketch": {"type": "string"}, "plane": {"type": "string"}, "face": {"type": "object"}, "offset": {"type": "number"}, "rotate": {"type": "number"}, "flip": {"type": "boolean"}}), sketch_attach, changes=True),
         Tool("sketch_validate", "Check a sketch the way Sketcher's Validate does: degenerate geometry, ends that touch with no coincidence, invalid, redundant and conflicting constraints (precision mm). fix: true repairs what it can; autoconstrain: true also adds the obvious constraints.",
              obj({"sketch": sk_ref, "precision": {"type": "number"}, "fix": {"type": "boolean"}, "autoconstrain": {"type": "boolean"}, "angle": {"type": "number"}}), sketch_validate, changes=True),
     ]
