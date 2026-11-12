@@ -123,6 +123,7 @@ def _value(v):
         v = ", ".join(f"{k} {_value(x)}" for k, x in list(v.items())[:3])
     elif isinstance(v, list):
         v = "[" + ", ".join(_value(x) for x in v[:4]) + ("…" if len(v) > 4 else "") + "]"
+        return v if len(v) <= 60 else v[:57] + "…]"
     elif isinstance(v, float):
         v = f"{v:g}"
     s = str(v)
@@ -257,6 +258,44 @@ class Echo:
         except Exception as e:
             FreeCAD.Console.PrintLog(f"Agent Link echo (before {tool.name}): {e}\n")
 
+    def _views(self, name, args, body):
+        """The window a person would be looking at: a TechDraw tool's page
+        open in its tab, everything else in the 3D view; a FEM analysis
+        made active."""
+        import FreeCADGui
+
+        QtCore, _QtGui, QtW = _qt()
+        doc = self.s.doc
+        page_ref = (body or {}).get("page") or (args or {}).get("page")
+        if name.startswith(("td_", "drawing_")) and isinstance(page_ref, str):
+            page = _objects(doc, [page_ref])
+            if page and page[0].ViewObject:
+                try:
+                    page[0].ViewObject.doubleClicked()
+                except Exception:
+                    pass
+            return
+        an = (body or {}).get("analysis")
+        if an:
+            obj = _objects(doc, [an])
+            if obj:
+                try:
+                    import FemGui
+
+                    FemGui.setActiveAnalysis(obj[0])
+                except Exception:
+                    pass
+        # Back to the 3D view when a drawing page is in front.
+        area = FreeCADGui.getMainWindow().findChild(QtW.QMdiArea)
+        if area is None:
+            return
+        cur = area.activeSubWindow()
+        if cur is not None and type(cur.widget()).__name__ != "View3DInventor":
+            for sub in area.subWindowList():
+                if type(sub.widget()).__name__ == "View3DInventor":
+                    area.setActiveSubWindow(sub)
+                    break
+
     def _mode(self, name, args):
         """The mode a person would be in: a sketch's tools work with the
         sketch open in the Sketcher; anything else closes it first."""
@@ -303,6 +342,7 @@ class Echo:
 
             doc = self.s.doc
             made = _objects(doc, [body.get(k) for k in OUT_KEYS if isinstance(body.get(k), str)])
+            self._views(name, args, body)
             if name == "sketch_new" and made and FreeCADGui.ActiveDocument:
                 FreeCADGui.ActiveDocument.setEdit(made[0].Name)
             if made:
@@ -318,7 +358,7 @@ class Echo:
                     gv.setActiveObject("pdbody", body_obj)
             # Follow the work: the view framed on the part after each change
             # (Mod/AgentLink Follow; the Activity tab's check box).
-            if FreeCAD.ParamGet(PREFS).GetBool("Follow", True) and FreeCADGui.ActiveDocument:
+            if FreeCAD.ParamGet(PREFS).GetBool("Follow", True) and FreeCADGui.ActiveDocument and not name.startswith(("td_", "drawing_")):
                 FreeCADGui.SendMsgToActiveView("ViewFit")
             FreeCADGui.updateGui()
         except Exception as e:
