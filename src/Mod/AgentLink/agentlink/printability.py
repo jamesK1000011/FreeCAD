@@ -86,6 +86,23 @@ def _regions(shape, keep, tol=0.05):
     return sorted(regions, key=lambda r: -r["area"])
 
 
+# Add-ons that read wall thickness better (ScanRuler's, through ScanRulerFC)
+# add a reader here: f(shape) -> a dict shaped as geometry.least_wall's, with
+# "by" naming it, or None to leave it to the next. The built-in rays are last.
+WALL_READERS = []
+
+
+def wall(shape):
+    for f in WALL_READERS:
+        try:
+            w = f(shape)
+        except Exception:
+            w = None
+        if w and w.get("least") is not None:
+            return w
+    return geo.least_wall(shape)
+
+
 def check(shape, rules, waived=(), min_area=1.0):
     """The findings, worst first, and the wall read: { findings, wall, rules }."""
     findings = []
@@ -97,7 +114,7 @@ def check(shape, rules, waived=(), min_area=1.0):
 
     # Thin walls, from the rays: under one line an error, under the minimum
     # a warning — it prints as a single line.
-    w = geo.least_wall(shape)
+    w = wall(shape)
     if w.get("least") is not None:
         for run in geo.thin_runs(w["readings"], rules["minWall"], 2.5 * w["spacing"]):
             sev = "error" if run["least"] < rules["line"] else "warning"
@@ -165,7 +182,7 @@ def check(shape, rules, waived=(), min_area=1.0):
             f["waived"] = w_.get("reason", "waived")
     for f in findings:
         f.pop("points", None)
-    return {"findings": findings, "wall": {"least": w.get("least"), "at": w.get("at"), "read": w.get("read")}, "rules": {k: v for k, v in rules.items() if k != "volume"}}
+    return {"findings": findings, "wall": {"least": w.get("least"), "at": w.get("at"), "read": w.get("read"), **({"by": w["by"]} if w.get("by") else {})}, "rules": {k: v for k, v in rules.items() if k != "volume"}}
 
 
 def _waived_by(f, waived, near=1.5):

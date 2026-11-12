@@ -202,4 +202,5 @@ tests/test_thread.py
 tests/test_threemf.py
 tests/test_tools.py
 tests/test_view.py
+tests/test_wall_readers.py
 tests/test_window_route.py
