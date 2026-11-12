@@ -244,6 +244,7 @@ class Echo:
             wb = _workbench_for(tool.name)
             if wb and FreeCADGui.activeWorkbench().name() != wb and wb in FreeCADGui.listWorkbenches():
                 FreeCADGui.activateWorkbench(wb)
+            self._mode(tool.name, args)
             caption(_describe(tool.name, args))
             FreeCADGui.getMainWindow().statusBar().showMessage("Agent: " + _describe(tool.name, args), 4000)
             cmd = COMMAND.get(tool.name)
@@ -255,6 +256,25 @@ class Echo:
             _wait(delay_ms())
         except Exception as e:
             FreeCAD.Console.PrintLog(f"Agent Link echo (before {tool.name}): {e}\n")
+
+    def _mode(self, name, args):
+        """The mode a person would be in: a sketch's tools work with the
+        sketch open in the Sketcher; anything else closes it first."""
+        import FreeCADGui
+
+        gd = FreeCADGui.ActiveDocument
+        if gd is None:
+            return
+        editing = gd.getInEdit()
+        sk = args.get("sketch") if name.startswith("sketch_") and name not in ("sketch_new", "sketch_state") else None
+        target = _objects(self.s.doc, [sk])[0] if sk and _objects(self.s.doc, [sk]) else None
+        if target is not None:
+            if editing is None or editing.Object is not target:
+                if editing is not None:
+                    gd.resetEdit()
+                gd.setEdit(target.Name)
+        elif editing is not None and not name.startswith(("sketch_", "view_", "note_", "measure")):
+            gd.resetEdit()
 
     def after(self, tool, args, reply):
         name = tool.name if tool is not None else "?"
@@ -283,6 +303,8 @@ class Echo:
 
             doc = self.s.doc
             made = _objects(doc, [body.get(k) for k in OUT_KEYS if isinstance(body.get(k), str)])
+            if name == "sketch_new" and made and FreeCADGui.ActiveDocument:
+                FreeCADGui.ActiveDocument.setEdit(made[0].Name)
             if made:
                 _select(made)
                 # Lit for a moment, then the part shows in its own colours again.
