@@ -352,3 +352,27 @@ if __name__ == "__main__":
         c = self.ok("code_check", {"subjects": ["Cs loft"], "tags": ["geometry"]})
         f = next(x for x in c["findings"] if x["rule"] == "example.space.sloped")
         self.assertAlmostEqual(f["share"], 0.6, delta=0.02)
+
+    def test_fea_parts(self):
+        self.have("fea_parts")
+        import shutil
+
+        if not (shutil.which("ccx") and shutil.which("gmsh")):
+            self.skipTest("ccx and gmsh are not installed")
+        self.box("Fp base", [20, 20, 20], [0, 0, 1800])
+        self.box("Fp top", [20, 20, 20], [0, 0, 1820])
+        res = {}
+        for how in ("tie", "contact"):
+            p = self.ok("fea_parts", {"bodies": ["Fp base", "Fp top"], "materials": {"Fp base": "pla", "Fp top": "petg"}, "join": how, "mesh": 5})
+            self.assertEqual(len(p["touching"]), 1)
+            self.ok("fea_hold", {"faces": {"normal": [0, 0, -1], "z": 1800}})
+            for n in ([-1, 0, 0], [0, -1, 0]):
+                self.ok("fea_hold", {"faces": {"normal": n}, "kind": "slide"})
+            self.ok("fea_load", {"faces": {"normal": [0, 0, 1], "z": 1840}, "pressure": 1})
+            r = self.ok("fea_solve", {})
+            res[how] = r
+            self.assertEqual({x["body"] for x in r["parts"]}, {"Fp base", "Fp top"})
+        # in series: 20/E_pla + 20/E_petg under 1 MPa, held both ways nearly alike
+        expect = 20 / 3500 + 20 / 2100
+        for how, r in res.items():
+            self.assertAlmostEqual(r["displacementMax"]["mm"], expect, delta=expect * 0.15, msg=how)

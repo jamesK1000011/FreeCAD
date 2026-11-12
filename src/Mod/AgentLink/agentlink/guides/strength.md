@@ -39,3 +39,6 @@
 `fea_load { temperature: dT }` warms (or, negative, cools) the whole part against its holds; `alpha` is the expansion per K, else the material's. A bar free at one end grows by L·alpha·dT; one held at both ends sees about E·alpha·dT of stress.
 
 `fea_hold` takes kind: fixed (default), slide (held only along the face normal: a roller, a floor, a symmetry plane — cut a symmetric part in half or quarter and slide its cut faces), pin (dofs held), move (a set displacement). `fea_load { spin: { rpm, axis, at } }` loads a rotor by its own mass (a solid disk's centre sees (3+ν)/8·ρω²R²).
+
+## Several parts
+`fea_parts { bodies, materials, join }` studies parts together instead of `fea_setup`: each keeps its own material, and where they touch they are tied (bonded: glued, welded, press-fit) or in contact (they push but do not pull; `friction` lets them slide). Holds and loads then pick faces of the parts together; the answer gives each part's peak and safety. Contact is nonlinear and slower, and every part needs holds that keep it from flying off before contact closes. Parts that overlap (rather than touch) are refused by the physics: fix them with `asm_check` first.
