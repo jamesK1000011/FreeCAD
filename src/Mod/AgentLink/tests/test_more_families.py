@@ -286,3 +286,19 @@ if __name__ == "__main__":
         post = self.ok("cam_post", {"job": "Ce job", "path": "ce.nc"})
         with open(post["path"]) as f:
             self.assertIn("M0", f.read())
+
+    def test_sketch_more(self):
+        self.have("sketch_merge")
+        self.ok("pd_body_new", {"name": "Sm body"})
+        self.ok("sketch_new", {"body": "Sm body", "plane": "XY", "name": "Sm s1"})
+        r = self.ok("sketch_add", {"sketch": "Sm s1", "items": [{"kind": "arc3", "points": [[0, 0], [10, 10], [20, 0]]}, {"kind": "parabola", "vertex": [0, 40], "focal": 5},
+                                                                 {"kind": "bspline", "points": [[0, 80], [20, 90], [40, 80], [60, 95]]}]})
+        ov = r["state"]["openVertices"]
+        self.assertIn([5.0, 50.0], ov)
+        b = self.ok("sketch_bspline", {"sketch": "Sm s1", "geo": 2, "op": "degree", "by": 1})
+        self.assertEqual(b["degree"], 4)
+        self.ok("sketch_new", {"body": "Sm body", "plane": "XY", "name": "Sm s2"})
+        self.ok("sketch_add", {"sketch": "Sm s2", "items": [{"kind": "rectangle", "corner": [100, 0], "size": [20, 10]}]})
+        m = self.ok("sketch_merge", {"sketches": ["Sm s1", "Sm s2"]})
+        self.assertEqual(m["geometry"], 7)
+        self.ok("sketch_attach", {"sketch": "Sm s2", "plane": "XZ", "offset": 5})
