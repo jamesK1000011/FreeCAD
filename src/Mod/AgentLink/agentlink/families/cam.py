@@ -797,6 +797,83 @@ def tools(session):
         d.recompute()
         return out
 
+    def cam_edit(a):
+        d = doc()
+        job = _job(d, a.get("job"))
+        action = a.get("action")
+        ops = list(job.Operations.Group)
+
+        def op_of(ref):
+            hit = next((o for o in ops if ref in (o.Label, o.Name)), None)
+            if hit is None:
+                raise ToolError("not_found", f"op {ref!r}: cam_list lists them — {', '.join(o.Label for o in ops)}.")
+            return hit
+
+        def place(new, after):
+            g = [o for o in job.Operations.Group if o is not new]
+            i = g.index(after) + 1 if after in g else len(g)
+            job.Operations.Group = g[:i] + [new] + g[i:]
+
+        def custom(label, lines, after):
+            try:
+                from Path.Op import Custom
+            except ImportError:
+                raise ToolError("unavailable", "This FreeCAD's CAM has no custom G-code operation.") from None
+            o = Custom.Create(label, parentJob=job) if "parentJob" in Custom.Create.__code__.co_varnames else Custom.Create(label)
+            if o not in job.Operations.Group:
+                job.Operations.addObject(o)
+            o.Gcode = lines
+            o.Label = s.unique(label, o)
+            if after is not None:
+                place(o, after)
+            return o
+
+        if action == "active":
+            o = op_of(a.get("op"))
+            o.Active = bool(a.get("on", True))
+            out = {"op": o.Label, "active": bool(o.Active)}
+        elif action == "copy":
+            o = op_of(a.get("op"))
+            c = d.copyObject(o, False)
+            if c not in job.Operations.Group:
+                job.Operations.addObject(c)
+            c.Label = s.unique(a.get("name") or f"{o.Label} copy", c)
+            for k, v in (a.get("props") or {}).items():
+                if k in c.PropertiesList:
+                    setattr(c, k, v)
+            place(c, o)
+            out = {"op": c.Label, "from": o.Label}
+        elif action in ("comment", "stop"):
+            after = op_of(a["after"]) if a.get("after") else None
+            if action == "comment":
+                text = str(a.get("text", "")).replace("(", "[").replace(")", "]")
+                if not text:
+                    raise ToolError("invalid_input", "text: the comment.")
+                o = custom(a.get("name") or "Comment", [f"({text})"], after)
+            else:
+                code = "M1" if a.get("optional") else "M0"
+                lines = ([f"({str(a['text']).replace('(', '[').replace(')', ']')})"] if a.get("text") else []) + [code]
+                o = custom(a.get("name") or ("Optional stop" if a.get("optional") else "Stop"), lines, after)
+            out = {"op": o.Label, "gcode": list(o.Gcode)}
+        elif action == "start":
+            o = op_of(a.get("op"))
+            if "StartPoint" not in o.PropertiesList:
+                raise ToolError("invalid_input", f"{o.Label} takes no start point.")
+            p = a.get("at")
+            if p is None:
+                o.UseStartPoint = False
+                out = {"op": o.Label, "startPoint": None}
+            else:
+                o.StartPoint = FreeCAD.Vector(*[float(c) for c in p])
+                o.UseStartPoint = True
+                out = {"op": o.Label, "startPoint": [float(c) for c in p]}
+        else:
+            raise ToolError("invalid_input", "action: active (op, on) | copy (op, props) | comment (text, after) | stop (text, optional: M1, after) | start (op, at [x,y,z] or none).")
+        d.recompute()
+        s.snapshot("cam_edit")
+        out["ops"] = [x.Label + ("" if getattr(x, "Active", True) else " (off)") for x in job.Operations.Group]
+        return out
+
     return [
         Tool("cam_job", "Start a CAM job for a body: the stock round it (stock { margin mm each side, top mm over, bottom mm under }) and the end mill (tool { diameter mm, feed and plunge mm/min, rpm, number }) — ask the person which mill and feeds; the defaults are gentle. Then cam_op.",
              obj({"body": {"type": "string"}, "tool": {"type": "object"}, "stock": {"type": "object"}, "name": {"type": "string"}}, ["tool"]), cam_job, changes=True),
@@ -815,6 +892,9 @@ def tools(session):
              obj({"job": jobref, "op": {"type": "string"}, "kind": {"type": "string"}, "count": {"type": "integer"}, "width": {"type": "number"}, "height": {"type": "number"}, "angle": {"type": "number"}, "style": {"type": "string"}, "margin": {"type": "number"}, "props": {"type": "object"}}, ["op", "kind"]), cam_dressup, changes=True),
         Tool("cam_setup", "The job's setup: fixtures [G54 …] (the job run in each offset), coolant none | flood | mist (every op), safeHeight / clearance offsets mm, order [op labels] to run them in.",
              obj({"job": jobref, "fixtures": {"type": "array", "items": {"type": "string"}}, "coolant": {"type": "string"}, "safeHeight": {"type": "number"}, "clearance": {"type": "number"}, "order": {"type": "array", "items": {"type": "string"}}}), cam_setup, changes=True),
+        Tool("cam_edit", "Edit the job's operations: action active (op, on: false skips it in the G-code) | copy (op duplicated after itself, props to change on the copy — the same op at another depth or with another tool) | comment (text into the G-code, after an op) | stop (M0, or optional: true for M1, with text: a tool change or a flip, after an op) | start (op's start point at [x,y,z]; none clears it).",
+             obj({"job": jobref, "action": {"type": "string", "enum": ["active", "copy", "comment", "stop", "start"]}, "op": {"type": "string"}, "on": {"type": "boolean"}, "props": {"type": "object"},
+                  "text": {"type": "string"}, "optional": {"type": "boolean"}, "after": {"type": "string"}, "at": {"type": "array", "items": {"type": "number"}}, "name": {"type": "string"}}, ["action"]), cam_edit, changes=True),
         Tool("cam_remove", "Remove an operation from the job.", obj({"job": jobref, "op": {"type": "string"}}, ["op"]), cam_remove, changes=True),
         Tool("cam_sim", "Simulate the job's operations on the stock (3-axis, from above): what each removes, rapid moves that go through stock (a crash), cuts into the part (gouges) or under the stock, and what is left over the part — with a picture from above coloured by what is left on the part (blue gouged, green right, red left over). verdict fix or clear. resolution mm per cell (a sixth of the tool by default). Before cam_post.",
              obj({"job": jobref, "resolution": {"type": "number"}, "inline": {"type": "boolean"}, "path": {"type": "string"}}), cam_sim),
