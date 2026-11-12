@@ -272,3 +272,17 @@ if __name__ == "__main__":
         out = self.ok("td_export", {"page": "Tc page", "formats": ["svg"], "name": "tc"})
         with open(out["files"]["svg"]["path"]) as f:
             self.assertIn("Ra 0.8", f.read())
+
+    def test_cam_edit(self):
+        self.have("cam_edit")
+        self.box("Ce block", [40, 30, 10], [0, 1500, 0])
+        self.ok("cam_job", {"body": "Ce block", "tool": {"diameter": 6}, "name": "Ce job"})
+        self.ok("cam_op", {"job": "Ce job", "kind": "profile", "side": "outside", "name": "Ce outline"})
+        self.ok("cam_edit", {"job": "Ce job", "action": "copy", "op": "Ce outline", "name": "Ce rough"})
+        st = self.ok("cam_edit", {"job": "Ce job", "action": "stop", "text": "check part", "after": "Ce rough"})
+        self.assertIn("M0", st["gcode"])
+        off = self.ok("cam_edit", {"job": "Ce job", "action": "active", "op": "Ce rough", "on": False})
+        self.assertIn("Ce rough (off)", off["ops"])
+        post = self.ok("cam_post", {"job": "Ce job", "path": "ce.nc"})
+        with open(post["path"]) as f:
+            self.assertIn("M0", f.read())
