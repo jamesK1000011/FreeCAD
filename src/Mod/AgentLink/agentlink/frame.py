@@ -313,5 +313,5 @@ def solve(ccx, workdir, members, supports, loads, gravity=None, n=8, timeout=300
     if any(abs(got[c] + tot[c]) > 0.02 * max(1.0, max(abs(x) for x in tot)) for c in range(3)):
         out["reactionsNote"] = (f"the reactions add to {[round(x, 1) for x in got]} N against {[round(-x, 1) for x in tot]} N of load: "
                                 "CalculiX reads beam supports short here — use the load total, and member stresses, which are sound")
-    out["loadTotalN"] = [round(-x, 1) for x in tot]
+    out["loadTotalN"] = [round(x, 1) for x in tot]
     return out
