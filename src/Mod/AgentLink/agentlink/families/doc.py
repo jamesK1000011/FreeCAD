@@ -320,11 +320,15 @@ def tools(session):
         if unsaved and not a.get("discard"):
             raise ToolError("invalid_state", "Changed since saved: " + ", ".join(unsaved) + " — doc_save first, or discard: true to lose the changes.")
         closed = []
+        try:
+            current = s.doc.Name
+        except Exception:  # already gone
+            current = None
         for d in picked:
             closed.append(d.Label)
             FreeCAD.closeDocument(d.Name)
         left = list(FreeCAD.listDocuments().values())
-        if s.doc.Name not in FreeCAD.listDocuments():
+        if current not in FreeCAD.listDocuments():
             switch(left[-1] if left else FreeCAD.newDocument("Unnamed"))
         return {"closed": closed, "document": s.doc.Name, "open": [d.Label for d in FreeCAD.listDocuments().values()]}
 
