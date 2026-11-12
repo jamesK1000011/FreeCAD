@@ -12,7 +12,10 @@ import sys
 import threading
 import time
 
-from . import restart_mark
+try:
+    from . import restart_mark
+except ImportError:  # an update without it: no waiting for a restarting window
+    restart_mark = None
 
 FLAG = "AGENTLINK_SUPERVISED"
 WINDOW_PORT = int(os.environ.get("AGENTLINK_WINDOW_PORT", "7318"))
@@ -49,7 +52,7 @@ class Window:
             return False
         # The window restarting (app_restart, agentlink_update): wait for it
         # rather than let the hidden FreeCAD answer for the document on screen.
-        if not self._open() and not restart_mark.wait_until(self._open):
+        if not self._open() and not (restart_mark and restart_mark.wait_until(self._open)):
             return False
         try:
             mid = json.loads(line).get("id")
