@@ -397,3 +397,17 @@ if __name__ == "__main__":
                                   "loads": [{"at": [0, 0, 3000], "force": [1000, 0, 0]}, {"member": "T", "w": 2}], "name": "fr portal"})
         self.assertEqual(len(p["members"]), 3)
         self.assertEqual(p["loadTotalN"][2], -8000.0)
+
+    def test_fea_shell(self):
+        self.have("fea_shell")
+        import shutil
+
+        if not (shutil.which("ccx") and shutil.which("gmsh")):
+            self.skipTest("ccx and gmsh are not installed")
+        self.box("Sh slab", [200, 200, 5], [0, 0, 2400])
+        self.ok("part_extract", {"refs": ["Sh slab.Face6"], "name": "Sh plate"})
+        D = 3500 * 5 ** 3 / (12 * (1 - 0.36 ** 2))
+        for kind, alpha in (("pinned", 0.00406), ("fixed", 0.00126)):
+            r = self.ok("fea_shell", {"object": "Sh plate", "thickness": 5, "material": "pla", "holds": [{"edges": "boundary", "kind": kind}], "pressure": 0.001, "mesh": 10})
+            want = alpha * 0.001 * 200 ** 4 / D
+            self.assertAlmostEqual(r["deflectionMaxMm"], want, delta=want * 0.1, msg=kind)

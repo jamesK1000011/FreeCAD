@@ -42,3 +42,7 @@
 
 ## Several parts
 `fea_parts { bodies, materials, join }` studies parts together instead of `fea_setup`: each keeps its own material, and where they touch they are tied (bonded: glued, welded, press-fit) or in contact (they push but do not pull; `friction` lets them slide). Holds and loads then pick faces of the parts together; the answer gives each part's peak and safety. Contact is nonlinear and slower, and every part needs holds that keep it from flying off before contact closes. Parts that overlap (rather than touch) are refused by the physics: fix them with `asm_check` first.
+
+## Frames and shells
+- `fea_frame` solves a frame of straight members with beam elements: members by ends and section (rect, circ, pipe, box), or BIM bodies (their centre lines and sizes, joined within `tolerance`). Supports pinned, fixed or roller at member ends; loads along members (N/mm, or kPa over a width) and at joints; `gravity` for own weight. Each member's stress, safety, deflection (span over deflection; `deflectionLimit` judges it) and each support's reaction. Checked: a simple beam's stress and deflection within 1 % of the textbook.
+- `fea_shell` solves a thin plate or sheet by shell elements: the object's faces are the mid-surface, `thickness` sets the rest; edges simply supported (pinned) or clamped (fixed); pressure and own weight. Checked against the classic square-plate results within 3 %. A deflection past half the thickness is flagged: the plate then also stretches, which a linear solve misses.
