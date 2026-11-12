@@ -19,10 +19,18 @@ except ImportError:
 
 @unittest.skipUnless(HAVE, "FreeCAD is not importable here")
 class WallReaders(unittest.TestCase):
+    # An installed add-on (ScanRulerFC) may have added its reader: set it
+    # aside for these tests.
+    def setUp(self):
+        from agentlink import printability
+
+        self.saved = list(printability.WALL_READERS)
+        printability.WALL_READERS.clear()
+
     def tearDown(self):
         from agentlink import printability
 
-        printability.WALL_READERS.clear()
+        printability.WALL_READERS[:] = self.saved
 
     def test_built_in_when_none(self):
         from agentlink import printability

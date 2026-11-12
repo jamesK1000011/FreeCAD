@@ -72,6 +72,26 @@ class Thread(unittest.TestCase):
         err, r = self.call("thread_cut", {"body": "Wide", "faces": {"near": [13.5, 10, 5]}, "size": "M6"})
         self.assertTrue(err)
         self.assertEqual(r["error"]["code"], "invalid_state")
+        err, r = self.call("thread_identify", {"body": "Rod"})
+        self.assertTrue(err)
+        self.assertEqual(r["error"]["code"], "invalid_input")
+
+    def test_35_scan_goes_to_a_reader(self):
+        from agentlink.families import thread
+
+        saved = list(thread.SCAN_READERS)
+        thread.SCAN_READERS.clear()
+        try:
+            err, r = self.call("thread_identify", {"scan": {"axis": {"origin": [0, 0, 0], "direction": [0, 0, 1], "radius": 3}}})
+            self.assertTrue(err)
+            self.assertEqual(r["error"]["code"], "unavailable")
+            thread.SCAN_READERS.append(lambda s, a: {"verdict": "match", "best": {"designation": "M6×1", "family": "metric"}, "asked": a})
+            err, r = self.call("thread_identify", {"scan": {"axis": {"radius": 3}}})
+            self.assertFalse(err, r)
+            self.assertEqual(r["from"], "scan")
+            self.assertIn('"M6x1"', r["next"])
+        finally:
+            thread.SCAN_READERS[:] = saved
 
     def test_4_cut_modelled(self):
         before = self.session.body("Plate").Shape.Volume

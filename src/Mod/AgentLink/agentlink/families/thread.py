@@ -20,6 +20,11 @@ GROUP = "thread"
 INFO = "Screw threads: metric and Unified sizes from the standards, what size a hole or shaft is, and threads cut on holes."
 
 V = FreeCAD.Vector
+
+# Add-ons that read a thread off a scan (ScanRulerFC's scan_thread) add a
+# reader here: f(session, args) -> its reading. thread_identify { scan } asks
+# the first, so a CAD face and a scanned thread are named by one tool.
+SCAN_READERS = []
 HOLE_TYPE = {"metric": "ISOMetricProfile", "metric-fine": "ISOMetricFineProfile", "unc": "UNC", "unf": "UNF"}
 
 
@@ -87,6 +92,18 @@ def tools(session):
         return {"threads": [{k: r[k] for k in ("size", "major", "pitch", "minorInt", "tapDrill")} for r in rows], "units": "mm", "columns": "size, major, pitch, internal minor, tap drill"}
 
     def thread_identify(a):
+        if a.get("scan") is not None:
+            if not SCAN_READERS:
+                raise ToolError("unavailable", "Reading a thread off a scan needs ScanRulerFC installed (its scan_thread): app_extensions, or measure the pitch and give thread_identify { faces, pitch }.")
+            out = SCAN_READERS[0](s, {**a["scan"], **({"families": a["families"]} if a.get("families") else {})})
+            out = {"from": "scan", **out}
+            b = out.get("best") or {}
+            if out.get("verdict") == "match" and b.get("family") in ("metric", "unc", "unf"):
+                size = b["designation"].replace("×", "x").replace(" UNC", "").replace(" UNF", "")
+                out["next"] = f"thread_cut {{ size: \"{size}\" }} threads the modelled hole or shaft to match."
+            return out
+        if not a.get("faces"):
+            raise ToolError("invalid_input", "faces: the hole or shaft's face by query — or scan: { axis } to read a scanned thread.")
         o = s.body(a.get("body"))
         q = dict(a.get("faces") or {})
         q.setdefault("cylinder", True)
@@ -260,8 +277,8 @@ def tools(session):
         ),
         Tool(
             "thread_identify",
-            "What thread a hole or shaft is: a cylindrical face by query gives its diameter, hole or shaft, length, and the nearest standard sizes — a hole read as tap drill, internal minor or major, a shaft as major — each with how far off. When sizes tie but for pitch it says needs: pitch: ask the person or measure, then give pitch.",
-            obj({"body": {"type": "string"}, "faces": q, "pitch": {"type": "number"}}, ["faces"]),
+            "What thread a hole or shaft is: a cylindrical face by query gives its diameter, hole or shaft, length, and the nearest standard sizes — a hole read as tap drill, internal minor or major, a shaft as major — each with how far off. When sizes tie but for pitch it says needs: pitch: ask the person or measure, then give pitch. scan: { axis, band, length } reads a scanned thread instead — pitch, starts, hand, flank and the standard it matches — where ScanRulerFC is installed (its scan_thread).",
+            obj({"body": {"type": "string"}, "faces": q, "pitch": {"type": "number"}, "scan": {"type": "object", "description": "As scan_thread takes: { axis: { element } | { origin, direction, radius }, band, length, pitchFloor }."}, "families": {"type": "array", "items": {"type": "string"}}}),
             thread_identify,
         ),
         Tool(
