@@ -233,7 +233,10 @@ def tools(session):
             o.Source = srcs
         elif op == "dress":
             src = trajectory(a.get("trajectory"))
-            o = doc().addObject("Robot::TrajectoryDressUp", "Trajectory")
+            try:
+                o = doc().addObject("Robot::TrajectoryDressUpObject", "Trajectory")
+            except Exception:
+                o = doc().addObject("Robot::TrajectoryDressUp", "Trajectory")
             o.Source = src
             if a.get("speed") is not None:
                 o.UseSpeed = True
