@@ -260,8 +260,8 @@ if __name__ == "__main__":
         self.ok("part_primitive", {"kind": "cylinder", "radius": 10, "height": 60, "at": [0, 0, 1200], "name": "Tc shaft"})
         self.ok("part_transform", {"op": "rotate", "body": "Tc shaft", "axis": [0, 1, 0], "angle": 90, "about": [0, 0, 1200]})
         self.ok("td_page", {"action": "new", "paper": "A4", "name": "Tc page"})
-        self.ok("td_view", {"objects": ["Tc shaft"], "direction": "front", "scale": 2, "at": [110, 150], "name": "Tc front"})
-        self.ok("td_view", {"objects": ["Tc shaft"], "direction": "right", "scale": 2, "at": [220, 150], "name": "Tc end"})
+        self.ok("td_view", {"page": "Tc page", "bodies": ["Tc shaft"], "direction": "front", "scale": 2, "at": [110, 150], "name": "Tc front"})
+        self.ok("td_view", {"page": "Tc page", "bodies": ["Tc shaft"], "direction": "right", "scale": 2, "at": [220, 150], "name": "Tc end"})
         g = self.ok("td_geometry", {"view": "Tc front", "kind": "lines"})
         lines = [i["ref"] for i in g["items"] if i["kind"] == "line"]
         c = self.ok("td_cosmetic", {"view": "Tc front", "items": [{"kind": "centerline", "edges": lines[:2]}, {"kind": "thread", "edges": lines[:2], "length": 25}]})
