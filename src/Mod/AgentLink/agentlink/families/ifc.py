@@ -71,7 +71,37 @@ def row(el, full=False):
         q = psets_of(el, qto=True)
         if q:
             r["quantities"] = q
+        cl = classifications(el)
+        if cl:
+            r["classification"] = cl
     return r
+
+
+def real_classification(f, el, c):
+    """An IfcClassificationReference on the element (the system made once):
+    True if IfcOpenShell's API took it."""
+    system = str(c.get("system") or "Classification")
+    cl = next((x for x in f.by_type("IfcClassification") if x.Name == system), None)
+    try:
+        if cl is None:
+            cl = run(f, "classification.add_classification", classification=system)
+        try:
+            run(f, "classification.add_reference", products=[el], identification=str(c.get("code", "")), name=str(c.get("title", "")), classification=cl)
+        except TypeError:
+            run(f, "classification.add_reference", product=el, identification=str(c.get("code", "")), name=str(c.get("title", "")), classification=cl)
+        return True
+    except Exception:
+        return False
+
+
+def classifications(el):
+    out = []
+    for rel in getattr(el, "HasAssociations", []) or []:
+        if rel.is_a("IfcRelAssociatesClassification"):
+            r = rel.RelatingClassification
+            src = getattr(r, "ReferencedSource", None)
+            out.append({"system": getattr(src, "Name", None), "code": getattr(r, "Identification", None) or getattr(r, "ItemReference", None), "title": r.Name})
+    return out
 
 
 def tools(session):
@@ -198,9 +228,14 @@ def tools(session):
                 done["storey"] += 1
             if a.get("classification"):
                 c = a["classification"]
-                pset = run(f, "pset.add_pset", product=el, name="AgentLink_Classification") if not uel.get_pset(el, "AgentLink_Classification") else f.by_id(uel.get_pset(el, "AgentLink_Classification")["id"])
-                run(f, "pset.edit_pset", pset=pset, properties={"System": str(c.get("system", "")), "Code": str(c.get("code", "")), "Title": str(c.get("title", ""))})
-                done["classification"] += 1
+                if real_classification(f, el, c):
+                    done["classification"] += 1
+                else:
+                    got = uel.get_pset(el, "AgentLink_Classification")
+                    pset = f.by_id(got["id"]) if got else run(f, "pset.add_pset", product=el, name="AgentLink_Classification")
+                    run(f, "pset.edit_pset", pset=pset, properties={"System": str(c.get("system", "")), "Code": str(c.get("code", "")), "Title": str(c.get("title", ""))})
+                    done["classification"] += 1
+                    done["classificationAs"] = "property set (this IfcOpenShell could not add a classification reference)"
         m["edits"] += 1
         return {"changed": len(els), "done": {k: v for k, v in done.items() if v}, "elements": [row(e) for e in els[:20]],
                 "note": "In the open file only: ifc_save writes it."}

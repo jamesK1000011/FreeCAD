@@ -417,5 +417,22 @@ class MoreFamilies(Base):
             self.assertAlmostEqual(r["deflectionMaxMm"], want, delta=want * 0.1, msg=kind)
 
 
+    def test_ifc_in_place(self):
+        self.have("ifc_open")
+        self.ok("bim_wall", {"points": [[0, 20000], [5000, 20000]], "height": 2700, "width": 200, "name": "If wall"})
+        self.ok("bim_level", {"objects": ["If wall"], "name": "If level"})
+        e = self.unavailable_skip("bim_export", {"objects": ["If level"], "path": "if.ifc"})
+        self.ok("ifc_open", {"path": e["path"]})
+        w = self.ok("ifc_find", {"class": "IfcWall", "name": "If wall"})
+        self.assertEqual(w["count"], 1)
+        self.ok("ifc_edit", {"ids": [w["elements"][0]["id"]], "properties": {"Pset_WallCommon.FireRating": "REI60"}, "material": "Block",
+                             "classification": {"system": "Uniclass", "code": "EF_25_10", "title": "Walls"}})
+        s = self.ok("ifc_save", {"path": "if_edited.ifc"})
+        d = self.ok("ifc_diff", {"a": e["path"], "b": s["path"]})
+        ch = d["changed"][0]["changes"]
+        self.assertEqual(ch["Pset_WallCommon.FireRating"][1], "REI60")
+        self.assertEqual(ch["material"][1], "Block")
+
+
 if __name__ == "__main__":
     unittest.main()
