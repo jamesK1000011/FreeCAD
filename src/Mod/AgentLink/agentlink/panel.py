@@ -13,6 +13,7 @@ import FreeCAD
 import FreeCADGui
 
 from .families import notes as nf
+from .panel_tabs import Tabs
 
 try:
     from PySide import QtCore, QtGui
@@ -25,7 +26,7 @@ try:
 except ImportError:  # pragma: no cover
     QtCore = QtGui = QtWidgets = None
 
-CREDIT = "Notes and step playback after Stefan Hermann's ScanRuler (CNC Kitchen)."
+CREDIT = "Notes, step playback, review, setups, materials, fits and the manual after Stefan Hermann's ScanRuler (CNC Kitchen)."
 PIN_AGENT = (0.85, 0.45, 0.15)
 PIN_PERSON = (0.25, 0.55, 0.85)
 PIN_DONE = (0.55, 0.55, 0.55)
@@ -148,7 +149,7 @@ class Stage:
         self.body = self.was = None
 
 
-class Panel(QtWidgets.QDockWidget if QtWidgets else object):
+class Panel(Tabs, QtWidgets.QDockWidget if QtWidgets else object):
     def __init__(self):
         super().__init__("Agent Link")
         self.setObjectName("AgentLinkPanel")
@@ -168,7 +169,14 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
         tabs.addTab(self._notes_tab(), "Notes")
         tabs.addTab(self._steps_tab(), "Steps")
         tabs.addTab(self._review_tab(), "Review")
+        tabs.addTab(self._setups_tab(), "Setups")
+        tabs.addTab(self._materials_tab(), "Materials")
+        tabs.addTab(self._fits_tab(), "Fits")
+        tabs.addTab(self._manual_tab(), "Manual")
         tabs.addTab(self._activity_tab(), "Activity")
+        tabs.setUsesScrollButtons(True)
+        tabs.currentChanged.connect(lambda k: self.fill_tab(tabs.tabText(k)))
+        self.tabs = tabs
         box = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(box)
         lay.setContentsMargins(6, 6, 6, 6)
@@ -340,9 +348,19 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
 
         link = agentlink_state.link
         if link is None or link.server is None:
+            import os
+
             from .tools import Session, build_server
 
-            server = build_server(Session(doc=_doc()))
+            # No link on: a server of the panel's own, kept, its files where
+            # the link's go.
+            out = os.path.expanduser("~/AgentLink")
+            os.makedirs(out, exist_ok=True)
+            own = getattr(self, "_own", None)
+            if own is None or own[0].doc is not _doc():
+                sess = Session(doc=_doc(), out_dir=out)
+                own = self._own = (sess, build_server(sess))
+            server = own[1]
         else:
             link._ready()
             server = link.server

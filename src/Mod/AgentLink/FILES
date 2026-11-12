@@ -120,6 +120,7 @@ agentlink/meshformats.py
 agentlink/millsim.py
 agentlink/packing.py
 agentlink/panel.py
+agentlink/panel_tabs.py
 agentlink/paths.py
 agentlink/printability.py
 agentlink/printers.py
@@ -179,6 +180,7 @@ tests/test_millsim.py
 tests/test_model.py
 tests/test_model_more.py
 tests/test_more_families.py
+tests/test_panel_tabs.py
 tests/test_param.py
 tests/test_parts.py
 tests/test_paths.py

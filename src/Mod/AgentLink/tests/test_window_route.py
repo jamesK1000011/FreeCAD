@@ -97,6 +97,57 @@ class WindowRoute(unittest.TestCase):
         finally:
             os.environ.pop("AGENTLINK_RESTART_MARK", None)
 
+    def test_dropped_connection_waits_for_the_restart(self):
+        """The window quits under a kept connection (app_restart): the call
+        is sent again to the window once it is back, not to the hidden one."""
+        import tempfile
+        import time
+
+        from agentlink import restart_mark
+
+        os.environ["AGENTLINK_RESTART_MARK"] = os.path.join(tempfile.mkdtemp(), "mark")
+        try:
+            srv = socket.socket()
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", 0))
+            srv.listen(1)
+            port = srv.getsockname()[1]
+            supervise.WINDOW_PORT = port
+
+            def first():
+                conn, _ = srv.accept()
+                f = conn.makefile("rw", encoding="utf-8", newline="\n")
+                line = f.readline()
+                f.write(json.dumps({"jsonrpc": "2.0", "id": json.loads(line)["id"], "result": {"restarting": True}}) + "\n")
+                f.flush()
+                restart_mark.write(["/nowhere/a.FCStd"])
+                srv.close()
+                time.sleep(0.3)
+                f.close()
+                conn.close()
+                time.sleep(1.0)
+                again = socket.socket()
+                again.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                again.bind(("127.0.0.1", port))
+                again.listen(1)
+                c2, _ = again.accept()
+                g = c2.makefile("rw", encoding="utf-8", newline="\n")
+                for ln in g:
+                    g.write(json.dumps({"jsonrpc": "2.0", "id": json.loads(ln)["id"], "result": {"where": "window"}}) + "\n")
+                    g.flush()
+                    restart_mark.clear()
+
+            threading.Thread(target=first, daemon=True).start()
+            got = []
+            w = supervise.Window(got.append)
+            self.assertTrue(w.call(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call"})))
+            time.sleep(0.6)
+            self.assertTrue(w.call(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call"})))
+            self.assertEqual(json.loads(got[-1])["result"]["where"], "window")
+        finally:
+            restart_mark.clear()
+            os.environ.pop("AGENTLINK_RESTART_MARK", None)
+
 
 def _free_port():
     s = socket.socket()

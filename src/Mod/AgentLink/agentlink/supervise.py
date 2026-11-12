@@ -44,16 +44,14 @@ class Window:
         self.f = s.makefile("rw", encoding="utf-8", newline="\n")
         return True
 
-    def call(self, line):
-        """Send one call to the window and pass its answer on. False when the
-        window isn't there (or went away before answering): the hidden
-        FreeCAD takes the call."""
-        if self.off:
-            return False
-        # The window restarting (app_restart, agentlink_update): wait for it
-        # rather than let the hidden FreeCAD answer for the document on screen.
-        if not self._open() and not (restart_mark and restart_mark.wait_until(self._open)):
-            return False
+    def _ready(self):
+        """Connected to the window, waiting for it while it restarts
+        (app_restart, agentlink_update leave a mark) rather than let the
+        hidden FreeCAD answer for the document on screen."""
+        return self._open() or bool(restart_mark and restart_mark.wait_until(self._open))
+
+    def _send(self, line):
+        """One go at the window: True answered, False went away first."""
         try:
             mid = json.loads(line).get("id")
             self.f.write(line if line.endswith("\n") else line + "\n")
@@ -74,6 +72,16 @@ class Window:
         except OSError:
             self.f = None
             return False
+
+    def call(self, line):
+        """Send one call to the window and pass its answer on. False when the
+        window isn't there: the hidden FreeCAD takes the call. A connection
+        the window dropped (it quit to restart) is made again, once."""
+        if self.off or not self._ready():
+            return False
+        if self._send(line):
+            return True
+        return self._ready() and self._send(line)
 
 
 def run(script, argv):
