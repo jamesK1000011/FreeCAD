@@ -20,6 +20,14 @@ class PanelTabs(unittest.TestCase):
         rows = [("Base", ["Base"], ""), ("", [], "skipped"), ("Lid on", ["Lid", "Screw"], "Snug, not tight")]
         self.assertEqual(panel_tabs.manual_steps(rows), [{"title": "Base", "add": ["Base"]}, {"title": "Lid on", "add": ["Lid", "Screw"], "note": "Snug, not tight"}])
 
+    def test_manual_plan_steps(self):
+        rows = [("Base", ["Base"], ""), ("Lid on", ["Lid", "Screw"], "Snug, not tight"), ("Empty", [], "")]
+        self.assertEqual(panel_tabs.manual_plan_steps(rows), [
+            {"id": "s1", "place": [{"part": "Base"}], "text": "Base"},
+            {"id": "s2", "place": [{"part": "Lid"}, {"part": "Screw"}], "text": "Snug, not tight", "notes": "Lid on"}])
+        self.assertTrue(panel_tabs.missing_tool({"error": {"code": "not_found", "message": "manual_plan: no such tool — x."}}, "manual_plan"))
+        self.assertFalse(panel_tabs.missing_tool({"error": {"code": "not_found", "message": "body Lid: none."}}, "manual_plan"))
+
 
 if __name__ == "__main__":
     unittest.main()

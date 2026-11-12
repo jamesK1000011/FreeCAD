@@ -93,6 +93,25 @@ def manual_steps(rows):
     return out
 
 
+def manual_plan_steps(rows):
+    """The same rows as ScanRulerFC's manual_plan steps: each step places its
+    bodies (parts named as the bodies), the note its words, the title kept."""
+    out = []
+    for k, (title, bodies, note) in enumerate(rows):
+        if not bodies:
+            continue
+        st = {"id": f"s{k + 1}", "place": [{"part": b} for b in bodies], "text": note or title or ""}
+        if note and title:
+            st["notes"] = title
+        out.append(st)
+    return out
+
+
+def missing_tool(out, name):
+    e = (out or {}).get("error") or {}
+    return e.get("code") == "not_found" and str(e.get("message", "")).startswith(f"{name}:")
+
+
 class Tabs:
     """Mixed into the Panel: needs self._call(name, args)."""
 
@@ -412,9 +431,22 @@ class Tabs:
         if not steps:
             self.man_msg.setText("Add a step first.")
             return
+        title = self.man_name.text().strip()
+        # ScanRulerFC's manual leads where it is installed: its plan is kept
+        # with the project, checked (ways in, words) and rendered as one page.
+        ok, out = self._call("manual_plan", {"fromBodies": True, "steps": manual_plan_steps(self.man_rows), **({"settings": {"title": title}} if title else {})})
+        if ok:
+            ok, out = self._call("manual_render", {})
+            _say(self.man_msg, ok, out, f"{out.get('steps', 0)} steps — {(out.get('file') or {}).get('path', '')}" + (" (see its word notes)" if out.get("lint") else ""))
+            self.man_file = (out.get("file") or {}).get("path") if ok else None
+            self.man_open.setEnabled(bool(self.man_file))
+            return
+        if not missing_tool(out, "manual_plan"):
+            _say(self.man_msg, ok, out, "")
+            return
         args = {"steps": steps}
-        if self.man_name.text().strip():
-            args["name"] = self.man_name.text().strip()
+        if title:
+            args["name"] = title
         ok, out = self._call("drawing_exploded", args)
         _say(self.man_msg, ok, out, f"{len(out.get('steps') or [])} steps, {len(out.get('bom') or [])} items — {out.get('manual', '')}")
         self.man_file = out.get("manual") if ok else None
