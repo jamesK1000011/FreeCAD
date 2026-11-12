@@ -52,6 +52,15 @@ ELMER_EQUATIONS = {"elasticity": "makeEquationElasticity", "deformation": "makeE
                    "magnetodynamic2d": "makeEquationMagnetodynamic2D"}
 
 
+def _setq(o, prop, text, number):
+    """A quantity set as text with its unit, or as a plain SI number where
+    this FreeCAD's property is a float."""
+    try:
+        setattr(o, prop, text)
+    except Exception:
+        setattr(o, prop, number)
+
+
 def ObjectsFem_():
     import ObjectsFem
 
@@ -1315,7 +1324,8 @@ def tools(session):
         made.append(mesh.Label)
         shape = o.Shape
         skipped = []
-        for h in st["holds"]:
+        structural = kind == "calculix" or bool({"elasticity", "deformation"} & set(eqs))
+        for h in (st["holds"] if structural else []):
             if h.get("kind", "fixed") != "fixed":
                 skipped.append(f"a {h['kind']} hold (add it as a displacement constraint in the FEM workbench)")
                 continue
@@ -1323,7 +1333,7 @@ def tools(session):
             fx.References = [(o, tuple(n for n, _ in facepick.pick(shape, h["faces"], "faces")))]
             an.addObject(fx)
             made.append(fx.Label)
-        for ld in st["loads"]:
+        for ld in (st["loads"] if structural else []):
             if ld["kind"] == "pressure":
                 pr = ObjectsFem.makeConstraintPressure(doc, "Pressure")
                 pr.References = [(o, tuple(n for n, _ in facepick.pick(shape, ld["faces"], "faces")))]
@@ -1393,7 +1403,7 @@ def tools(session):
                 raise ToolError("invalid_input", "temperatures need the heat equation: equations [..., heat].")
             tc = ObjectsFem_().makeConstraintTemperature(doc, "Temperature")
             tc.References = refs(tq.get("faces"), f"temperatures.{i}.faces")
-            tc.Temperature = f"{273.15 + float(tq['celsius'])} K"
+            _setq(tc, "Temperature", f"{273.15 + float(tq['celsius'])} K", 273.15 + float(tq["celsius"]))
             an.addObject(tc)
             made.append(tc.Label)
         for i, hq in enumerate(a.get("heat") or []):
@@ -1404,7 +1414,7 @@ def tools(session):
             hf = ObjectsFem_().makeConstraintHeatflux(doc, "Heatflux")
             hf.References = [(o, tuple(n for n, _ in picked))]
             hf.ConstraintType = "DFlux"
-            hf.DFlux = f"{float(hq['watts']) / area} W/m^2"
+            _setq(hf, "DFlux", f"{float(hq['watts']) / area} W/m^2", float(hq["watts"]) / area)
             an.addObject(hf)
             made.append(hf.Label)
         for i, pq in enumerate(a.get("potentials") or []):
@@ -1412,7 +1422,7 @@ def tools(session):
                 raise ToolError("invalid_input", "potentials need the electrostatic equation: equations [..., electrostatic].")
             ep = ObjectsFem_().makeConstraintElectrostaticPotential(doc, "Potential")
             ep.References = refs(pq.get("faces"), f"potentials.{i}.faces")
-            ep.Potential = f"{float(pq['volts'])} V"
+            _setq(ep, "Potential", f"{float(pq['volts'])} V", float(pq["volts"]))
             for flag in ("PotentialEnabled", "EnablePotential"):
                 if hasattr(ep, flag):
                     setattr(ep, flag, True)
