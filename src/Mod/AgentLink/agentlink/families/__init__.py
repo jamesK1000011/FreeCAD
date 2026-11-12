@@ -38,6 +38,7 @@ NAMES = [
     "share",
     "view",
     "notes",
+    "app",
     "meshobj",
     "assembly",
     "assembly_more",

@@ -24,6 +24,7 @@ agentlink/data/slicer-minimal.json
 agentlink/embeds.py
 agentlink/facepick.py
 agentlink/families/__init__.py
+agentlink/families/app.py
 agentlink/families/assembly.py
 agentlink/families/assembly_more.py
 agentlink/families/bim.py

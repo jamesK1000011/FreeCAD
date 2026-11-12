@@ -534,5 +534,21 @@ class MoreFamilies(Base):
         self.assertEqual(len(r["files"]), 2)
         self.assertTrue(os.path.getsize(r["sheet"]) > 0)
 
+    def test_app_prefs(self):
+        self.have("pref_set")
+        path = "BaseApp/Preferences/Mod/AgentLinkTest"
+        r = self.ok("pref_set", {"path": path, "values": {"Flag": True, "Count": 3, "Name": "x"}})
+        self.assertEqual(r["set"]["Count"]["type"], "integer")
+        got = self.ok("pref_get", {"path": path})["values"]
+        self.assertTrue(got["Flag"]["value"])
+        self.assertEqual(got["Count"]["value"], 3)
+        self.ok("pref_reset", {"path": path, "names": ["Count"]})
+        self.assertNotIn("Count", self.ok("pref_get", {"path": path})["values"])
+        packs = self.ok("pref_pack", {})["packs"]
+        self.assertIn("Studio Dark", packs)
+        err, out = self.call("cmd_run", {"name": "Std_ViewFitAll"})
+        if err:
+            self.assertEqual(out["error"]["code"], "unavailable")
+
 if __name__ == "__main__":
     unittest.main()
