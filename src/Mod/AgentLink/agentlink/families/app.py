@@ -442,12 +442,18 @@ def tools(session):
                 panel._panel.stop()
         except Exception:
             pass
-        unsaved = [d.Label for d in FreeCAD.listDocuments().values() if d.isTouched() and not d.FileName]
+        def changed(d):
+            # "Modified" is the window's own flag (the * on the tab); isTouched
+            # clears at each recompute, so it misses most changes.
+            gd = gui.getDocument(d.Name)
+            return bool(getattr(gd, "Modified", False)) or d.isTouched()
+
+        unsaved = [d.Label for d in FreeCAD.listDocuments().values() if changed(d) and not d.FileName]
         if unsaved and not a.get("discard"):
             raise ToolError("invalid_state", "Never saved: " + ", ".join(unsaved) + " — doc_save { path } first, or discard: true to lose them.")
         saved = []
         for d in list(FreeCAD.listDocuments().values()):
-            if d.isTouched() and d.FileName:
+            if changed(d) and d.FileName:
                 d.save()
                 saved.append(d.FileName)
         reopen = [d.FileName for d in FreeCAD.listDocuments().values() if d.FileName]
