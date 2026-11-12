@@ -32,13 +32,16 @@ def summary(findings):
 
 
 def questions(findings):
-    """The values that blocked checks, as plain questions, each once, with
-    the rules that wait on it."""
+    """The values that blocked checks, as plain questions: the same question
+    about several subjects asked once (one answer may do for all of them,
+    or each may differ), with the rules that wait on it."""
     out = {}
     for f in findings:
         for q in f.get("questions") or []:
-            key = (q.get("subject"), q.get("fact"))
-            row = out.setdefault(key, {**q, "rules": []})
+            key = (q.get("fact"), q.get("ask"))
+            row = out.setdefault(key, {"fact": q.get("fact"), "ask": q.get("ask"), "subjects": [], "rules": []})
+            if q.get("subject") not in row["subjects"]:
+                row["subjects"].append(q.get("subject"))
             if f["rule"] not in row["rules"]:
                 row["rules"].append(f["rule"])
-    return sorted(out.values(), key=lambda r: -len(r["rules"]))
+    return sorted(out.values(), key=lambda r: (-len(r["rules"]) * len(r["subjects"]), r["fact"] or ""))

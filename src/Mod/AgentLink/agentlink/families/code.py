@@ -270,19 +270,27 @@ def tools(session):
                 "note": "provenance: measured (model geometry), derived (worked out from it), user_supplied (code_answer), assumed (a default — never enough for compliant)."}
 
     def code_answer(a):
-        sid = a.get("subject")
-        if not sid:
-            raise bad("subject: what the answer is about — a member's or room's label, or \"project\".")
+        sids = a.get("subjects") or ([a["subject"]] if a.get("subject") else [])
+        if not sids:
+            raise bad("subject (or subjects [ … ] for the same answer to several): a member's or room's label, or \"project\".")
         st = state()
         ans = st.setdefault("answers", {})
         if a.get("clear"):
-            ans.pop(sid, None)
+            for sid in sids:
+                ans.pop(sid, None)
             save(st)
             s.snapshot("code_answer")
-            return {"cleared": sid}
+            return {"cleared": sids}
         given = a.get("facts")
         if not isinstance(given, dict) or not given:
             raise bad("facts: { name: value } or { name: { value, pm, unit, note } } — span 3600, spacing 406, size \"2x8\", truss false, use \"habitable_attic\", design.Fb 5.9 …")
+        for sid in sids:
+            row = put(ans, sid, given)
+        save(st)
+        s.snapshot("code_answer")
+        return {"subjects": sids, "facts": row, "step": len(s.steps)}
+
+    def put(ans, sid, given):
         row = ans.setdefault(sid, {})
         for k, v in given.items():
             spec = v if isinstance(v, dict) and "value" in v else {"value": v}
@@ -291,9 +299,7 @@ def tools(session):
                       **({"note": spec["note"]} if spec.get("note") else {})}
             if row[k]["provenance"] not in ("user_supplied", "assumed", "measured"):
                 raise bad(f"{k}.provenance: user_supplied (the default), measured or assumed.")
-        save(st)
-        s.snapshot("code_answer")
-        return {"subject": sid, "facts": row, "step": len(s.steps)}
+        return row
 
     def run_checks(a):
         rules, values, conflicts, used, errs = resolved()
@@ -484,8 +490,8 @@ def tools(session):
              obj({"jurisdiction": s_, "date": s_, "include": {"type": "array", "items": s_}, "occupancy": s_, "name": s_}), code_project, changes=True),
         Tool("code_facts", "What the checks will read: each member, room and opening from the BIM model with its facts (b, d, span, spacing, size, clear heights, sill …) and where each came from — measured, derived, user_supplied, assumed. subject narrows to one. Changes nothing.",
              obj({"subject": s_, "limit": {"type": "integer"}}), code_facts),
-        Tool("code_answer", "Keep the person's answers with the document: subject (a label, or a new one for something not modelled), facts { span: 3600, spacing: 406, size: \"2x8\", truss: false, use: \"habitable_attic\", escape: true, \"design.Fb\": 5.9, \"design.Fv\": 1.2, \"design.E\": 11000 } — a value, or { value, pm, unit, note, provenance }. clear: true forgets a subject's answers. Answers win over what the model says.",
-             obj({"subject": s_, "facts": {"type": "object"}, "clear": {"type": "boolean"}}, ["subject"]), code_answer, changes=True),
+        Tool("code_answer", "Keep the person's answers with the document: subject (a label, or a new one for something not modelled) or subjects [labels] for one answer to several, facts { span: 3600, spacing: 406, size: \"2x8\", truss: false, use: \"habitable_attic\", escape: true, \"design.Fb\": 5.9, \"design.Fv\": 1.2, \"design.E\": 11000 } — a value, or { value, pm, unit, note, provenance }. clear: true forgets a subject's answers. Answers win over what the model says.",
+             obj({"subject": s_, "subjects": {"type": "array", "items": s_}, "facts": {"type": "object"}, "clear": {"type": "boolean"}}), code_answer, changes=True),
         Tool("code_check", "Run the rules in force on the model: each finding compliant | non_compliant | insufficient_information | manual_review_required | not_applicable | error, worst first, with its citation, values, ratio and why. tags [framing, geometry, information] or subjects narrow it; detail: true adds each member's working. A planning estimate, never approval.",
              obj({"tags": {"type": "array", "items": s_}, "subjects": {"type": "array", "items": s_}, "detail": {"type": "boolean"}, "all": {"type": "boolean"}, "limit": {"type": "integer"}}), code_check),
         Tool("code_missing", "The questions that would decide the open findings, most-needed first, a few at a time (batch, 5): what to measure or confirm, about which subject, and which rules wait on it. Ask the person, keep the answers with code_answer, check again.",
