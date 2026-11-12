@@ -17,4 +17,5 @@
 - A body imported from a mesh is made of triangles: measure, section and booleans work; fillets and `shape_query` by radius do not see round faces.
 - Booleans and fillets bake a parametric primitive into a plain shape: after that only `Placement` can be set.
 - `object_rename` does not carry setups, specs or waivers kept under the old label.
+- `object_group` puts objects in folders or App::Part containers, dissolves groups, and makes App::Link copies that follow their original.
 - A picture of the parts is `view_render` (the view group), headless or not.

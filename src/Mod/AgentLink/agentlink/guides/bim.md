@@ -10,6 +10,7 @@ All sizes are mm; quantities come back in m, m² and m³. Z is up; a level's ele
 4. Roof, stairs and rooms: `bim_roof` over a closed outline at the eaves (set 90 on an edge for a gable end); `bim_stairs` (check `blondel`, 600–650 mm); `bim_space` for each room's floor area.
 5. Order: `bim_level` for each storey (its `objects` and `elevation`), then `bim_building { levels }`, which puts it on a site too.
 6. Check: `bim_schedule` gives quantities with totals; `sheet: true` writes them to a spreadsheet. `bim_list` shows the tree.
+7. More: `bim_frame` (a library section along a path), `bim_truss`, `bim_fence`, `bim_covering` (tiles counted whole and cut), `bim_layers` (a wall or slab build-up of materials), `bim_ifc` (IFC type, classification, property sets), `bim_quantities` (by type or material, with mass), `bim_edit` (add, subtract, cut by a plane, join walls, clone). `bim_preflight` before `bim_export`: spatial structure, types, solids, storeys, materials.
 7. Exchange: `bim_export` writes IFC and `bim_import` reads it. Both need IfcOpenShell; without it they say so — installing it is the person's step.
 
 ## traps

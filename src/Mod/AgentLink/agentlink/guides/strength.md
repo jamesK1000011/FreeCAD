@@ -37,3 +37,5 @@
 
 ## heat and expansion
 `fea_load { temperature: dT }` warms (or, negative, cools) the whole part against its holds; `alpha` is the expansion per K, else the material's. A bar free at one end grows by L·alpha·dT; one held at both ends sees about E·alpha·dT of stress.
+
+`fea_hold` takes kind: fixed (default), slide (held only along the face normal: a roller, a floor, a symmetry plane — cut a symmetric part in half or quarter and slide its cut faces), pin (dofs held), move (a set displacement). `fea_load { spin: { rpm, axis, at } }` loads a rotor by its own mass (a solid disk's centre sees (3+ν)/8·ρω²R²).

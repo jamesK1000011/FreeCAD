@@ -28,4 +28,5 @@ FreeCAD's CAM workbench makes the paths; these tools set it up, read each path b
 - More than one tool: `cam_tool_add { shape: "v-bit", diameter, angle }`, then `cam_op { tool }` per operation. Ask the person what is in their tool rack; never assume.
 - `cam_dressup { op, kind: "tags" }` adds holding tabs, so a profiled part stays in the stock. `dogbone` clears inside corners so a square part fits; `boundary` keeps moves inside the stock. Ramp and lead-in/out need FreeCAD's window; adaptive ops enter helically anyway.
 - `cam_setup` sets work offsets (`fixtures`), coolant, safe heights and the order the ops run in.
+- `cam_edit` copies an op (props on the copy), turns one off, drops a comment or a stop (M0/M1) into the G-code after an op, or sets an op's start point.
 - `props` on any op sets its own FreeCAD properties by name (object_get lists them): for what these tools don't name.

@@ -6,6 +6,7 @@ These tools work on FreeCAD's mesh objects: an imported STL, a body meshed with 
 ## workflow
 1. Get a mesh: `import_file` an STL/OBJ/PLY, or `meshobj_from_shape { body, method }`. Use `mefisto` for even triangles (for FEM or textures), `standard` for a close fit.
 2. `meshobj_info` evaluates it as the Mesh workbench does. If there are problems, `meshobj_repair`. `fix: ["holes"]` and `["islands"]` are opt-in, because filling and dropping change the shape.
+   `meshobj_primitive` makes a mesh box, sphere, cylinder, cone or torus; `meshobj_merge` puts meshes into one object; `meshobj_boundary` gives the open edges (holes, rims) as wires.
 3. Change it: `meshobj_decimate` (lighter), `meshobj_refine` (denser), `meshobj_smooth` (taubin keeps the size), `meshobj_offset`, `meshobj_trim` by a plane, `meshobj_transform`, `meshobj_boolean` (closed meshes only).
 4. Read it: `meshobj_sections` for outlines along an axis, `meshobj_segments` for its flat regions (on a scan, where to put a sketch), `meshobj_curvature`, and `view_render { map: "curvature" }`.
 5. `meshobj_export` writes it out; `part_from_mesh` turns a closed one into a solid.

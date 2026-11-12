@@ -30,3 +30,4 @@
 - `sketch_extend { geo, end, by | to }` lengthens a line to a length or to another curve; `sketch_join` turns two ends into one B-spline.
 - `sketch_carbon { from }` copies another sketch in. `sketch_project { from: "<binder>" }` brings a binder's or datum's edges in to constrain to (another body: pd_binder first).
 - `sketch_validate` is Sketcher's Validate. Run it when a pad says the profile is open: `fix: true` closes gaps that should be coincident and drops degenerate or redundant pieces; `autoconstrain: true` adds the obvious constraints.
+- `sketch_add` also takes arc3 and circle3 (through three points), parabola and hyperbola. `sketch_bspline` raises or lowers a B-spline's degree and inserts or changes knots. `sketch_merge` joins sketches into one, `sketch_mirror` makes a mirrored copy, `sketch_attach` moves a sketch onto another plane or face.

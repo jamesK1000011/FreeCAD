@@ -6,6 +6,8 @@
 2. `points_info` gives the count, extent and typical spacing; `view_render` shows it.
 3. `points_crop` isolates one feature before a fit: a `box`, a ball (`near` + `radius`), the side of a `plane`; `outside: true` keeps the rest instead; `thin` (mm) keeps one point per cell.
 4. `points_fit` through the cropped points:
+   - curve: a B-spline through a line of points (an edge scan); a loop round a centre closes itself.
+5. `points_mesh` makes a mesh: height (one side, gridded), hull, or poisson. `points_merge` joins clouds.
    - `plane`: centre and normal (a face's flatness is its `max`);
    - `sphere`: centre and diameter;
    - `cylinder`: base, axis, diameter and length — a bore or a shaft; `axis` is a hint for a short one;
