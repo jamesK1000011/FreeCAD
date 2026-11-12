@@ -33,7 +33,7 @@
 - `fea_buckle` runs a linear buckling analysis with the same holds and loads, giving the factor at which each mode buckles. Keep the lowest at 3 or more: real, imperfect parts buckle sooner.
 - `fea_refine { faces, size }` makes the mesh finer where a peak sits. Solve again and watch the peak settle; if it keeps rising, it is a sharp corner (a singularity), not a real stress.
 - `fea_export` writes VTU (ParaView, FreeCAD's FEM post-processing) and a CSV of every node.
-- `fea_native` builds the study as FreeCAD's own FEM analysis, so the person can open, mesh and run it in the FEM workbench.
+- `fea_native` builds the study as FreeCAD's own FEM analysis, so the person can open, mesh and run it in the FEM workbench. `fea_native { solver: "elmer", equations: [elasticity, heat, …] }` makes it Elmer's multiphysics instead: equations together (heat, flow with `fluid` air or water, electrostatic, magnetics, nonlinear `deformation`), `temperatures` / `heat` / `potentials` on faces; `write: true` meshes it and writes Elmer's case, `run: true` solves it where ElmerSolver is installed (otherwise the case is ready to run elsewhere).
 
 ## heat and expansion
 `fea_load { temperature: dT }` warms (or, negative, cools) the whole part against its holds; `alpha` is the expansion per K, else the material's. A bar free at one end grows by L·alpha·dT; one held at both ends sees about E·alpha·dT of stress.
