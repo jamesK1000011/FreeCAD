@@ -111,19 +111,34 @@ def _wait(ms):
     loop.exec_() if hasattr(loop, "exec_") else loop.exec()
 
 
+PREFIX_NAME = {"pd": "Part Design", "part": "Part", "sketch": "Sketch", "bim": "BIM", "ifc": "IFC", "fea": "FEM",
+               "td": "TechDraw", "draft": "Draft", "asm": "Assembly", "cam": "CAM", "meshobj": "Mesh", "sheet": "Spreadsheet",
+               "insp": "Inspection", "points": "Points", "surface": "Surface", "note": "Note", "steps": "Steps", "view": "View",
+               "doc": "Document", "object": "Object", "material": "Material", "code": "Code check", "slice": "Slice"}
+SKIP_ARGS = ("calls", "body", "inline", "name", "rollback", "stopOnError")
+
+
+def _value(v):
+    if isinstance(v, dict):
+        v = ", ".join(f"{k} {_value(x)}" for k, x in list(v.items())[:3])
+    elif isinstance(v, list):
+        v = "[" + ", ".join(_value(x) for x in v[:4]) + ("…" if len(v) > 4 else "") + "]"
+    elif isinstance(v, float):
+        v = f"{v:g}"
+    s = str(v)
+    return s if len(s) <= 40 else s[:37] + "…"
+
+
 def _describe(name, args):
-    bits = []
-    for k, v in (args or {}).items():
-        if k in ("calls",) or v in (None, "", [], {}):
-            continue
-        if isinstance(v, (dict, list)):
-            s = str(v)
-            v = s if len(s) <= 28 else s[:25] + "…"
-        bits.append(f"{k} {v}")
-        if len(bits) >= 4:
-            break
-    nice = name.replace("_", " ")
-    return nice + (" — " + ", ".join(bits) if bits else "")
+    """A tool call in words a person reads at a glance: 'Part Design ›
+    primitive — kind cylinder, size radius 6, height 8 (Panel test)'."""
+    head, _, rest = name.partition("_")
+    area = PREFIX_NAME.get(head)
+    what = (rest or head).replace("_", " ")
+    title = f"{area} › {what}" if area else name.replace("_", " ")
+    bits = [f"{k} {_value(v)}" for k, v in (args or {}).items() if k not in SKIP_ARGS and v not in (None, "", [], {})][:3]
+    on = (args or {}).get("body")
+    return title + (" — " + "; ".join(bits) if bits else "") + (f" ({on})" if isinstance(on, str) else "")
 
 
 def _view_widget():

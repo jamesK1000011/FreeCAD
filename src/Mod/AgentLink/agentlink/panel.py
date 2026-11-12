@@ -200,6 +200,8 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
         self.note_list = QtWidgets.QTreeWidget()
         self.note_list.setHeaderLabels(["#", "Note", "Answer"])
         self.note_list.setRootIsDecorated(False)
+        self.note_list.setColumnWidth(0, 52)
+        self.note_list.setColumnWidth(1, 150)
         self.note_list.itemChanged.connect(self.tick)
         self.note_list.itemDoubleClicked.connect(self.edit_note)
         lay.addWidget(self.note_list)
@@ -449,6 +451,13 @@ def show():
     if _panel is None:
         _panel = Panel()
         mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, _panel)
+        # A side panel, not half the window: the 3D view stays the main thing.
+        try:
+            mw.resizeDocks([_panel], [340], QtCore.Qt.Horizontal)
+        except Exception:
+            pass
+        # The view got narrower: frame the part again.
+        QtCore.QTimer.singleShot(400, lambda: FreeCADGui.ActiveDocument and FreeCADGui.SendMsgToActiveView("ViewFit"))
     _panel.show()
     _panel.raise_()
     return _panel
