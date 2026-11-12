@@ -38,6 +38,7 @@ agentlink/families/electronics.py
 agentlink/families/embed.py
 agentlink/families/feature.py
 agentlink/families/feature_more.py
+agentlink/families/ifc.py
 agentlink/families/inspection.py
 agentlink/families/mass.py
 agentlink/families/material.py

@@ -13,12 +13,14 @@ from .protocol import ToolError
 
 # Fields that hold a file path (or a list of them).
 PATH_KEYS = {"path", "file", "files", "kinematics", "template", "font", "export", "import", "pattern", "image"}
+# Fields that are files only for some tools
+PATH_KEYS_FOR = {"ifc_diff": {"a", "b"}}
 # Tools where "path" is a curve in the model, not a file.
 GEOMETRIC = {"part_sweep", "pd_pipe", "draft_link_array", "draft_array", "bim_frame", "bim_fence", "printed_channel", "hw_hole", "bim_truss"}
 # Tools that write their path (the rest read theirs).
 WRITERS = {"export", "export_file", "bim_export", "doc_save", "robot_export", "meshobj_unwrap", "meshobj_export", "cam_sim", "cam_post",
            "sheet_export", "sheet_chart", "scad_export", "texture_prepare", "view_render", "view_snapshot", "points_export", "drawing_make",
-           "td_export", "fea_export", "insp_export", "mill_export", "code_packet"}
+           "td_export", "fea_export", "insp_export", "mill_export", "code_packet", "ifc_save"}
 SECRET_PARTS = {".ssh", ".aws", ".gnupg", ".kube", ".docker", ".config", ".netrc", ".git", ".password-store", "keychains", "Keychains",
                 ".zshrc", ".bashrc", ".profile", ".bash_profile", ".zprofile", ".env"}
 NEVER_WRITE_EXT = {".sh", ".bash", ".zsh", ".command", ".tool", ".py", ".pyc", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".php",
@@ -67,7 +69,7 @@ def guard(tool, args, out_dir):
     name = tool.name
     writes = name in WRITERS or (args or {}).get("action") == "export"
     for k, v in (args or {}).items():
-        if k not in PATH_KEYS or (k == "path" and name in GEOMETRIC):
+        if (k not in PATH_KEYS and k not in PATH_KEYS_FOR.get(name, ())) or (k == "path" and name in GEOMETRIC):
             continue
         write = (writes and k in ("path", "file")) or k == "export"
         if isinstance(v, list):
