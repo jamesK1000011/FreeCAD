@@ -554,7 +554,7 @@ def tools(session):
             join = [(f"J{n + 1}", sl, ma) for n, (i, j, sl, ma) in enumerate(pairs)]
             Emin = min(float(pc["E"]) for pc in part_cards)
             text = ccx_io.parts_deck(text, defs, ties=join if st.get("join") == "tie" else (), contacts=join if st.get("join") == "contact" else (),
-                                     contact_slope=Emin / max(float(st["mesh"]), 0.1) * 10, friction=st.get("friction", 0))
+                                     contact_slope=Emin * 50, friction=st.get("friction", 0))
         with open(os.path.join(wd, "job.inp"), "w") as f:
             f.write(text)
         env = dict(os.environ)
