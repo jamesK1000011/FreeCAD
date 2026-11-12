@@ -121,6 +121,43 @@ def _kind(v):
     return {str: "text", int: "a number", float: "a number", list: "a list", dict: "an object"}.get(type(v), type(v).__name__)
 
 
+MAX_REPLY = 60_000  # characters: a reply past this costs the agent's context more than it tells
+
+
+def trim(out, limit):
+    """A reply cut to fit: its longest lists shortened (the count kept in
+    truncated), longest first, until the whole fits."""
+    cut = {}
+
+    def lists(o, path):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                yield from lists(v, path + [k])
+        elif isinstance(o, list):
+            yield path, o
+            for i, v in enumerate(o[:50]):
+                yield from lists(v, path + [i])
+
+    for _ in range(40):
+        if len(compact(out)) <= limit:
+            break
+        # a batch's results are each a call's answer: shortened inside, never dropped
+        found = [(len(compact(l)), p, l) for p, l in lists(out, []) if len(l) > 4 and p[-1:] != ["results"]]
+        if not found:
+            break
+        size, path, l = max(found, key=lambda x: x[0])
+        keep = max(4, len(l) // 2)
+        parent = out
+        for k in path[:-1]:
+            parent = parent[k]
+        name = ".".join(map(str, path))
+        cut.setdefault(name, len(l))
+        parent[path[-1]] = l[:keep]
+    if cut:
+        out["truncated"] = {k: f"{v} items, the first shown — ask for fewer (a filter, a range) to see the rest" for k, v in cut.items()}
+    return out
+
+
 def compact(obj):
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
@@ -218,7 +255,11 @@ class Server:
             # text (the file is written as well; inline false leaves it out).
             image = out.pop("_png", None)
             out.setdefault("ms", int((time.time() - t0) * 1000))
-        content = [{"type": "text", "text": compact(out)}]
+        text = compact(out)
+        if len(text) > MAX_REPLY and isinstance(out, dict):
+            out = trim(out, MAX_REPLY)
+            text = compact(out)
+        content = [{"type": "text", "text": text}]
         if image is not None:
             import base64
 
