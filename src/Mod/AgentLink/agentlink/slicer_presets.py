@@ -316,9 +316,22 @@ def packed_only(slicer):
 
 
 def orca_version(exe):
+    """The version of the OrcaSlicer at exe: its app bundle's Info.plist on a
+    Mac, else what its --help says."""
     import re
     import subprocess
 
+    if ".app/" in exe:
+        import plistlib
+
+        try:
+            with open(exe.split(".app/")[0] + ".app/Contents/Info.plist", "rb") as f:
+                v = str(plistlib.load(f).get("CFBundleShortVersionString") or "")
+            m = re.match(r"(\d+)\.(\d+)\.(\d+)", v)
+            if m:
+                return ".".join(str(int(x)) for x in m.groups())  # 02.05.00 -> 2.5.0
+        except Exception:
+            pass
     try:
         r = subprocess.run([exe, "--help"], capture_output=True, text=True, timeout=120)
     except Exception:
