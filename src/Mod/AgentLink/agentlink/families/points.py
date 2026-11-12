@@ -219,6 +219,9 @@ def grid_mesh(P, cell):
     c = P.mean(axis=0)
     _, _, vt = np.linalg.svd(P - c, full_matrices=False)
     u, v = (P - c) @ vt[0], (P - c) @ vt[1]
+    if not cell:
+        # about six points to a cell, so nearly every cell has one
+        cell = 2.5 * float(np.sqrt(max(np.ptp(u) * np.ptp(v), 1e-12) / len(P)))
     iu = np.floor((u - u.min()) / cell).astype(int)
     iv = np.floor((v - v.min()) / cell).astype(int)
     key = iu * (iv.max() + 1) + iv
@@ -242,7 +245,7 @@ def grid_mesh(P, cell):
             T.append((j, d, up))
         elif r is not None and up is not None:
             T.append((j, r, up))
-    return V, T
+    return V, T, cell
 
 
 def tools(session):
@@ -444,14 +447,20 @@ def tools(session):
             if len(Q) < 4:
                 raise bad("curve: four or more points along a line.")
             tol = float(a.get("tolerance", 0.1))
+            steps = np.sqrt(((Q[1:] - Q[:-1]) ** 2).sum(axis=1))
+            gap = float(np.sqrt(((Q[0] - Q[-1]) ** 2).sum()))
+            loop = a.get("closed", gap < 3 * float(np.median(steps)))
             c = Part.BSplineCurve()
             try:
-                c.approximate(Points=[vec(q) for q in Q], DegMax=int(a.get("degree", 3)), Tolerance=tol)
+                if loop:
+                    c.interpolate(Points=[vec(q) for q in Q[:: max(1, len(Q) // 60)]], PeriodicFlag=True)
+                else:
+                    c.approximate(Points=[vec(q) for q in Q], DegMax=int(a.get("degree", 3)), Tolerance=tol)
             except Exception as e:
                 raise ToolError("failed", f"No curve through these points: {e}")
             edge = c.toShape()
             d = np.array([edge.distToShape(Part.Vertex(vec(p)))[0] for p in P[np.random.default_rng(0).choice(len(P), min(len(P), 400), replace=False)]])
-            out.update({"length": round(edge.Length, 3), "poles": c.NbPoles, "degree": c.Degree, "closed": bool((Q[0] - Q[-1]) @ (Q[0] - Q[-1]) < (4 * tol) ** 2),
+            out.update({"length": round(edge.Length, 3), "poles": c.NbPoles, "degree": c.Degree, "closed": bool(loop),
                         "rms": round(float(np.sqrt(np.mean(d * d))), 4), "max": round(float(d.max()), 4)})
             body = edge
             a = dict(a, make=True)
@@ -518,8 +527,7 @@ def tools(session):
         method = a.get("method", "height")
         import Mesh
         if method == "height":
-            cell = float(a.get("cell") or max(spacing(P) * 2, 1e-3))
-            V, T = grid_mesh(P, cell)
+            V, T, cell = grid_mesh(P, float(a["cell"]) if a.get("cell") else None)
             if not T:
                 raise ToolError("failed", f"No triangles at a {cell:g} mm cell: a larger cell, or the points are not a surface seen from one side.")
             m = Mesh.Mesh([[tuple(V[i]) for i in tri] for tri in T])
@@ -534,7 +542,10 @@ def tools(session):
                 import ReverseEngineering as RE
                 pk = Points.Points()
                 pk.addPoints([tuple(p) for p in P.tolist()])
-                m = RE.poissonReconstruction(pk, Depth=int(a.get("depth", 8)))
+                try:
+                    m = RE.poissonReconstruction(Points=pk, OctreeDepth=int(a.get("depth", 8)))
+                except TypeError:
+                    m = RE.poissonReconstruction(pk)
             except Exception as e:
                 raise ToolError("unavailable", f"Poisson reconstruction is not in this FreeCAD build ({e}): method height or hull.")
             note = "Poisson reconstruction: a closed surface through the cloud."
@@ -564,7 +575,7 @@ def tools(session):
                   "iterations": {"type": "integer"}, "name": {"type": "string"}}), points_fit, changes=True),
         Tool("points_merge", "Join point clouds into one: points [names]; remove: true drops the originals.",
              obj({"points": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "boolean"}, "name": {"type": "string"}}, ["points"]), points_merge, changes=True),
-        Tool("points_mesh", "A mesh through a point cloud: method height (one side of a surface — terrain, a panel, a scanned face — gridded at cell mm, twice the spacing by default) | hull (the convex shrink-wrap) | poisson (a closed surface, FreeCAD built with PCL; depth). Then meshobj_repair / part_from_mesh.",
+        Tool("points_mesh", "A mesh through a point cloud: method height (one side of a surface — terrain, a panel, a scanned face — gridded at cell mm, about six points a cell by default) | hull (the convex shrink-wrap) | poisson (a closed surface, FreeCAD built with PCL; depth). Then meshobj_repair / part_from_mesh.",
              obj({"points": pts, "method": {"type": "string", "enum": ["height", "hull", "poisson"]}, "cell": {"type": "number"}, "depth": {"type": "integer"}, "name": {"type": "string"}}), points_mesh, changes=True),
         Tool("points_export", "Write a point cloud: path .ply (binary), .pcd, .asc / .xyz, .csv.", obj({"points": pts, "path": {"type": "string"}}), points_export),
     ]
