@@ -1262,8 +1262,6 @@ def tools(session):
             raise ToolError("unavailable", "FreeCAD's FEM module is not in this build.")
         doc = s.doc
         c = matfam.card(doc, st["material"]) or {}
-        an = ObjectsFem.makeAnalysis(doc, "Analysis")
-        an.Label = s.unique(a.get("name") or f"{o.Label} analysis")
         made = []
         kind = str(a.get("solver", "calculix")).lower()
         if kind not in ("calculix", "elmer"):
@@ -1275,8 +1273,12 @@ def tools(session):
             bad = [e for e in eqs if e not in ELMER_EQUATIONS]
             if bad:
                 raise ToolError("invalid_input", f"equations: {', '.join(bad)} unknown — " + ", ".join(ELMER_EQUATIONS) + ".")
+            for key, eq in (("temperatures", "heat"), ("heat", "heat"), ("potentials", "electrostatic")):
+                if a.get(key) and eq not in eqs:
+                    raise ToolError("invalid_input", f"{key} need the {eq} equation: equations [..., {eq}].")
             if not hasattr(ObjectsFem, "makeSolverElmer"):
                 raise ToolError("unavailable", "This FreeCAD's FEM has no Elmer solver object.")
+            an = _analysis(doc, a, o)
             solver = ObjectsFem.makeSolverElmer(doc)
             an.addObject(solver)
             made.append(solver.Label)
@@ -1291,6 +1293,7 @@ def tools(session):
             mk_solver = next((getattr(ObjectsFem, n) for n in names if hasattr(ObjectsFem, n)), None)
             if mk_solver is None:
                 raise ToolError("unavailable", "This FreeCAD's FEM has no CalculiX solver object to add: " + ", ".join(n for n in dir(ObjectsFem) if n.startswith("makeSolver")))
+            an = _analysis(doc, a, o)
             solver = mk_solver(doc)
             an.addObject(solver)
             made.append(solver.Label)
@@ -1390,6 +1393,11 @@ def tools(session):
         if skipped:
             out["skipped"] = skipped
         return out
+
+    def _analysis(doc, a, o):
+        an = ObjectsFem_().makeAnalysis(doc, "Analysis")
+        an.Label = s.unique(a.get("name") or f"{o.Label} analysis")
+        return an
 
     def _elmer_conditions(doc, an, o, shape, a, eqs):
         """Elmer's own boundary conditions: temperatures and heat for heat,

@@ -473,5 +473,38 @@ class MoreFamilies(Base):
         self.assertGreater(r["nonlinear"]["plasticStrainMax"], 0)
         self.assertFalse(any("linear solve is rough" in w for w in r["warnings"]))
 
+    def test_fea_native_elmer(self):
+        self.have("fea_native")
+        try:
+            import ObjectsFem
+        except ImportError:
+            self.skipTest("no FEM module")
+        if not hasattr(ObjectsFem, "makeSolverElmer"):
+            self.skipTest("no Elmer solver object")
+        self.box("Fel fin", [60, 20, 10], [0, 0, 2600])
+        self.ok("fea_setup", {"body": "Fel fin", "material": "pla", "mesh": 4})
+        self.ok("fea_hold", {"faces": {"normal": [-1, 0, 0]}})
+        self.ok("fea_load", {"faces": {"normal": [1, 0, 0]}, "force": [0, 0, -200]})
+        for bad in ({"solver": "calculix", "equations": ["heat"]},
+                    {"solver": "elmer", "equations": ["elasticity"], "temperatures": [{"faces": {"normal": [-1, 0, 0]}, "celsius": 80}]}):
+            err, out = self.call("fea_native", bad)
+            self.assertTrue(err)
+            self.assertEqual(out["error"]["code"], "invalid_input")
+        import shutil
+
+        write = bool(shutil.which("gmsh"))
+        r = self.ok("fea_native", {"solver": "elmer", "equations": ["elasticity", "heat"], "name": "Fel analysis",
+                                   "temperatures": [{"faces": {"normal": [-1, 0, 0]}, "celsius": 80}],
+                                   "heat": [{"faces": {"normal": [1, 0, 0]}, "watts": 5}], "write": write})
+        self.assertIn("Heatflux", " ".join(r["objects"]))
+        self.assertEqual(r["equations"], ["elasticity", "heat"])
+        if write:
+            sif = open(os.path.join(r["files"], "case.sif")).read()
+            self.assertIn("HeatSolver", sif)
+            self.assertIn("StressSolver", sif)
+            self.assertIn("Heat Conductivity = Real 0.13", sif)
+            self.assertIn("Temperature = Real 353.15", sif)
+            self.assertTrue(os.path.exists(os.path.join(r["files"], "mesh.unv")))
+
 if __name__ == "__main__":
     unittest.main()
