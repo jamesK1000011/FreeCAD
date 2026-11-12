@@ -166,6 +166,8 @@ def caption(text, ms=2600):
         _caption.setStyleSheet("QLabel { background: rgba(20,22,26,200); color: #f2f2f2; border-radius: 6px; padding: 6px 10px; font-size: 13px; }")
         _caption.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
     _caption.setText("✦ Agent: " + text)
+    _caption.setWordWrap(True)
+    _caption.setMaximumWidth(max(200, host.width() - 28))
     _caption.adjustSize()
     _caption.move(14, max(14, host.height() - _caption.height() - 14))
     _caption.show()
@@ -289,9 +291,9 @@ class Echo:
                 gv = FreeCADGui.ActiveDocument.ActiveView if FreeCADGui.ActiveDocument else None
                 if body_obj is not None and gv is not None:
                     gv.setActiveObject("pdbody", body_obj)
-            # The first shape in an empty view: frame it.
-            shapes = [o for o in doc.Objects if hasattr(o, "Shape") and o.ViewObject and o.ViewObject.Visibility]
-            if len(shapes) <= 2 and FreeCADGui.ActiveDocument:
+            # Follow the work: the view framed on the part after each change
+            # (Mod/AgentLink Follow; the Activity tab's check box).
+            if FreeCAD.ParamGet(PREFS).GetBool("Follow", True) and FreeCADGui.ActiveDocument:
                 FreeCADGui.SendMsgToActiveView("ViewFit")
             FreeCADGui.updateGui()
         except Exception as e:

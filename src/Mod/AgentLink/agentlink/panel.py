@@ -325,6 +325,11 @@ class Panel(QtWidgets.QDockWidget if QtWidgets else object):
         self.pace.setCurrentIndex(min(range(3), key=lambda i: abs(paces[i][1] - cur)))
         self.pace.currentIndexChanged.connect(lambda i: prefs.SetInt("EchoDelay", paces[i][1]))
         row.addWidget(self.echo_on)
+        self.follow = QtWidgets.QCheckBox("Follow")
+        self.follow.setToolTip("Frame the part in the view after each change the agent makes")
+        self.follow.setChecked(prefs.GetBool("Follow", True))
+        self.follow.toggled.connect(lambda on: prefs.SetBool("Follow", on))
+        row.addWidget(self.follow)
         row.addStretch(1)
         row.addWidget(self.pace)
         lay.addLayout(row)
@@ -452,10 +457,14 @@ def show():
         _panel = Panel()
         mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, _panel)
         # A side panel, not half the window: the 3D view stays the main thing.
-        try:
-            mw.resizeDocks([_panel], [340], QtCore.Qt.Horizontal)
-        except Exception:
-            pass
+        def narrow():
+            try:
+                mw.resizeDocks([_panel], [min(340, max(260, mw.width() // 4))], QtCore.Qt.Horizontal)
+            except Exception:
+                pass
+
+        narrow()
+        QtCore.QTimer.singleShot(250, narrow)
         # The view got narrower: frame the part again.
         QtCore.QTimer.singleShot(400, lambda: FreeCADGui.ActiveDocument and FreeCADGui.SendMsgToActiveView("ViewFit"))
     _panel.show()
