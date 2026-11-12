@@ -13,6 +13,58 @@ import threading
 import time
 
 FLAG = "AGENTLINK_SUPERVISED"
+WINDOW_PORT = int(os.environ.get("AGENTLINK_WINDOW_PORT", "7318"))
+
+
+class Window:
+    """The FreeCAD window's link (the workbench's Start link), when it is on.
+    Tried afresh for each call, so turning the link on or off takes effect
+    at the next call; off (or AGENTLINK_WINDOW=0), calls stay hidden."""
+
+    def __init__(self, write):
+        self.write = write
+        self.f = None
+        self.off = os.environ.get("AGENTLINK_WINDOW", "1") == "0"
+
+    def _open(self):
+        import socket
+
+        if self.f is not None:
+            return True
+        try:
+            s = socket.create_connection(("127.0.0.1", WINDOW_PORT), timeout=0.3)
+        except OSError:
+            return False
+        s.settimeout(None)
+        self.f = s.makefile("rw", encoding="utf-8", newline="\n")
+        return True
+
+    def call(self, line):
+        """Send one call to the window and pass its answer on. False when the
+        window isn't there (or went away before answering): the hidden
+        FreeCAD takes the call."""
+        if self.off or not self._open():
+            return False
+        try:
+            mid = json.loads(line).get("id")
+            self.f.write(line if line.endswith("\n") else line + "\n")
+            self.f.flush()
+            while True:
+                got = self.f.readline()
+                if not got:
+                    raise OSError("window closed")
+                got = got.rstrip("\n")
+                if not got:
+                    continue
+                self.write(got)
+                try:
+                    if json.loads(got).get("id") == mid:
+                        return True
+                except ValueError:
+                    pass
+        except OSError:
+            self.f = None
+            return False
 
 
 def run(script, argv):
@@ -80,13 +132,20 @@ def run(script, argv):
             pass
 
     start()
+    window = Window(write)
     for line in sys.stdin:
+        msg = None
         try:
             msg = json.loads(line)
             if msg.get("id") is not None and msg.get("method"):
                 pending[msg["id"]] = msg["method"]
         except ValueError:
             pass
+        # Window first: a tool call goes to the FreeCAD window when its link
+        # is on (Start link), so the person watches it land; else the hidden one.
+        if msg and msg.get("method") == "tools/call" and window.call(line):
+            pending.pop(msg.get("id"), None)
+            continue
         try:
             state["child"].stdin.write(line if line.endswith("\n") else line + "\n")
             state["child"].stdin.flush()

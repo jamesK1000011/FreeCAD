@@ -48,3 +48,25 @@ class _Panel:
         from agentlink import panel
 
         panel.show()
+
+
+def autostart():
+    """Turn the link on when the FreeCAD window opens, so an agent's calls
+    land in it without a click (Preferences: Mod/AgentLink AutoStart, on by
+    default). Quietly does nothing if the port is taken."""
+    import FreeCAD
+
+    if not FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/AgentLink").GetBool("AutoStart", True):
+        return
+    import agentlink_state
+
+    if agentlink_state.link is not None:
+        return
+    try:
+        from agentlink.gui_link import Link
+
+        link = Link()
+        link.start()
+        agentlink_state.link = link
+    except OSError as e:
+        FreeCAD.Console.PrintLog(f"Agent Link: link not started ({e})\n")

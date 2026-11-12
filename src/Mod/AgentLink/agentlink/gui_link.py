@@ -7,6 +7,7 @@
 # each body arrive in the document they have open.
 
 import json
+import os
 import queue
 import socket
 import threading
@@ -25,11 +26,30 @@ class Link:
         self.inbox = queue.Queue()
         self.sock = None
         self.timer = None
-        doc = FreeCAD.ActiveDocument or FreeCAD.newDocument("AgentLink")
-        self.session = Session(doc=doc, out_dir=FreeCAD.getUserAppDataDir())
-        from .server import VERSION
+        self.session = None
+        self.server = None
 
-        self.server = build_server(self.session, version=VERSION)
+    def _ready(self):
+        """The session, made at the first call (so a link turned on as the
+        window opens leaves the start page alone), and kept on the document
+        the person has in front: switching documents moves the agent too."""
+        active = FreeCAD.ActiveDocument
+        if self.session is None:
+            out = os.path.expanduser("~/AgentLink")
+            os.makedirs(out, exist_ok=True)
+            self.session = Session(doc=active or FreeCAD.newDocument("AgentLink"), out_dir=out)
+            # session_state says which FreeCAD answered: this window, not the hidden one.
+            self.session.where = "window"
+            from .server import VERSION
+
+            self.server = build_server(self.session, version=VERSION)
+        elif active is not None and active is not self.session.doc:
+            s = self.session
+            s.doc = active
+            s.doc.UndoMode = 1
+            s.checkpoints, s.steps, s.meta = {}, [], {}
+        elif self.session.doc not in FreeCAD.listDocuments().values():
+            self.session.doc = active or FreeCAD.newDocument("AgentLink")
 
     def start(self):
         from PySide import QtCore
@@ -75,13 +95,14 @@ class Link:
             except queue.Empty:
                 return
             try:
+                self._ready()
                 reply = self.server.handle(json.loads(line))
             except ValueError:
                 reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "not JSON"}}
             try:
                 if reply is not None:
                     f.write(compact(reply) + "\n")
-                while self.server.outbox:
+                while self.server is not None and self.server.outbox:
                     f.write(compact(self.server.outbox.pop(0)) + "\n")
                 f.flush()
             except OSError:

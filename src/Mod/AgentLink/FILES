@@ -190,3 +190,4 @@ tests/test_theme.py
 tests/test_thread.py
 tests/test_tools.py
 tests/test_view.py
+tests/test_window_route.py

@@ -153,6 +153,7 @@ class Session:
             "bodies": [{"name": o.Label, **geo.stats(o.Shape), **({"encased": self.meta[o.Label]["encased"]["what"]} if self.meta.get(o.Label, {}).get("encased") else {})} for o in self.bodies()],
             "step": len(self.steps),
             "outDir": self.out_dir,
+            "where": getattr(self, "where", "hidden"),
             **({"launcher": _launcher()} if a.get("launcher") else {}),
         }
 

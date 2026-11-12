@@ -23,3 +23,18 @@ class AgentLinkWorkbench(FreeCADGui.Workbench):
 
 
 FreeCADGui.addWorkbench(AgentLinkWorkbench())
+
+
+def _agentlink_autostart():
+    from agentlink.commands import autostart
+
+    autostart()
+
+
+try:
+    from PySide import QtCore
+
+    # After the window is up: the link needs a document and the GUI's timer.
+    QtCore.QTimer.singleShot(1500, _agentlink_autostart)
+except Exception:
+    pass
