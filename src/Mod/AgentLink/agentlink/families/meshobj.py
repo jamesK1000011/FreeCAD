@@ -644,6 +644,111 @@ def tools(session):
             out["note"] = "Doubly curved: it cannot lie flat without stretching — the most stretched spots are where a cut or dart would help."
         return out
 
+    def meshobj_primitive(a):
+        kind = a.get("kind", "box")
+        at = V(*[float(c) for c in a.get("at", [0, 0, 0])])
+        n = int(a.get("segments", 48))
+        try:
+            if kind == "box":
+                x, y, z = [float(c) for c in a.get("size", [10, 10, 10])]
+                m = Mesh.createBox(x, y, z)
+                m.translate(x / 2, y / 2, z / 2)  # a corner at at, as part_primitive
+            elif kind == "sphere":
+                m = Mesh.createSphere(float(a.get("radius", 5)), n)
+            elif kind == "cylinder":
+                m = Mesh.createCylinder(float(a.get("radius", 5)), float(a.get("height", 10)), 1, 0.5, n)
+                m.rotate(0, -math.pi / 2, 0)
+            elif kind == "cone":
+                m = Mesh.createCone(float(a.get("radius", 5)), float(a.get("radius2", 0)), float(a.get("height", 10)), 1, 0.5, n)
+                m.rotate(0, -math.pi / 2, 0)
+            elif kind == "torus":
+                m = Mesh.createTorus(float(a.get("radius", 10)), float(a.get("radius2", 2)), n)
+            else:
+                raise bad("kind: box | sphere | cylinder | cone | torus.")
+        except ToolError:
+            raise
+        except Exception as e:
+            raise bad(f"{kind}: {e}")
+        m.translate(at.x, at.y, at.z)
+        o = new_mesh(m, a.get("name") or f"Mesh {kind}")
+        doc().recompute()
+        s.snapshot("meshobj_primitive")
+        return {"mesh": o.Label, "kind": kind, **reading(m), "step": len(s.steps)}
+
+    def meshobj_merge(a):
+        refs = a.get("meshes")
+        if not isinstance(refs, list) or len(refs) < 2:
+            raise bad("meshes: two or more to put into one (not fused: meshobj_boolean union for that).")
+        objs = [mesh_of(r) for r in refs]
+        m = objs[0].Mesh.copy()
+        for o in objs[1:]:
+            m.addMesh(o.Mesh)
+        n = new_mesh(m, a.get("name") or "Merged mesh")
+        if a.get("remove"):
+            for o in objs:
+                doc().removeObject(o.Name)
+        doc().recompute()
+        s.snapshot("meshobj_merge")
+        return {"mesh": n.Label, **reading(m), "step": len(s.steps)}
+
+    def meshobj_boundary(a):
+        o = mesh_of(a.get("mesh"))
+        pts, facets = o.Mesh.Topology
+        count = {}
+        for f in facets:
+            for i in range(3):
+                e = (f[i], f[(i + 1) % 3])
+                k = (min(e), max(e))
+                count[k] = count.get(k, 0) + 1
+        open_edges = [k for k, c in count.items() if c == 1]
+        if not open_edges:
+            return {"mesh": o.Label, "loops": 0, "note": "No open edges: the mesh is closed."}
+        nbr = {}
+        for p0, p1 in open_edges:
+            nbr.setdefault(p0, []).append(p1)
+            nbr.setdefault(p1, []).append(p0)
+        seen = set()
+        loops = []
+        for p0, p1 in open_edges:
+            if (p0, p1) in seen:
+                continue
+            chain = [p0, p1]
+            seen.add((p0, p1))
+            while True:
+                last, prev = chain[-1], chain[-2]
+                nxt = next((q for q in nbr[last] if q != prev and (min(last, q), max(last, q)) not in seen), None)
+                if nxt is None:
+                    break
+                seen.add((min(last, nxt), max(last, nxt)))
+                chain.append(nxt)
+                if nxt == chain[0]:
+                    break
+            loops.append(chain)
+        wires, info = [], []
+        for c in loops:
+            P = [V(pts[i]) for i in c]
+            w = Part.makePolygon(P)
+            wires.append(w)
+            closed = c[0] == c[-1]
+            item = {"edges": len(c) - 1, "length": round(w.Length, 3), "closed": closed, "centre": [round(x, 3) for x in w.BoundBox.Center]}
+            if closed:
+                try:
+                    item["area"] = round(Part.Face(w).Area, 3)
+                except Exception:
+                    pass
+            info.append(item)
+        order = sorted(range(len(info)), key=lambda i: -info[i]["length"])
+        info = [info[i] for i in order]
+        out = {"mesh": o.Label, "loops": len(loops), "openEdges": len(open_edges), "boundaries": info[:20]}
+        if a.get("keep", True):
+            b = doc().addObject("Part::Feature", "Boundary")
+            b.Shape = Part.makeCompound(wires)
+            b.Label = s.unique(a.get("name") or f"{o.Label} boundary")
+            doc().recompute()
+            s.snapshot("meshobj_boundary")
+            out["wires"] = b.Label
+        return out
+
     return [
         Tool("meshobj_unwrap", "Lay a curved surface flat (MeshPart's unwrap): of a body's face \"Body.Face3\" or a mesh — its flat outline (a pattern to cut from sheet, fabric, leather), the area before and after and how much it stretched (mean, max %); path .svg or .dxf writes the pattern; make: false keeps no object.",
              obj({"of": {"type": "string"}, "path": {"type": "string"}, "make": {"type": "boolean"}, "tolerance": {"type": "number"}, "iterations": {"type": "integer"}, "weight": {"type": "number"}, "name": {"type": "string"}}, ["of"]), meshobj_unwrap, changes=True),
@@ -673,6 +778,13 @@ def tools(session):
              obj({"mesh": mref, "flat": {"type": "number"}}), meshobj_curvature),
         Tool("meshobj_project", "Project a wire, sketch or body's edges onto a mesh along direction [x,y,z] (default down); kept as wires on its surface.",
              obj({"mesh": mref, "shape": {"type": "string"}, "direction": {"type": "array"}, "name": {"type": "string"}}, ["shape"]), meshobj_project, changes=True),
+        Tool("meshobj_primitive", "A mesh primitive (the Mesh workbench's regular solids): kind box (size, a corner at at) | sphere (radius) | cylinder | cone (radius, radius2, height, up +z from at) | torus (radius, radius2); segments round.",
+             obj({"kind": {"type": "string", "enum": ["box", "sphere", "cylinder", "cone", "torus"]}, "size": {"type": "array"}, "radius": {"type": "number"}, "radius2": {"type": "number"},
+                  "height": {"type": "number"}, "at": {"type": "array"}, "segments": {"type": "integer"}, "name": {"type": "string"}}), meshobj_primitive, changes=True),
+        Tool("meshobj_merge", "Put meshes into one mesh object (not fused — meshobj_boolean union fuses): meshes [names]; remove: true drops the originals.",
+             obj({"meshes": {"type": "array", "items": {"type": "string"}}, "remove": {"type": "boolean"}, "name": {"type": "string"}}, ["meshes"]), meshobj_merge, changes=True),
+        Tool("meshobj_boundary", "A mesh's open edges as wires (Reverse Engineering's mesh boundary): each hole or rim loop with its length, centre and the area it spans, largest first; keep (default) makes them a wire compound — to fill, sweep or fit.",
+             obj({"mesh": {"type": "string"}, "keep": {"type": "boolean"}, "name": {"type": "string"}}), meshobj_boundary, changes=True),
         Tool("meshobj_export", "Write a document mesh to a file by extension (stl, obj, ply, off, amf, 3mf …): path (default <label>.stl in the out folder).",
              obj({"mesh": mref, "path": {"type": "string"}}), meshobj_export),
     ]
