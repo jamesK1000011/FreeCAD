@@ -137,7 +137,7 @@ def tools(session):
             s.snapshot("fea_hold")
             return {"holds": []}
         q = a.get("faces")
-        _, picked = _pick_report(o.Shape, q, "faces")
+        pk, picked = _pick_report(o.Shape, q, "faces")
         kind = a.get("kind", "fixed")
         h = {"faces": q, "kind": kind}
         AX = {"x": 1, "y": 2, "z": 3}
@@ -145,7 +145,7 @@ def tools(session):
             note = "Held rigidly: no movement at all on these faces. Real bolts and clamps give a little, so stress right at a hold reads high."
         elif kind == "slide":
             n = V(0, 0, 0)
-            for _, f in picked:
+            for _, f in pk:
                 n += facepick.outward_normal(f) * f.Area
             if n.Length < 1e-9:
                 raise ToolError("invalid_input", "slide: these faces have no one normal — slide holds a flat face (or faces facing one way).")
