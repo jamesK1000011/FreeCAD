@@ -97,3 +97,13 @@ class Protocol(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Synonyms(unittest.TestCase):
+    def test_other_names_taken(self):
+        from agentlink.protocol import check_input
+
+        sch = {"type": "object", "properties": {"center": {"type": "array"}, "object": {"type": "string"}}, "required": ["object"], "additionalProperties": False}
+        args = {"centre": [0, 0, 0], "body": "Box"}
+        check_input(sch, args)
+        self.assertEqual(args, {"center": [0, 0, 0], "object": "Box"})

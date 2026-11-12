@@ -40,12 +40,26 @@ class Tool:
         return {"name": self.name, "description": self.description, "inputSchema": self.schema}
 
 
+SYNONYMS = {
+    "centre": ("center",), "center": ("centre",), "colour": ("color",), "color": ("colour",),
+    "body": ("object", "part"), "object": ("body",), "part": ("body", "object"),
+    "bodies": ("objects", "parts"), "objects": ("bodies",), "parts": ("bodies", "objects"),
+    "file": ("path",), "filename": ("path", "file"), "path": ("file",),
+}
+
+
 def check_input(schema, args):
     """Unknown keys and missing required ones refused by name, as the
     answers name them: what the agent got wrong and what is allowed."""
     if not isinstance(args, dict):
         raise ToolError("invalid_input", "arguments: an object.")
     props = schema.get("properties", {})
+    # The same thing by another common name (centre for center, body for
+    # object …): taken as the field the tool has, when that one is not given.
+    for k in [k for k in args if k not in props]:
+        alt = next((s for s in SYNONYMS.get(k, ()) if s in props and s not in args), None)
+        if alt is not None:
+            args[alt] = args.pop(k)
     unknown = [k for k in args if k not in props]
     if unknown and schema.get("additionalProperties") is False:
         raise ToolError("invalid_input", f"input.{unknown[0]}: not a known field — the fields here: {', '.join(props) or 'none'}")
