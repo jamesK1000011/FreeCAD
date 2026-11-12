@@ -302,3 +302,16 @@ if __name__ == "__main__":
         m = self.ok("sketch_merge", {"sketches": ["Sm s1", "Sm s2"]})
         self.assertEqual(m["geometry"], 7)
         self.ok("sketch_attach", {"sketch": "Sm s2", "plane": "XZ", "offset": 5})
+
+    def test_robot_trajectory(self):
+        self.have("robot_trajectory")
+        self.ok("robot_new", {"name": "Rt robot"})
+        self.ok("robot_path", {"waypoints": [{"at": [400, 0, 400], "type": "PTP"}, {"at": [400, 200, 400], "type": "LIN", "speed": 100}], "name": "Rt t1"})
+        self.ok("robot_path", {"waypoints": [{"at": [400, 200, 300], "type": "LIN"}, {"at": [400, 0, 300], "type": "LIN", "speed": 100}], "name": "Rt t2"})
+        j = self.ok("robot_trajectory", {"op": "join", "trajectories": ["Rt t1", "Rt t2"]})
+        self.assertEqual(j["waypoints"], 4)
+        d = self.ok("robot_trajectory", {"op": "dress", "trajectory": "Rt t1", "speed": 50, "move": [0, 0, -100], "name": "Rt dressed"})
+        r = self.ok("robot_run", {"robot": "Rt robot", "trajectory": "Rt dressed"})
+        for ax in r["axes"]:
+            self.assertGreaterEqual(ax["from"], -180.0)
+            self.assertLessEqual(ax["to"], 180.0)

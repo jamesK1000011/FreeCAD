@@ -210,6 +210,7 @@ def tools(session):
             if miss > 0.1 or getattr(o, "Error", ""):
                 misses.append({"t": round(time, 3), "at": [round(c, 2) for c in want.Base], "off_mm": round(miss, 3), **({"error": o.Error} if o.Error else {})})
             for i, v in enumerate(axes_of(o)):
+                v = ((v + 180.0) % 360.0) - 180.0  # whole extra turns are the same pose
                 lows[i], highs[i] = min(lows[i], v), max(highs[i], v)
         for i, v in enumerate(before, start=1):
             setattr(o, f"Axis{i}", v)
