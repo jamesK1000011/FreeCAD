@@ -323,6 +323,44 @@ def tools(session):
         wbs = gui.listWorkbenches()
         return {"active": gui.activeWorkbench().name(), "workbenches": sorted(getattr(w, "MenuText", k) for k, w in wbs.items())}
 
+    def app_restart(a):
+        """Quit this FreeCAD and start it again (new add-on code, a theme):
+        the settings written, each changed document saved first — one never
+        saved is refused unless discard: true."""
+        gui = _gui()
+        import subprocess
+        import sys
+
+        unsaved = [d.Label for d in FreeCAD.listDocuments().values() if d.isTouched() and not d.FileName]
+        if unsaved and not a.get("discard"):
+            raise ToolError("invalid_state", "Never saved: " + ", ".join(unsaved) + " — doc_save { path } first, or discard: true to lose them.")
+        saved = []
+        for d in list(FreeCAD.listDocuments().values()):
+            if d.isTouched() and d.FileName:
+                d.save()
+                saved.append(d.FileName)
+        reopen = [d.FileName for d in FreeCAD.listDocuments().values() if d.FileName]
+        FreeCAD.saveParameter()
+        exe = sys.executable
+        bundle = exe.split(".app/")[0] + ".app" if ".app/" in exe else None
+        files = " ".join("'" + f.replace("'", "'\\''") + "'" for f in reopen)
+        if bundle:
+            cmd = f"sleep 3; open -a '{bundle}' {files}"
+        else:
+            cmd = f"sleep 3; '{exe}' {files} &"
+        subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for d in list(FreeCAD.listDocuments().values()):
+            FreeCAD.closeDocument(d.Name)
+        from PySide import QtCore, QtGui
+
+        app = QtGui.QApplication.instance() if hasattr(QtGui, "QApplication") else None
+        if app is None:
+            from PySide import QtWidgets
+
+            app = QtWidgets.QApplication.instance()
+        QtCore.QTimer.singleShot(300, app.quit)
+        return {"restarting": True, "saved": saved, "reopens": reopen, "note": "FreeCAD quits and opens again in a few seconds, its link on by itself; the calls in between go to the hidden FreeCAD."}
+
     return [
         Tool("pref_get", "Read FreeCAD's settings: a parameter group (path, e.g. \"BaseApp/Preferences/View\") with its values and subgroups, or one setting (name). Anything Edit > Preferences shows lives here.",
              obj({"path": {"type": "string"}, "name": {"type": "string"}}), pref_get),
@@ -338,5 +376,7 @@ def tools(session):
              obj({"menu": {"type": "string"}, "limit": {"type": "integer"}}), menu_list),
         Tool("menu_run", "Press a menu item by its path of titles ([\"View\", \"Standard views\", \"Fit all\"]); modal dialogs refused as cmd_run. Window only.",
              obj({"path": {"type": "array", "items": {"type": "string"}}}, ["path"]), menu_run, changes=True),
+        Tool("app_restart", "Quit this FreeCAD window and open it again (new add-ons, a theme, settings that need a restart): settings written, changed documents saved and reopened; one never saved is refused unless discard: true. Window only.",
+             obj({"discard": {"type": "boolean"}}), app_restart),
         Tool("workbench", "The workbenches, the active one, and activate: a name (Part Design, BIM, FEM …). Window only.", obj({"activate": {"type": "string"}}), workbench),
     ]
