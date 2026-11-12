@@ -407,6 +407,118 @@ def tools(session):
                 applied.append({"force": ld["force"], "faces": [n for n, _ in picked], "area": round(area, 2)})
         return fixed, held_faces, cloads, dloads, gravity, applied
 
+    def fea_parts(a):
+        """A study of several bodies at once: their solids kept apart in one
+        compound (the study's body), each with its own material, joined where
+        they touch — tie (bonded: glued, welded, tight press fit) or contact
+        (they push but do not pull, may slide: friction)."""
+        refs = a.get("bodies")
+        if not isinstance(refs, list) or len(refs) < 2:
+            raise ToolError("invalid_input", "bodies: two or more parts to study together.")
+        objs = [s.body(r) for r in refs]
+        how = a.get("join", "tie")
+        if how not in ("tie", "contact", "none"):
+            raise ToolError("invalid_input", "join: tie (bonded where they touch) | contact (pushing, not pulling; friction) | none.")
+        mats = a.get("materials") or {}
+        parts = []
+        for o in objs:
+            if mats.get(o.Label):
+                c = matfam.card(s.doc, mats[o.Label]) or matfam.card(s.doc, str(mats[o.Label]).lower())
+                if c is None:
+                    raise ToolError("not_found", f"materials.{o.Label}: no material {mats[o.Label]!r} — material_list finds one.")
+            else:
+                c, _ = matfam.of_body(s.doc, o.Label)
+            if not c.get("E"):
+                raise ToolError("invalid_state", f"{o.Label}'s material {c['name']} has no Young's modulus.")
+            if len(o.Shape.Solids) != 1:
+                raise ToolError("invalid_state", f"{o.Label} has {len(o.Shape.Solids)} solids: one solid a part (part_compound explode splits it).")
+            parts.append({"body": o.Label, "material": c["id"]})
+        comp = Part.makeCompound([o.Shape.Solids[0].copy() for o in objs])
+        name = a.get("name") or "FEA parts"
+        holder = next((x for x in s.doc.Objects if x.Label == name), None)
+        if holder is None:
+            holder = s.doc.addObject("Part::Feature", "FeaParts")
+            holder.Label = s.unique(name, holder)
+        holder.Shape = comp
+        holder.Visibility = False
+        s.doc.recompute()
+        tol = float(a.get("tolerance", 0.05))
+        # where they touch: faces of two parts that lie on each other
+        found = []
+        sol = comp.Solids
+        for i in range(len(sol)):
+            for j in range(i + 1, len(sol)):
+                if sol[i].BoundBox.intersect(sol[j].BoundBox) or sol[i].distToShape(sol[j])[0] <= tol:
+                    for fa in sol[i].Faces:
+                        for fb in sol[j].Faces:
+                            if not fa.BoundBox.intersect(fb.BoundBox) and fa.distToShape(fb)[0] > tol:
+                                continue
+                            try:
+                                ar = fa.common(fb).Area
+                            except Exception:
+                                ar = 0.0
+                            if ar > 1e-3:
+                                found.append({"a": i, "b": j, "area": round(ar, 2)})
+        bb = comp.BoundBox
+        least = min(min(x.BoundBox.XLength, x.BoundBox.YLength, x.BoundBox.ZLength) for x in sol)
+        mesh = float(a.get("mesh") or round(max(0.5, min(least / 3.0, bb.DiagonalLength / 15.0)), 2))
+        st = {"body": holder.Label, "material": parts[0]["material"], "mesh": mesh, "buildDir": None, "holds": [], "loads": [],
+              "parts": parts, "join": how, "friction": float(a.get("friction", 0)), "tolerance": tol}
+        _save(s.doc, st)
+        s.snapshot("fea_parts")
+        overlap = [f"{objs[i].Label} / {objs[j].Label}" for i in range(len(sol)) for j in range(i + 1, len(sol)) if sol[i].common(sol[j]).Volume > 1e-3]
+        out = {"study": holder.Label, "parts": parts, "join": how, "touching": [{"a": objs[x["a"]].Label, "b": objs[x["b"]].Label, "area": x["area"]} for x in found], "mesh": mesh,
+               "next": "fea_hold and fea_load pick faces of the study's body (the parts together), then fea_solve: each part's peak and safety come back."}
+        if overlap:
+            out["warning"] = f"overlapping, not touching: {', '.join(overlap)} — a tie or contact needs faces that meet, not volumes that cross (asm_check, part_boolean)."
+        if how != "none" and not found:
+            out["warning"] = "nothing touches within tolerance: each part must be held on its own, or move them together."
+        if how == "contact":
+            out["note"] = "Contact is nonlinear: the solve runs in steps and takes longer. Each part still needs enough holds not to fly off before contact closes."
+        return out
+
+    def _parts_split(st, shape, femmesh, nodes, elems):
+        """Elements per part (by their centre inside its solid) and the
+        element faces where two parts touch."""
+        sol = shape.Solids
+        groups = [[] for _ in sol]
+        for e, ns in elems.items():
+            c = [sum(nodes[n][k] for n in ns[:4]) / 4.0 for k in range(3)]
+            p = V(*c)
+            hit = None
+            for i, so in enumerate(sol):
+                if so.BoundBox.isInside(p) and so.isInside(p, 1e-6, True):
+                    hit = i
+                    break
+            if hit is None:
+                hit = min(range(len(sol)), key=lambda i: sol[i].distToShape(Part.Vertex(p))[0])
+            groups[hit].append(e)
+        member = {}
+        for i, g in enumerate(groups):
+            for e in g:
+                member[e] = i
+        tol = float(st.get("tolerance", 0.05))
+        pairs = []
+        for i in range(len(sol)):
+            for j in range(i + 1, len(sol)):
+                if not sol[i].BoundBox.intersect(sol[j].BoundBox) and sol[i].distToShape(sol[j])[0] > tol:
+                    continue
+                sa, sb = [], []
+                for fa in sol[i].Faces:
+                    for fb in sol[j].Faces:
+                        if not fa.BoundBox.intersect(fb.BoundBox) and fa.distToShape(fb)[0] > tol:
+                            continue
+                        try:
+                            if fa.common(fb).Area <= 1e-3:
+                                continue
+                        except Exception:
+                            continue
+                        sa += [(e, f) for e, f in femmesh.getccxVolumesByFace(fa) if member.get(e) == i]
+                        sb += [(e, f) for e, f in femmesh.getccxVolumesByFace(fb) if member.get(e) == j]
+                if sa and sb:
+                    pairs.append((i, j, sorted(set(sb)), sorted(set(sa))))  # slave on the second part
+        return groups, pairs
+
     def fea_solve(a):
         st, o = _need_study(s)
         if not st["holds"]:
@@ -425,8 +537,26 @@ def tools(session):
 
         fixed, held_faces, cloads, dloads, gravity, applied = _assemble(st, shape, femmesh, nodes, elems)
         mat = {"E": float(c["E"]), "nu": float(c.get("nu") or 0.35), "rho": float(c["density"])}
+        text = ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, thermal=_thermal(st, nodes), bounds=st.pop("_bounds", None), centrif=st.pop("_centrif", None))
+        groups = pairs = None
+        part_cards = []
+        if st.get("parts"):
+            groups, pairs = _parts_split(st, shape, femmesh, nodes, elems)
+            defs = []
+            for k, pinfo in enumerate(st["parts"]):
+                pc = matfam.card(s.doc, pinfo["material"]) or c
+                part_cards.append(pc)
+                defs.append((f"P{k + 1}", groups[k], {"E": float(pc["E"]), "nu": float(pc.get("nu") or 0.35), "rho": float(pc.get("density") or c["density"]),
+                                                     **({"alpha": _thermal(st, nodes)["alpha"]} if _thermal(st, nodes) else {})}))
+            empty = [st["parts"][k]["body"] for k, g in enumerate(groups) if not g]
+            if empty:
+                raise ToolError("failed", f"No elements landed in {', '.join(empty)}: a finer mesh (fea_setup is not used here — fea_parts {{ mesh }}).")
+            join = [(f"J{n + 1}", sl, ma) for n, (i, j, sl, ma) in enumerate(pairs)]
+            Emin = min(float(pc["E"]) for pc in part_cards)
+            text = ccx_io.parts_deck(text, defs, ties=join if st.get("join") == "tie" else (), contacts=join if st.get("join") == "contact" else (),
+                                     contact_slope=Emin / max(float(st["mesh"]), 0.1) * 10, friction=st.get("friction", 0))
         with open(os.path.join(wd, "job.inp"), "w") as f:
-            f.write(ccx_io.deck(mesh_text, mat, fixed, cloads, dloads, gravity, thermal=_thermal(st, nodes), bounds=st.pop("_bounds", None), centrif=st.pop("_centrif", None)))
+            f.write(text)
         env = dict(os.environ)
         env.setdefault("OMP_NUM_THREADS", str(max(1, min(4, os.cpu_count() or 1))))
         try:
@@ -491,6 +621,23 @@ def tools(session):
             warnings.append("The displacement is large for the part: a linear solve is rough here.")
         if not str(c["id"]).startswith("custom:"):
             warnings.append(matfam.TYPICAL)
+        if groups is not None:
+            rows = []
+            for k, pinfo in enumerate(st["parts"]):
+                ns = {n for e in groups[k] for n in elems[e]}
+                pv = {n: vm[n] for n in ns if n in vm}
+                if not pv:
+                    continue
+                nm = max(pv, key=pv.get)
+                yk = part_cards[k].get("yield")
+                rows.append({"body": pinfo["body"], "material": part_cards[k]["name"], "vonMisesMaxMPa": round(pv[nm], 3), **where(nm),
+                             **({"safety": round(yk / pv[nm], 2)} if yk and pv[nm] > 0 else {})})
+            out["parts"] = rows
+            out["joined"] = {"how": st.get("join"), "interfaces": len(pairs)}
+            if st.get("join") != "none" and not pairs:
+                warnings.append("No touching faces were found in the mesh: the parts were solved apart.")
+            if y and len(rows) > 1:
+                out.pop("safety", None)
         out["warnings"] = warnings
         out["files"] = wd
         out["seconds"] = round(time.time() - t0, 1)
@@ -943,6 +1090,9 @@ def tools(session):
         return out
 
     return [
+        Tool("fea_parts", "A strength study of several parts together (instead of fea_setup): bodies [labels, one solid each], materials { label: id } (else each body's own), join tie (bonded where they touch: glued, welded, press-fit) | contact (they push but do not pull; friction 0.2 lets them slide) | none, tolerance mm for touching (0.05), mesh mm. Then fea_hold / fea_load on the parts' faces and fea_solve: each part's peak stress and safety.",
+             obj({"bodies": {"type": "array", "items": {"type": "string"}}, "materials": {"type": "object"}, "join": {"type": "string", "enum": ["tie", "contact", "none"]},
+                  "friction": {"type": "number"}, "tolerance": {"type": "number"}, "mesh": {"type": "number"}, "name": {"type": "string"}}, ["bodies"]), fea_parts, changes=True),
         Tool(
             "fea_setup",
             "Start (or change) a strength study of one body: material (the body's by default), mesh (largest element edge, mm; a third of the least size by default), buildDir for a printed part (+z from its print setup). reset: true drops the holds and loads. " + TRAPS,

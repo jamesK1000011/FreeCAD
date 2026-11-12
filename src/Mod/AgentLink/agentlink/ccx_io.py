@@ -324,3 +324,55 @@ def read_temperatures(frd):
     """{node: °C} from the last NDTEMP block of an .frd."""
     blocks = read_frd_blocks(frd, "NDTEMP")
     return {n: v[0] for n, v in blocks[-1].items()} if blocks else {}
+
+
+# ---- several parts: each its own material, tied or in contact -------------------------
+
+def parts_deck(text, parts, ties=(), contacts=(), contact_slope=None, friction=0.0):
+    """A one-material deck (deck()) made a several-part one: parts
+    [(elset, element ids, {E, nu, rho, alpha?})] each with its own
+    material and section; ties and contacts [(name, slave [(e, f)], master
+    [(e, f)])] as element-face surfaces, bonded (*TIE) or touching
+    (*CONTACT PAIR, linear pressure-overclosure, optional friction). A
+    contact makes the step nonlinear: it runs in increments."""
+    head, sep, rest = text.partition("** Agent Link: material, supports, loads")
+    lines = rest.split("\n")
+    # the one material's own block and section go; each part gets its own
+    keep, skip = [], False
+    for ln in lines:
+        u = ln.strip().upper()
+        if u.startswith("*MATERIAL, NAME=PART"):
+            skip = True
+            continue
+        if skip and u.startswith("*SOLID SECTION"):
+            skip = False
+            continue
+        if skip and u.startswith("*") and not u.startswith(("*ELASTIC", "*DENSITY", "*EXPANSION")):
+            skip = False
+        if not skip:
+            keep.append(ln)
+    defs = []
+    for name, ids, m in parts:
+        defs += [f"*ELSET, ELSET={name}", _rows(sorted(ids)), f"*MATERIAL, NAME=M{name}", "*ELASTIC", f"{m['E']:.6g}, {m['nu']:.6g}",
+                 "*DENSITY", f"{m['rho'] * 1e-9:.6g}"]
+        if m.get("alpha"):
+            defs += ["*EXPANSION, ZERO=0", f"{m['alpha']:.6g}"]
+        defs += [f"*SOLID SECTION, ELSET={name}, MATERIAL=M{name}"]
+    for kind, items in (("tie", ties), ("contact", contacts)):
+        for name, slave, master in items:
+            for side, faces in (("S", slave), ("M", master)):
+                defs += [f"*SURFACE, NAME={name}{side}, TYPE=ELEMENT"] + [f"{e}, S{f}" for e, f in faces]
+            if kind == "tie":
+                defs += [f"*TIE, NAME={name}, ADJUST=NO", f"{name}S, {name}M"]
+            else:
+                defs += [f"*CONTACT PAIR, INTERACTION=AGSI, TYPE=SURFACE TO SURFACE", f"{name}S, {name}M"]
+    if contacts:
+        defs += ["*SURFACE INTERACTION, NAME=AGSI", "*SURFACE BEHAVIOR, PRESSURE-OVERCLOSURE=LINEAR", f"{float(contact_slope or 1e4):.6g}"]
+        if friction:
+            defs += ["*FRICTION", f"{float(friction):.6g}, {float(contact_slope or 1e4) / 20:.6g}"]
+    body = "\n".join(keep)
+    i = body.find("*STEP")
+    body = body[:i] + "\n".join(defs) + "\n" + body[i:]
+    if contacts:
+        body = body.replace("*STEP\n*STATIC", "*STEP, INC=200\n*STATIC\n0.1, 1.0, 1e-5, 1.0", 1)
+    return head + sep + body
