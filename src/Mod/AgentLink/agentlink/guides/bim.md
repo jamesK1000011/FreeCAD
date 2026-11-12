@@ -23,3 +23,6 @@ All sizes are mm; quantities come back in m, m² and m³. Z is up; a level's ele
 - `bim_panel` (sheet material), `bim_pipe` (along points), `bim_equipment` (any object made a fixture or furniture), `bim_grid` (structural grid lines).
 - `bim_material` makes a material with its density and puts it on objects. `bim_section` makes a section plane for TechDraw; `export { section: z }` writes a plan cut as DXF/SVG.
 - `bim_member` puts a library section (HEB200, IPE300, RHS …; `bim_profiles` lists them) between two points: a beam across, a column upright. It answers mass and kg/m (root radii left out, so a little light).
+
+## IFC files edited in place
+An IFC from someone else (an architect's model, a survey) is edited as a file, not converted: `ifc_open { path }`, `ifc_find` (class, name, storey, a property's value), `ifc_edit` (attributes, property sets, material, storey, classification references), `ifc_remove` (by GlobalId), `ifc_save` (a copy by default; `overwrite: true` writes it back). GlobalIds and everything not touched stay as they were, so the file can go back to whoever sent it. `ifc_diff { a, b }` lists what changed between two versions. To look at one, `bim_import` it and `view_render`.
