@@ -46,7 +46,11 @@ class PresetError(Exception):
 def roots(slicer):
     env, places = ROOTS[slicer]
     given = [p for e in env for p in (os.environ.get(e) or "").split(os.pathsep) if p]
-    return [p for p in (given or places) if os.path.isdir(p)]
+    found = [p for p in (given or places) if os.path.isdir(p)]
+    if slicer == "orcaslicer":
+        # The system presets fetched as JSON (fetch_orca), after the person's own.
+        found += [p for p in orca_cached() if p not in found]
+    return found
 
 
 def _kind_of(path, data):
@@ -288,3 +292,86 @@ def minimal(settings):
         return v
 
     return {k: fill(tpl[k]) for k in KINDS}
+
+
+# ---- OrcaSlicer's own system presets, as JSON ----------------------------------------------
+# From 2.5 OrcaSlicer ships each vendor's system presets packed (<Vendor>.opc,
+# its own binary cache), not as JSON. The same presets are in its source, as
+# JSON, at the release's tag: fetched once per version and vendor by a sparse
+# git checkout (this computer's git; public repository, no sign-in), kept
+# under ~/.config/freecad-agentlink/orca-profiles/<version>, and read like the
+# rest.
+
+ORCA_CACHE = os.path.join(HOME, ".config", "freecad-agentlink", "orca-profiles")
+ORCA_REPO = "https://github.com/OrcaSlicer/OrcaSlicer.git"
+
+
+def packed_only(slicer):
+    """Folders holding packed presets (.opc) and no JSON ones."""
+    out = []
+    for r in roots(slicer):
+        if glob.glob(os.path.join(r, "*.opc")) and not glob.glob(os.path.join(r, "*", "machine", "*.json")):
+            out.append(r)
+    return out
+
+
+def orca_version(exe):
+    import re
+    import subprocess
+
+    try:
+        r = subprocess.run([exe, "--help"], capture_output=True, text=True, timeout=120)
+    except Exception:
+        return None
+    m = re.search(r"OrcaSlicer-(\d+\.\d+\.\d+)", (r.stdout or "") + (r.stderr or ""))
+    return m.group(1) if m else None
+
+
+def fetch_orca(vendors, version=None, exe=None, repo=None):
+    """The vendors' system presets for this OrcaSlicer's version, as JSON,
+    into the cache; their folder is then one of the places presets are read
+    from. Returns {version, folder, vendors, files}."""
+    import shutil
+    import subprocess
+
+    if version is None:
+        if exe is None:
+            from . import slicers
+
+            exe = slicers.find("orcaslicer")
+        version = orca_version(exe) if exe else None
+    if not version:
+        raise PresetError("Which OrcaSlicer: none found here to read its version from — give version.")
+    git = shutil.which("git") or next((g for g in ("/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git") if os.path.exists(g)), None)
+    if not git:
+        raise PresetError("git is not installed on this computer: it fetches the presets.")
+    dest = os.path.join(ORCA_CACHE, version)
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+    def run(*args, timeout=600):
+        r = subprocess.run([git, *args], capture_output=True, text=True, timeout=timeout, env=env)
+        if r.returncode != 0:
+            raise PresetError(f"git {args[0]}: {((r.stderr or r.stdout).strip().splitlines() or ['failed'])[-1]}")
+        return r
+
+    paths = [f"/resources/profiles/{v}/" for v in vendors] + [f"/resources/profiles/{v}.json" for v in vendors]
+    if not os.path.isdir(os.path.join(dest, ".git")):
+        os.makedirs(ORCA_CACHE, exist_ok=True)
+        tag = f"v{version}"
+        try:
+            run("clone", "--depth", "1", "--filter=blob:none", "--no-checkout", "-b", tag, repo or ORCA_REPO, dest)
+        except PresetError as e:
+            raise PresetError(f"OrcaSlicer {tag} could not be fetched: {e}")
+        run("-C", dest, "sparse-checkout", "set", "--no-cone", *paths)
+        run("-C", dest, "checkout")
+    else:
+        have = run("-C", dest, "sparse-checkout", "list").stdout.split()
+        run("-C", dest, "sparse-checkout", "set", "--no-cone", *sorted(set(have) | set(paths)))
+    folder = os.path.join(dest, "resources", "profiles")
+    files = len(glob.glob(os.path.join(folder, "**", "*.json"), recursive=True))
+    return {"version": version, "folder": folder, "vendors": sorted(v for v in vendors if os.path.isdir(os.path.join(folder, v))), "files": files}
+
+
+def orca_cached():
+    """The fetched profile folders, newest version first."""
+    return sorted(glob.glob(os.path.join(ORCA_CACHE, "*", "resources", "profiles")), reverse=True)

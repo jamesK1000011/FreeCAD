@@ -119,5 +119,45 @@ class Presets(unittest.TestCase):
         self.assertEqual(m["filament"]["filament_type"], ["PETG"])
 
 
+class OrcaFetch(unittest.TestCase):
+    """OrcaSlicer's packed presets: the same version's JSON fetched by git
+    from a repository (a local one here) and read like the rest."""
+
+    @unittest.skipUnless(__import__("shutil").which("git"), "git is not here")
+    def test_fetch_and_read(self):
+        import subprocess
+
+        src = tempfile.mkdtemp()
+        m = os.path.join(src, "resources", "profiles", "Acme", "machine")
+        os.makedirs(m)
+        with open(os.path.join(src, "resources", "profiles", "Acme.json"), "w") as f:
+            json.dump({"name": "Acme"}, f)
+        with open(os.path.join(m, "fdm_acme_common.json"), "w") as f:
+            json.dump({"type": "machine", "name": "fdm_acme_common", "instantiation": "false", "nozzle_diameter": ["0.4"], "bed": "x"}, f)
+        with open(os.path.join(m, "Acme One 0.4 nozzle.json"), "w") as f:
+            json.dump({"type": "machine", "name": "Acme One 0.4 nozzle", "inherits": "fdm_acme_common", "printer_model": "Acme One"}, f)
+        for c in (["init", "-q", "-b", "main"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"], ["tag", "v9.9.9"]):
+            subprocess.run(["git", "-C", src] + c, check=True)
+        cache = tempfile.mkdtemp()
+        old_cache, old_env = SP.ORCA_CACHE, os.environ.get("AGENTLINK_ORCA_PRESETS")
+        SP.ORCA_CACHE = cache
+        os.environ["AGENTLINK_ORCA_PRESETS"] = os.path.join(cache, "nothing-here")
+        try:
+            out = SP.fetch_orca(["Acme"], version="9.9.9", repo="file://" + src)
+            self.assertEqual(out["vendors"], ["Acme"])
+            idx = SP.scan("orcaslicer")
+            self.assertEqual(SP.listing("orcaslicer", "machine")["machine"]["presets"], [{"name": "Acme One 0.4 nozzle"}])
+            flat = SP.resolve(idx, "machine", "Acme One 0.4 nozzle")
+            self.assertEqual((flat["bed"], flat["printer_model"]), ("x", "Acme One"))
+            with self.assertRaises(SP.PresetError):
+                SP.fetch_orca(["Acme"], version="0.0.1", repo="file://" + src)
+        finally:
+            SP.ORCA_CACHE = old_cache
+            if old_env is None:
+                os.environ.pop("AGENTLINK_ORCA_PRESETS", None)
+            else:
+                os.environ["AGENTLINK_ORCA_PRESETS"] = old_env
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -125,8 +125,18 @@ def tools(session):
                 kind = a.get("kind")
                 if kind and kind not in SP.KINDS:
                     raise ToolError("invalid_input", f"kind: {', '.join(SP.KINDS)}.")
-                return {"slicer": slicer, "from": SP.roots(slicer), **SP.listing(slicer, kind, a.get("query")), "saved": SP.saved(s.out_dir),
-                        "next": "slicer_presets use { machine, process, filament } (names from here) or { bundle } (a saved one) for a body's print setup."}
+                out = {"slicer": slicer, "from": SP.roots(slicer), **SP.listing(slicer, kind, a.get("query")), "saved": SP.saved(s.out_dir),
+                       "next": "slicer_presets use { machine, process, filament } (names from here) or { bundle } (a saved one) for a body's print setup."}
+                if slicer == "orcaslicer" and SP.packed_only(slicer) and not SP.orca_cached():
+                    out["note"] = "This OrcaSlicer packs its system presets (.opc), which cannot be read here: slicer_presets fetch { vendors: [\"BBL\", …] } brings the same version's as JSON. The person's own presets are read either way."
+                return out
+            if action == "fetch":
+                if slicer != "orcaslicer":
+                    raise ToolError("invalid_input", "fetch: OrcaSlicer's system presets (slicer: orcaslicer).")
+                vendors = a.get("vendors") or ([a["vendor"]] if a.get("vendor") else None)
+                if not vendors:
+                    raise ToolError("invalid_input", "vendors: the preset folders to fetch, e.g. [\"BBL\"] (Bambu Lab), [\"Prusa\"], [\"Creality\"].")
+                return {**SP.fetch_orca(vendors, a.get("version")), "next": "slicer_presets list { slicer: orcaslicer, kind, query } now shows them."}
             if action == "use":
                 o = s.body(a.get("body"))
                 sets = store.setups(s.doc)
@@ -180,13 +190,13 @@ def tools(session):
             raise ToolError("not_found", str(e))
         except (OSError, ValueError) as e:
             raise ToolError("failed", f"Presets could not be read or written: {e}")
-        raise ToolError("invalid_input", "action: list, use, export or import.")
+        raise ToolError("invalid_input", "action: list, use, export, import or fetch.")
 
     return [
         Tool(
             "slicer_presets",
-            "The person's own slicer presets, as data: action list { slicer (bambustudio, orcaslicer), kind, query } the printer, process and filament presets on this computer (their own first) and the saved bundles; use { body, machine, process, filament | bundle } puts them on the body's print setup, which then takes its layer height, walls, infill and shells from them and slices with them; export { machine, process, filament | bundle | body, path, name } writes one flattened JSON bundle (and keeps it); import { path, name } keeps a bundle to use. Nothing of a printer is in the code.",
-            obj({"action": {"type": "string", "enum": ["list", "use", "export", "import"]}, "slicer": {"type": "string", "enum": list(SP.ROOTS)}, "kind": {"type": "string", "enum": list(SP.KINDS)},
+            "The person's own slicer presets, as data: action list { slicer (bambustudio, orcaslicer), kind, query }; fetch { vendors } (OrcaSlicer, whose own system presets are packed: the same version's, as JSON, by git) the printer, process and filament presets on this computer (their own first) and the saved bundles; use { body, machine, process, filament | bundle } puts them on the body's print setup, which then takes its layer height, walls, infill and shells from them and slices with them; export { machine, process, filament | bundle | body, path, name } writes one flattened JSON bundle (and keeps it); import { path, name } keeps a bundle to use. Nothing of a printer is in the code.",
+            obj({"action": {"type": "string", "enum": ["list", "use", "export", "import", "fetch"]}, "vendors": {"type": "array", "items": {"type": "string"}}, "vendor": {"type": "string"}, "version": {"type": "string"}, "slicer": {"type": "string", "enum": list(SP.ROOTS)}, "kind": {"type": "string", "enum": list(SP.KINDS)},
                  "query": {"type": "string"}, "body": {"type": "string"}, "machine": {"type": "string"}, "process": {"type": "string"}, "filament": {"type": "string"},
                  "bundle": {"type": "string"}, "path": {"type": "string"}, "name": {"type": "string"}}),
             slicer_presets,
