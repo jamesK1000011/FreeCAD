@@ -432,7 +432,7 @@ def tools(session):
         if action == "list":
             out = []
             for g in d.Objects:
-                if g.isDerivedFrom("App::DocumentObjectGroup") or g.TypeId in ("App::Part", "App::Link") or hasattr(g, "Group") and g.TypeId.startswith("App::"):
+                if g.TypeId != "App::Origin" and (g.isDerivedFrom("App::DocumentObjectGroup") or g.TypeId in ("App::Part", "App::Link")):
                     row = {"group": g.Label, "type": g.TypeId}
                     if hasattr(g, "Group"):
                         row["holds"] = [x.Label for x in g.Group]

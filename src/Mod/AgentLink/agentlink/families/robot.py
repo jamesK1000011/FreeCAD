@@ -223,6 +223,46 @@ def tools(session):
             out["note"] = "Out of reach or past an axis limit there: move the work closer, turn the tool, or set the robot's base (robot_new at)."
         return out
 
+    def robot_trajectory(a):
+        op = a.get("op")
+        if op == "join":
+            srcs = [trajectory(r) for r in (a.get("trajectories") or [])]
+            if len(srcs) < 2:
+                raise bad("trajectories: two or more to run one after another.")
+            o = doc().addObject("Robot::TrajectoryCompound", "Trajectory")
+            o.Source = srcs
+        elif op == "dress":
+            src = trajectory(a.get("trajectory"))
+            o = doc().addObject("Robot::TrajectoryDressUp", "Trajectory")
+            o.Source = src
+            if a.get("speed") is not None:
+                o.UseSpeed = True
+                o.Speed = float(a["speed"])
+            if a.get("acceleration") is not None:
+                o.UseAcceleration = True
+                o.Acceleration = float(a["acceleration"])
+            if a.get("cont") is not None:
+                try:
+                    o.ContType = "Continues" if a["cont"] else "Discontinues"
+                except Exception:
+                    pass
+            if a.get("move") is not None or a.get("ypr") is not None:
+                at = [float(c) for c in (a.get("move") or [0, 0, 0])]
+                y, p_, r = (float(c) for c in (a.get("ypr") or [0, 0, 0]))
+                o.PosAdd = FreeCAD.Placement(V(*at), FreeCAD.Rotation(y, p_, r))
+                try:
+                    o.AddType = a.get("add", "AddPosition" if a.get("move") and not a.get("ypr") else "AddOrientation" if a.get("ypr") and not a.get("move") else "UseOrientation")
+                except Exception:
+                    pass
+        else:
+            raise bad("op: join (trajectories, one after another) | dress (trajectory: a copy with speed mm/s, acceleration, cont, move [x,y,z] / ypr added to every point).")
+        o.Label = s.unique(a.get("name") or ("Joined trajectory" if op == "join" else "Dressed trajectory"), o)
+        doc().recompute()
+        tr = o.Trajectory
+        s.snapshot("robot_trajectory")
+        return {"trajectory": o.Label, "waypoints": int(tr.size()) if hasattr(tr, "size") else len(tr.Waypoints), "seconds": round(tr.Duration, 3),
+                "length_mm": round(tr.Length, 1) if hasattr(tr, "Length") else None, "step": len(s.steps)}
+
     def robot_export(a):
         o = robot(a.get("robot"))
         t = trajectory(a.get("trajectory"))
@@ -244,6 +284,9 @@ def tools(session):
 
     tcp = {"type": "object", "description": "{ at [x,y,z], ypr [yaw, pitch, roll] | axis + angle }"}
     return [
+        Tool("robot_trajectory", "Combine or adjust trajectories (FreeCAD's compound and dress-up): op join (trajectories in order) | dress (a trajectory with speed mm/s, acceleration, cont true/false, move [x,y,z] and/or ypr added to every waypoint — the same path at another place or angle).",
+             obj({"op": {"type": "string", "enum": ["join", "dress"]}, "trajectories": {"type": "array", "items": {"type": "string"}}, "trajectory": {"type": "string"}, "speed": {"type": "number"},
+                  "acceleration": {"type": "number"}, "cont": {"type": "boolean"}, "move": {"type": "array"}, "ypr": {"type": "array"}, "add": {"type": "string"}, "name": {"type": "string"}}, ["op"]), robot_trajectory, changes=True),
         Tool("robot_new", "A six-axis robot: model kr16 | kr125 | kr210 | kr500 (KUKA, where FreeCAD ships them) | puma; kinematics: a CSV of your own; at, ypr its base; tool { at, ypr } the tool's point from the flange (a gripper's tip), which tcp moves then mean.",
              obj({"model": {"type": "string"}, "kinematics": {"type": "string"}, "at": {"type": "array"}, "ypr": {"type": "array"}, "tool": tcp, "name": {"type": "string"}}), robot_new, changes=True),
         Tool("robot_move", "Move a robot: axes [six degrees], tcp (its tool point: inverse kinematics; reached says if it got there), or home.",
