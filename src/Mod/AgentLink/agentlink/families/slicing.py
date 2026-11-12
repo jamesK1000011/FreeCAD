@@ -81,6 +81,10 @@ def tools(session):
             MeshPart.meshFromShape(Shape=b.Shape, LinearDeflection=0.01, AngularDeflection=0.0873, Relative=False).write(p)
             stls.append(p)
         options = {k: bool(a.get(k)) for k in ("orient", "arrange") if a.get(k)}
+        if a.get("overrides"):
+            if name == "prusaslicer":
+                raise ToolError("invalid_input", "overrides: OrcaSlicer's and Bambu Studio's process settings (their JSON keys).")
+            options["overrides"] = a["overrides"]
         if a.get("project"):
             options["project"] = base + ".3mf"
         if (options or len(stls) > 1) and name == "prusaslicer":
@@ -100,6 +104,9 @@ def tools(session):
             "body": o.Label, "slicer": name, "exe": os.path.basename(exe), "profiles": f"the person's presets: {preset_note}" if preset_note else used, "gcode": gcode, "bytes": os.path.getsize(gcode),
             **read, "setup": f"{setup['name']} ({setup['id']})",
         }
+        if a.get("overrides"):
+            out["overrides"] = a["overrides"]
+        out.update(slicers.LAST)  # the slicer's warnings and plate statistics
         if len(stls) > 1:
             out["bodies"] = [o.Label] + [b.Label for b in others if b is not o]
         if options.get("project") and os.path.exists(options["project"]):
@@ -192,6 +199,70 @@ def tools(session):
             raise ToolError("failed", f"Presets could not be read or written: {e}")
         raise ToolError("invalid_input", "action: list, use, export, import or fetch.")
 
+    def _resolver():
+        idx = {}
+
+        def resolve(slicer, kind, name):
+            if slicer not in idx:
+                idx[slicer] = SP.scan(slicer)
+            return SP.resolve(idx[slicer], kind, name)
+
+        return resolve
+
+    def slice_read(a):
+        from .. import threemf
+
+        p = os.path.expanduser(a["path"])
+        if not os.path.isabs(p):
+            p = os.path.join(s.out_dir, p)
+        if not os.path.isfile(p):
+            raise ToolError("not_found", f"{p}: no such file.")
+        sliced = None
+        if a.get("slice"):
+            try:
+                app = threemf.read(p).get("slicer") or "orcaslicer"
+            except Exception as e:
+                raise ToolError("invalid_input", f"{os.path.basename(p)} is not a slicer project: {e}")
+            outdir = os.path.splitext(p)[0] + "-sliced"
+            try:
+                exe, found = slicers.slice_project(app, p, outdir, export=os.path.splitext(p)[0] + "-sliced.3mf")
+            except FileNotFoundError as e:
+                raise ToolError("unavailable", str(e))
+            except RuntimeError as e:
+                raise ToolError("failed", str(e))
+            sliced = {"gcode": found, **slicers.read_gcode(found[0]), **slicers.LAST}
+            p = os.path.splitext(p)[0] + "-sliced.3mf" if os.path.isfile(os.path.splitext(p)[0] + "-sliced.3mf") else p
+        try:
+            out = threemf.read(p, _resolver())
+        except Exception as e:
+            raise ToolError("invalid_input", f"{os.path.basename(p)} could not be read as a slicer project: {e}")
+        if sliced:
+            out["slicedNow"] = sliced
+        return out
+
+    def slice_open(a):
+        import subprocess
+        import sys
+
+        import FreeCAD
+
+        if not FreeCAD.GuiUp:
+            raise ToolError("invalid_state", "slice_open needs the FreeCAD window (it opens the slicer's window for the person).")
+        p = os.path.expanduser(a["path"])
+        if not os.path.isabs(p):
+            p = os.path.join(s.out_dir, p)
+        if not os.path.isfile(p):
+            raise ToolError("not_found", f"{p}: no such file.")
+        name = a.get("slicer") or "orcaslicer"
+        exe = slicers.find(name)
+        if not exe:
+            raise ToolError("unavailable", f"{name} is not on this computer.")
+        if sys.platform == "darwin" and ".app/" in exe:
+            subprocess.Popen(["open", "-a", exe.split(".app/")[0] + ".app", p])
+        else:
+            subprocess.Popen([exe, p], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"opened": p, "in": name, "next": "When the person has saved it there, slice_read { path } brings back what they changed (slice: true slices it as it stands)."}
+
     return [
         Tool(
             "slicer_presets",
@@ -205,7 +276,19 @@ def tools(session):
             "slice_with",
             "Slice a body in a print setup with slicer prusaslicer (default), orcaslicer or bambustudio, by its command line: profiles { machine, process, filament } JSON paths for OrcaSlicer and Bambu Studio (minimal ones written from the setup when left out), { config } an .ini for PrusaSlicer. Gives time, filament and layers, and writes in a pause after the layer over each encased part (hw_embed, gen_make magnets; M601, Bambu M400 U1, or pauseCommand). OrcaSlicer and Bambu Studio also take bodies (several on one plate, arranged), orient and arrange (the slicer's own), and project: true (the sliced plate as a .3mf its window opens). Trap: a slicer not on this computer is refused unavailable, naming those present (AGENTLINK_ORCASLICER, AGENTLINK_BAMBUSTUDIO set their paths).",
             obj({"body": {"type": "string"}, "bodies": {"type": "array", "items": {"type": "string"}}, "slicer": {"type": "string", "enum": list(slicers.NAMES)}, "profiles": {"type": "object"}, "pauseCommand": {"type": "string"}, "name": {"type": "string"},
-                 "orient": {"type": "boolean"}, "arrange": {"type": "boolean"}, "project": {"type": "boolean"}}),
+                 "orient": {"type": "boolean"}, "arrange": {"type": "boolean"}, "project": {"type": "boolean"}, "overrides": {"type": "object"}}),
             slice_with,
+        ),
+        Tool(
+            "slice_read",
+            "Read an OrcaSlicer or Bambu Studio project (.3mf) back — one Agent Link wrote, or one the person changed and saved in the slicer's window: the presets it names and each setting changed from them (project-wide and per filament), every object's own settings (and its modifier parts), the plates, the slicer's warnings, and when sliced its time, weight, cost and features. slice: true slices it as it stands first (its own settings, headless), with the same answer.",
+            obj({"path": {"type": "string"}, "slice": {"type": "boolean"}}, ["path"]),
+            slice_read,
+        ),
+        Tool(
+            "slice_open",
+            "Open a project (.3mf) in the slicer's own window for the person (OrcaSlicer by default, or bambustudio): they change what they like there and save, then slice_read brings it back. Window only.",
+            obj({"path": {"type": "string"}, "slicer": {"type": "string", "enum": ["orcaslicer", "bambustudio"]}}, ["path"]),
+            slice_open,
         ),
     ]

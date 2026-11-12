@@ -139,6 +139,7 @@ agentlink/slicers.py
 agentlink/store.py
 agentlink/supervise.py
 agentlink/threads_table.py
+agentlink/threemf.py
 agentlink/tools.py
 agentlink/views.py
 agentlink_headless.py
@@ -198,6 +199,7 @@ tests/test_strength.py
 tests/test_techdraw.py
 tests/test_theme.py
 tests/test_thread.py
+tests/test_threemf.py
 tests/test_tools.py
 tests/test_view.py
 tests/test_window_route.py

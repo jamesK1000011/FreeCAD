@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# A slicer project read back (agentlink/threemf.py): the presets it names,
+# what was changed from them, objects' own settings, warnings, statistics —
+# from a 3MF laid out as OrcaSlicer 2.5 writes one. No FreeCAD, no slicer.
+import json
+import os
+import sys
+import tempfile
+import unittest
+import zipfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from agentlink import slicers, threemf  # noqa: E402
+
+MODEL = '<?xml version="1.0"?><model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><metadata name="Application">OrcaSlicer-2.5.0</metadata></model>'
+SETTINGS = '''<?xml version="1.0"?><config>
+<object id="2"><metadata key="name" value="Tray"/><metadata key="sparse_infill_density" value="40%"/>
+<part id="1" subtype="normal_part"><metadata key="name" value="Tray"/></part>
+<part id="2" subtype="modifier_part"><metadata key="name" value="Box"/><metadata key="wall_loops" value="4"/></part></object>
+<plate><metadata key="plater_id" value="1"/><model_instance><metadata key="object_id" value="2"/></model_instance></plate>
+</config>'''
+SLICE_INFO = '''<?xml version="1.0"?><config><plate><metadata key="index" value="1"/><metadata key="prediction" value="473"/><metadata key="weight" value="5.47"/>
+<warning msg="Floating regions" level="1" error_code="1000C001"/></plate></config>'''
+STATS = {"version": 1, "summary": {"time": 473.4, "weight": 5.47, "filament_cost": 0.1, "layer_count": 50, "filament_changes": 0,
+         "filaments": [{"id": 1, "model": {"weight": 5.2}, "support": {"weight": 0.27}, "prime_tower": {"weight": 0}, "flush": {"weight": 0}}],
+         "features": {"Outer wall": {"time": 100, "weight": 1}, "Sparse infill": {"time": 300, "weight": 3}, "Top surface": {"time": 73.4, "weight": 1.47}}}}
+
+
+def project(path, project_settings):
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("3D/3dmodel.model", MODEL)
+        z.writestr("Metadata/project_settings.config", json.dumps(project_settings))
+        z.writestr("Metadata/model_settings.config", SETTINGS)
+        z.writestr("Metadata/slice_info.config", SLICE_INFO)
+        z.writestr("Metadata/plate_1.statistics.json", json.dumps(STATS))
+        z.writestr("Metadata/plate_1.gcode", "; done\n")
+
+
+class ThreeMF(unittest.TestCase):
+    def test_read_back(self):
+        p = os.path.join(tempfile.mkdtemp(), "tray.3mf")
+        project(p, {"printer_settings_id": "Acme One", "print_settings_id": "0.20mm Std", "filament_settings_id": ["PLA A", "PLA B"],
+                    "layer_height": "0.2", "wall_loops": "3", "sparse_infill_density": "15%", "nozzle_temperature": ["220", "205"]})
+        presets = {("process", "0.20mm Std"): {"name": "0.20mm Std", "inherits": "x", "layer_height": "0.2", "wall_loops": "2", "sparse_infill_density": "15%"},
+                   ("machine", "Acme One"): {"name": "Acme One", "nozzle_diameter": ["0.4"]},
+                   ("filament", "PLA A"): {"name": "PLA A", "nozzle_temperature": ["220"]}}
+
+        def resolve(slicer, kind, name):
+            self.assertEqual(slicer, "orcaslicer")
+            if (kind, name) not in presets:
+                raise KeyError(name)
+            return presets[(kind, name)]
+
+        out = threemf.read(p, resolve)
+        self.assertEqual(out["presets"], {"machine": "Acme One", "process": "0.20mm Std", "filament": ["PLA A", "PLA B"]})
+        # The person raised the walls; the first filament as its preset; the second's preset is not here.
+        self.assertEqual(out["changedFromPresets"], {"process": {"wall_loops": ["2", "3"]}})
+        self.assertEqual(out["presetsNotHere"], ["PLA B"])
+        self.assertEqual(out["objects"][0]["settings"], {"sparse_infill_density": "40%"})
+        self.assertEqual(out["objects"][0]["parts"], [{"name": "Box", "kind": "modifier_part", "settings": {"wall_loops": "4"}}])
+        self.assertEqual(out["plates"][0]["objects"], ["2"])
+        self.assertEqual(out["warnings"][0]["msg"], "Floating regions")
+        self.assertEqual(out["sliced"][0]["prediction"], "473")
+        st = out["statistics"]
+        self.assertEqual((st["time"], st["weightG"], st["layers"]), ("7m 53s", 5.47, 50))
+        self.assertEqual(st["weightBy"], {"model": 5.2, "support": 0.27})
+        self.assertEqual(st["features"][0]["feature"], "Sparse infill")
+        self.assertTrue(out["hasGcode"])
+
+    def test_results_beside_the_gcode(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "result.json"), "w") as f:
+            json.dump({"return_code": 0, "warnings": ["Object too tall"], "sliced_plates": [{"id": 1, "warning_message": ""}]}, f)
+        with open(os.path.join(d, "plate_1.statistics.json"), "w") as f:
+            json.dump(STATS, f)
+        r = slicers.results(d)
+        self.assertEqual(r["warnings"], ["Object too tall"])
+        self.assertEqual(r["statistics"]["features"][0]["share%"], 63)
+
+    def test_time(self):
+        self.assertEqual(slicers.fmt_time(3725), "1h 2m 5s")
+        self.assertEqual(slicers.fmt_time(42), "42s")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -63,6 +63,11 @@ def minimal_profiles(settings, folder):
     return out
 
 
+# What the last OrcaSlicer / Bambu Studio slice said beside its G-code
+# (results()): warnings, plate statistics.
+LAST = {}
+
+
 def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=None):
     """Slice stl (a path, or a list of them on one plate) into gcode with the
     named slicer. options (OrcaSlicer and Bambu Studio): orient, arrange
@@ -79,6 +84,7 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
         how = "install PrusaSlicer, or set AGENTLINK_SLICER" if name == "prusaslicer" else f"install it, or set {_EXE[name][0]} to its command line"
         raise FileNotFoundError(f"{name} is not on this computer: {how}. present: {', '.join(k for k, v in present().items() if v) or 'none'}.")
     profiles = profiles or {}
+    LAST.clear()
     if name == "prusaslicer":
         if not profiles.get("config"):
             prusa.slice_stl(stl, gcode, settings, timeout)
@@ -99,6 +105,15 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
     for k in ("machine", "process", "filament"):
         if not os.path.isfile(profiles[k]):
             raise RuntimeError(f"profiles.{k}: {profiles[k]} is not a file.")
+    if options.get("overrides"):
+        # Settings changed for this slice only, over the process preset.
+        with open(profiles["process"], encoding="utf-8") as f:
+            proc = json.load(f)
+        proc.update({k: (v if isinstance(v, (str, list)) else str(v)) for k, v in options["overrides"].items()})
+        p = os.path.join(out_dir, "agentlink-process-overrides.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(proc, f, indent=1)
+        profiles = {**profiles, "process": p}
     three_mf = options.get("project") or os.path.join(out_dir, "out.3mf")
     for old in glob.glob(os.path.join(out_dir, "*.gcode")) + [os.path.join(out_dir, "result.json"), os.path.join(out_dir, "out.3mf")]:
         if os.path.exists(old):
@@ -108,6 +123,8 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
         args += ["--orient", "1"]
     if options.get("arrange") or len(stls) > 1:
         args += ["--arrange", "1"]
+    if name == "orcaslicer" and supports(exe, "--export-statistics"):
+        args += ["--export-statistics"]
     if name == "bambustudio" or options.get("project"):
         # A bare name: OrcaSlicer puts the output folder in front of any path.
         args += ["--export-3mf", "out.3mf"]
@@ -134,7 +151,109 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
         why = result_error(out_dir)
         raise RuntimeError((why + " — " if why else "") + _tail(run))
     shutil.copyfile(found[0], gcode)
+    LAST.update(results(out_dir))
     return exe, used
+
+
+def slice_project(name, threemf, out_dir, timeout=900, export=None):
+    """A project (.3mf) sliced as it stands — its own presets, settings,
+    plates and objects, as the person left them in the slicer's window.
+    export: a .3mf path for the sliced project. Returns (exe, [G-code
+    paths]) and fills LAST."""
+    exe = find(name)
+    if not exe:
+        raise FileNotFoundError(f"{name} is not on this computer.")
+    os.makedirs(out_dir, exist_ok=True)
+    for old in glob.glob(os.path.join(out_dir, "*.gcode")) + glob.glob(os.path.join(out_dir, "plate_*.statistics.json")) + [os.path.join(out_dir, "result.json")]:
+        if os.path.exists(old):
+            os.remove(old)
+    args = [exe, "--slice", "0", "--outputdir", out_dir]
+    if name == "orcaslicer" and supports(exe, "--export-statistics"):
+        args += ["--export-statistics"]
+    if export:
+        args += ["--export-3mf", "sliced.3mf"]
+    args += [os.path.abspath(threemf)]
+    LAST.clear()
+    run = _run(args, timeout, cwd=out_dir)
+    found = sorted(glob.glob(os.path.join(out_dir, "*.gcode")))
+    if export and os.path.isfile(os.path.join(out_dir, "sliced.3mf")):
+        shutil.move(os.path.join(out_dir, "sliced.3mf"), export)
+    if not found:
+        why = result_error(out_dir)
+        raise RuntimeError((why + " — " if why else "") + _tail(run))
+    LAST.update(results(out_dir))
+    return exe, found
+
+
+_HELP = {}
+
+
+def supports(exe, option):
+    """Whether this slicer's command line takes option (its --help, read once)."""
+    if exe not in _HELP:
+        try:
+            r = subprocess.run([exe, "--help"], capture_output=True, text=True, timeout=120)
+            _HELP[exe] = (r.stdout or "") + (r.stderr or "")
+        except Exception:
+            _HELP[exe] = ""
+    return option in _HELP[exe]
+
+
+def fmt_time(sec):
+    sec = int(round(sec or 0))
+    h, m, s = sec // 3600, sec % 3600 // 60, sec % 60
+    return (f"{h}h " if h else "") + (f"{m}m " if h or m else "") + f"{s}s"
+
+
+def statistics(path):
+    """OrcaSlicer's plate_N.statistics.json (2.5 on, --export-statistics),
+    in brief: time, filament and cost, what of it is model, support, prime
+    tower and flush, the features by time, and each object's share."""
+    with open(path, encoding="utf-8") as f:
+        st = json.load(f)
+    sm = st.get("summary") or {}
+    out = {"time": fmt_time(sm.get("time")), "timeS": sm.get("time"), "weightG": sm.get("weight"), "cost": sm.get("filament_cost"),
+           "layers": sm.get("layer_count"), "filamentChanges": sm.get("filament_changes"), "travelMm": sm.get("travel_distance")}
+    split = {}
+    for fil in sm.get("filaments") or []:
+        for part in ("model", "support", "prime_tower", "flush"):
+            w = (fil.get(part) or {}).get("weight")
+            if w:
+                split[part] = round(split.get(part, 0) + w, 3)
+    if split:
+        out["weightBy"] = split
+    feats = sm.get("features") or {}
+    total = sum((v or {}).get("time", 0) for v in feats.values()) or 1
+    out["features"] = [{"feature": k, "time": fmt_time(v.get("time")), "share%": round(100 * v.get("time", 0) / total), "weightG": v.get("weight")}
+                       for k, v in sorted(feats.items(), key=lambda kv: -(kv[1] or {}).get("time", 0))[:8]]
+    objs = st.get("objects")
+    if isinstance(objs, list) and objs:
+        out["objects"] = [{k: o.get(k) for k in ("name", "id", "time", "weight", "volume") if k in o} for o in objs[:20]]
+    elif isinstance(objs, dict) and objs:
+        out["objects"] = [{"name": k, **{kk: vv for kk, vv in (v or {}).items() if kk in ("time", "weight", "volume")}} for k, v in list(objs.items())[:20]]
+    return out
+
+
+def results(out_dir):
+    """What the slicer said beside the G-code: result.json's warnings, and
+    the plate statistics when written."""
+    out = {}
+    try:
+        with open(os.path.join(out_dir, "result.json"), encoding="utf-8") as f:
+            r = json.load(f)
+        warns = [w for w in (r.get("warnings") or []) if w]
+        warns += [p["warning_message"] for p in (r.get("sliced_plates") or []) if p.get("warning_message")]
+        if warns:
+            out["warnings"] = warns
+    except (OSError, ValueError):
+        pass
+    stats = sorted(glob.glob(os.path.join(out_dir, "plate_*.statistics.json")))
+    if stats:
+        try:
+            out["statistics"] = statistics(stats[0])
+        except (OSError, ValueError):
+            pass
+    return out
 
 
 def result_error(out_dir):
