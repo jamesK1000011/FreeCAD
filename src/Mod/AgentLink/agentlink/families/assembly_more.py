@@ -8,6 +8,7 @@
 
 import json
 import math
+import os
 
 import FreeCAD
 import Part
@@ -509,10 +510,109 @@ def tools(session):
 
     asm_ref = {"type": "string", "description": "The assembly's label; may be left out when there is one."}
     end = {"type": "object"}
+    # ---- saved motions and the solver's own file ----
+
+    def motions():
+        return store.read(doc(), "motions", {}) or {}
+
+    def asm_motion(a):
+        action = a.get("action", "list")
+        allm = motions()
+        if action == "list":
+            return {"motions": [{"name": k, "keys": len(v["keys"]), "joints": sorted({j for key in v["keys"] for j in key["poses"]})} for k, v in allm.items()]}
+        name = a.get("name")
+        if not name:
+            raise bad("name: the motion's name.")
+        if action == "delete":
+            allm.pop(name, None)
+            store.write(doc(), "motions", allm)
+            s.snapshot("asm_motion")
+            return {"deleted": name}
+        if action == "save":
+            keys = a.get("keys")
+            if not isinstance(keys, list) or len(keys) < 2 or not all(isinstance(k, dict) for k in keys):
+                raise bad("keys: two or more key poses in order, each { joint: value, … } (degrees or mm from where each joint was made).")
+            asm = A._assembly(doc(), a.get("assembly"))
+            for k in keys:
+                for jn in k:
+                    joint_of(asm, jn)
+            allm[name] = {"assembly": asm.Label, "keys": [{"poses": {j: float(v) for j, v in k.items()}} for k in keys]}
+            store.write(doc(), "motions", allm)
+            s.snapshot("asm_motion")
+            return {"saved": name, "keys": len(keys), "assembly": asm.Label}
+        if action != "play":
+            raise bad("action: save (keys) | play | list | delete.")
+        mo = allm.get(name)
+        if mo is None:
+            raise ToolError("not_found", f"motion {name!r}: asm_motion list names them.")
+        asm = A._assembly(doc(), mo["assembly"])
+        between = int(a.get("steps", 6))
+        frames = []
+        keys = mo["keys"]
+        for i in range(len(keys) - 1):
+            k0, k1 = keys[i]["poses"], keys[i + 1]["poses"]
+            for st in range(between if i < len(keys) - 2 else between + 1):
+                f = st / between
+                frames.append({j: k0.get(j, k1.get(j, 0.0)) + (k1.get(j, k0.get(j, 0.0)) - k0.get(j, k1.get(j, 0.0))) * f for j in set(k0) | set(k1)})
+        start = {}
+        for jn in {j for fr in frames for j in fr}:
+            jo = joint_of(asm, jn)
+            start[jn] = float(getattr(jo, POSE, 0.0)) if POSE in jo.PropertiesList else 0.0
+        out_frames, clash_at = [], []
+        try:
+            for n, fr in enumerate(frames):
+                for jn, v in sorted(fr.items()):
+                    asm_pose({"assembly": asm.Label, "joint": jn, "to": v, "allowOverlap": True})
+                hits, _ = A._overlaps(A._parts(asm), float(a.get("clearance", 0)))
+                row = {"frame": n, "poses": {k: r4(v) for k, v in fr.items()}}
+                if hits:
+                    row["overlaps"] = ["/".join(h["parts"]) for h in hits]
+                    clash_at.append(n)
+                if a.get("placements"):
+                    row["parts"] = {o.Label: A._placement(o) for o in A._parts(asm)}
+                out_frames.append(row)
+        finally:
+            if not a.get("keep"):
+                for jn, v in start.items():
+                    try:
+                        asm_pose({"assembly": asm.Label, "joint": jn, "to": v, "allowOverlap": True})
+                    except ToolError:
+                        pass
+        res = {"motion": name, "frames": len(out_frames), "clashFrames": clash_at, "verdict": "clear" if not clash_at else f"parts overlap in {len(clash_at)} of {len(out_frames)} frames",
+               "frameList": out_frames[: int(a.get("limit", 40))], "left": "at the last frame" if a.get("keep") else "as it was"}
+        if a.get("path"):
+            pth = a["path"] if os.path.isabs(os.path.expanduser(a["path"])) else os.path.join(s.out_dir, a["path"])
+            with open(os.path.expanduser(pth), "w") as f:
+                json.dump({"motion": name, "assembly": asm.Label, "frames": out_frames}, f, indent=1)
+            res["path"] = pth
+        return res
+
+    def asm_export(a):
+        asm = A._assembly(doc(), a.get("assembly"))
+        p = a.get("path") or f"{asm.Label.replace(' ', '_')}.asmt"
+        p = p if os.path.isabs(os.path.expanduser(p)) else os.path.join(s.out_dir, p)
+        p = os.path.expanduser(p)
+        fn = getattr(asm, "exportAsASMT", None)
+        if fn is None:
+            raise ToolError("unavailable", "This FreeCAD's assembly cannot write its solver's file (exportAsASMT is FreeCAD 1.0 and newer).")
+        try:
+            fn(p)
+        except Exception as e:
+            raise ToolError("failed", f"The assembly would not write its solver file: {e}")
+        if not os.path.isfile(p):
+            raise ToolError("failed", "No file came out.")
+        return {"path": p, "bytes": os.path.getsize(p), "format": "OndselSolver .asmt",
+                "note": "The solver's own description of the parts and joints: for OndselSolver or MbD tools, and for reporting a solve problem."}
+
     return [
         Tool("asm_fits", "Fits: for each joint (or joint, or pairs [{ a: { part, element }, b }]), the hole and the shaft it puts together — found as round faces on the joint's axis — their diameters, clearance (minus: interference), engagement length and axis offset; with fit \"H7/g6\" (size: the nominal, else read off the parts) each held to ISO 286: the fit's type and clearance range, each part in or out of its band. Flat faces: their gap and angle. Changes nothing.",
              obj({"assembly": asm_ref, "joint": {"type": "string"}, "pairs": {"type": "array", "items": {"type": "object", "properties": {"a": end, "b": end, "fit": {"type": "string"}, "size": {"type": "number"}}}},
                   "fit": {"type": "string"}, "size": {"type": "number"}}), asm_fits),
+        Tool("asm_motion", "Saved motions of an assembly (a simulation): action save (name, keys: [{ joint: value, … }, …] in order, degrees or mm from where each joint was made) | play (name: steps between keys, 6; clearance; keep: true leaves it at the end; placements: true adds every part's place per frame; path writes the frames as JSON) | list | delete. Play answers each frame's poses and any parts that overlap.",
+             obj({"assembly": asm_ref, "action": {"type": "string", "enum": ["save", "play", "list", "delete"]}, "name": {"type": "string"}, "keys": {"type": "array", "items": {"type": "object"}},
+                  "steps": {"type": "integer"}, "clearance": {"type": "number"}, "keep": {"type": "boolean"}, "placements": {"type": "boolean"}, "path": {"type": "string"}, "limit": {"type": "integer"}}), asm_motion, changes=True),
+        Tool("asm_export", "Write the assembly as its solver's own file (OndselSolver .asmt): path. For other solvers, and for reporting a solve problem.",
+             obj({"assembly": asm_ref, "path": {"type": "string"}}), asm_export),
         Tool("asm_pose", "Move a revolute joint (degrees) or slider / cylindrical one (mm; turn: true turns a cylindrical) and leave it there: to (from where the joint was made), by (from where it is), or home: true. Respects the joint's limits; refused if parts would overlap (allowOverlap: true keeps it).",
              obj({"assembly": asm_ref, "joint": {"type": "string"}, "to": {"type": "number"}, "by": {"type": "number"}, "home": {"type": "boolean"}, "turn": {"type": "boolean"}, "allowOverlap": {"type": "boolean"}}, ["joint"]), asm_pose, changes=True),
         Tool("asm_limits", "A joint's limits, FreeCAD's own: min and max (degrees for revolute, mm for slider; turn: true for a cylindrical's angle); null clears one. asm_sweep sweeps between them when from/to are left out.",
