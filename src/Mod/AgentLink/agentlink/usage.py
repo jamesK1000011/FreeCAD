@@ -96,8 +96,11 @@ def totals(rows, listed=None):
     calls = [r for r in rows if r.get("kind", "call") == "call"]
     by = {}
     for r in calls:
-        b = by.setdefault(r["tool"], {"tool": r["tool"], "calls": 0, "tokens": 0, "imageTokens": 0, "errors": 0, "ms": 0})
+        b = by.setdefault(r["tool"], {"tool": r["tool"], "calls": 0, "tokens": 0, "imageTokens": 0, "errors": 0, "ms": 0, "inChars": 0, "outChars": 0, "maxOut": 0})
         b["calls"] += 1
+        b["inChars"] += r.get("in", 0)
+        b["outChars"] += r.get("out", 0)
+        b["maxOut"] = max(b["maxOut"], r.get("out", 0))
         b["tokens"] += tokens_of(r)
         b["imageTokens"] += r.get("img", 0)
         b["errors"] += 1 if r.get("err") else 0
