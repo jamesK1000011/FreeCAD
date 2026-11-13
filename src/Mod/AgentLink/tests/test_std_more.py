@@ -115,8 +115,19 @@ class StdMore(Base):
         c = self.ok("pd_clone", {"from": "P one", "name": "P clone"})
         self.assertGreater(c["volume"], 900)
         self.ok("pd_body_new", {"name": "P two"})
-        m = self.ok("pd_move_feature", {"feature": feats[1], "to": "P two"})
-        self.assertIn("P sk2", m["moved"])
+        # A pocket moved into an empty body has nothing to cut: refused, and
+        # nothing moved (it used to go, leaving a broken body and saying so).
+        err, e = self.call("pd_move_feature", {"feature": feats[1], "to": "P two"})
+        self.assertTrue(err, e)
+        self.assertIn("breaks", e["error"]["message"])
+        self.assertEqual(len([o for o in self.session.doc.getObjectsByLabel("P two")[0].Group if o.TypeId.startswith("PartDesign::P")]), 0)
+        self.ok("pd_body_new", {"name": "P three"})
+        self.ok("sketch_new", {"body": "P three", "plane": "XY", "name": "P sk3"})
+        self.ok("sketch_add", {"sketch": "P sk3", "items": [{"kind": "rectangle", "center": [0, 0], "size": [5, 5]}]})
+        self.ok("pd_pad", {"sketch": "P sk3", "length": 3})
+        pad3 = next(o.Label for o in self.session.doc.getObjectsByLabel("P three")[0].Group if o.TypeId == "PartDesign::Pad")
+        m = self.ok("pd_move_feature", {"feature": pad3, "to": "P two"})
+        self.assertIn("P sk3", m["moved"])
         del b, pad, pocket
 
     def test_8_shaft(self):

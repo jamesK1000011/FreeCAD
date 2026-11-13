@@ -192,9 +192,12 @@ def tools(s):
             sh = Part.makeShell(faces)
             tol = float(a.get("tolerance", 0.01))
             if not sh.isClosed():
-                sew = Part.Shape(sh)
+                # Sewn from the loose faces (a compound), not from the shell
+                # makeShell already settled: that one kept its gaps.
+                sew = Part.makeCompound([f.copy() for f in faces])
                 _sew(sew, tol)
-                sh = sew if sew.Shells else sh
+                if sew.Shells:
+                    sh = max(sew.Shells, key=lambda x: len(x.Faces))
             if build == "solid":
                 shells = sh.Shells or [sh]
                 if not shells[0].isClosed():

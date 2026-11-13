@@ -342,7 +342,7 @@ def tools(s):
         to = pdc.pd_body(d(), a.get("to"))
         if src is to:
             raise bad(f"{f.Label} is in {to.Label} already.")
-        broken0 = set(pdc.broken(d()))
+        broken0 = {x["object"] for x in pdc.broken(d())}
         moved = [f]
         # A sketch's feature takes its sketch along, as the GUI's Move does.
         prof = getattr(f, "Profile", None)
@@ -364,7 +364,7 @@ def tools(s):
                     if new is not None:
                         setattr(o, sp, [(new, "")])
         d().recompute()
-        new_broken = [x for x in pdc.broken(d()) if x not in broken0]
+        new_broken = [x["object"] for x in pdc.broken(d()) if x["object"] not in broken0]
         if new_broken:
             # Raised inside the tool's transaction: the move is taken back.
             raise ToolError("invalid_state", f"Moving {f.Label} to {to.Label} breaks {', '.join(map(str, new_broken))} — nothing was moved. What it is built on must go with it, or it be rebuilt there.")
@@ -380,7 +380,7 @@ def tools(s):
         target = pdc.in_body(b, a.get(where), what=where) if a.get(where) else None
         if target is None:
             raise bad("after or before: the feature to put it next to.")
-        broken0 = set(pdc.broken(d()))
+        broken0 = {x["object"] for x in pdc.broken(d())}
         tip_was = b.Tip
         b.removeObject(f)
         b.insertObject(f, target, where == "after")
@@ -393,7 +393,7 @@ def tools(s):
         elif tip_was is f:
             b.Tip = f
         d().recompute()
-        new_broken = [x for x in pdc.broken(d()) if x not in broken0]
+        new_broken = [x["object"] for x in pdc.broken(d()) if x["object"] not in broken0]
         if new_broken:
             raise ToolError("invalid_state", f"{f.Label} {where} {target.Label} breaks {', '.join(map(str, new_broken))} — nothing was moved: it uses something that would come after it.")
         s.snapshot("pd_reorder")
