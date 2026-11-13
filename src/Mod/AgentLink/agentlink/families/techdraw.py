@@ -562,21 +562,20 @@ def special_length(v, spec, cache):
     # axo_length: the source's straight edge whose ends land on this one's
     fr = frame_of(v, cache)
     src = source_shapes(v)
-    if fr is None or not src:
+    if fr is None or src is None:
         return None
     a, b = e.Vertexes[0].Point, e.Vertexes[-1].Point
     tol = max(1e-3, 1e-3 * e.Length)
     best = None
-    for sh in src:
-        for ed in sh.Edges:
-            if ed.Curve.__class__.__name__ not in ("Line", "LineSegment") or len(ed.Vertexes) < 2:
-                continue
-            p, q = (to_view(fr, v, x.Point) for x in (ed.Vertexes[0], ed.Vertexes[-1]))
-            d1 = math.hypot(p[0] - a.x, p[1] - a.y) + math.hypot(q[0] - b.x, q[1] - b.y)
-            d2 = math.hypot(p[0] - b.x, p[1] - b.y) + math.hypot(q[0] - a.x, q[1] - a.y)
-            d = min(d1, d2)
-            if d < 4 * tol and (best is None or d < best[0]):
-                best = (d, ed.Length)
+    for ed in src.Edges:
+        if ed.Curve.__class__.__name__ not in ("Line", "LineSegment") or len(ed.Vertexes) < 2:
+            continue
+        p, q = (to_view(fr, v, x.Point) for x in (ed.Vertexes[0], ed.Vertexes[-1]))
+        d1 = math.hypot(p[0] - a.x, p[1] - a.y) + math.hypot(q[0] - b.x, q[1] - b.y)
+        d2 = math.hypot(p[0] - b.x, p[1] - b.y) + math.hypot(q[0] - a.x, q[1] - a.y)
+        d = min(d1, d2)
+        if d < 4 * tol and (best is None or d < best[0]):
+            best = (d, ed.Length)
     return best[1] if best else None
 
 
