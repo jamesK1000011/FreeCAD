@@ -40,6 +40,12 @@ class Checkpoints(Home):
         self.assertIn(15, [e["n"] for e in kept])
         self.assertLessEqual(sum(e["bytes"] for e in kept), 3)
 
+    def test_automatic_ones_do_not_pile_up(self):
+        es = [{"n": i, "name": f"before macro {i}", "auto": True, "bytes": 1} for i in range(1, 30)]
+        kept, dropped = keep.cp_prune(es, cap=10 ** 9)
+        self.assertEqual(len(kept), keep.KEEP_UNNAMED)
+        self.assertEqual(len(dropped), 29 - keep.KEEP_UNNAMED)
+
     def test_add_find_and_files(self):
         e = keep.cp_new("My Doc/1", name="before fillet", step=4, undo=3, tx=7)
         os.makedirs(os.path.dirname(e["file"]), exist_ok=True)

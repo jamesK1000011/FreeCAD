@@ -123,9 +123,11 @@ def cp_add(doc, entry, cap):
 
 def cp_prune(entries, cap, keep=KEEP_UNNAMED):
     """(kept, dropped): unnamed ones past the newest `keep`, then the oldest
-    unnamed while the total is over cap. Named ones stay."""
+    unnamed while the total is over cap. Named ones stay — the person's or
+    the agent's own; the automatic ones ("before restore …") go like
+    unnamed ones."""
     entries = sorted(entries, key=lambda e: e.get("n", 0))
-    unnamed = [e for e in entries if not e.get("name")]
+    unnamed = [e for e in entries if not e.get("name") or e.get("auto")]
     drop = {id(e) for e in unnamed[:-keep]} if len(unnamed) > keep else set()
     total = sum(e.get("bytes", 0) for e in entries if id(e) not in drop)
     for e in unnamed:

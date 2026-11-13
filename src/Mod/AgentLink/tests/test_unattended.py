@@ -270,6 +270,16 @@ class Unattended(Base):
             e = self.refused("view_render", {"view": "iso", "inline": False})
             self.assertIn("takes about", e["message"])
             self.ok("view_render", {"view": "iso", "inline": False})
+            # a heavy change gets a checkpoint first
+            import types
+
+            from agentlink.heavy import Gate
+
+            n = len(keep.cp_index(self.session.doc.Name))
+            Gate(self.session).before(types.SimpleNamespace(name="part_extract", changes=True), {})
+            idx = keep.cp_index(self.session.doc.Name)
+            self.assertEqual(len(idx), n + 1)
+            self.assertEqual(idx[-1]["name"], "before part_extract")
         finally:
             os.environ.pop("AGENTLINK_GATE", None)
             q = keep.queue_state()

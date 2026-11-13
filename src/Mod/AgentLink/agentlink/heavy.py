@@ -96,6 +96,13 @@ class Gate:
             self.offers[key] = now
             rough = keep.estimate(q, tool.name, max(1, size / 4.0)) or est / 4.0
             raise ToolError("invalid_state", f"{tool.name} takes about {_fmt(est)} here at this size (from its past runs on this Mac); a rough pass (a coarser mesh, fewer points) takes about {_fmt(rough)} — run that first? The same call again runs it as asked. Nothing was run.")
+        # A saved copy before a heavy change (A): a crash or a hang in it
+        # loses nothing done before.
+        if tool.changes:
+            try:
+                self.s.checkpoint(f"before {tool.name}", auto=True)
+            except Exception:
+                pass
         self.start = (now, size, _maxrss_mb())
 
     def after(self, tool, args, ok):
