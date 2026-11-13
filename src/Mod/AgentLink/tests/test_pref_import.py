@@ -21,7 +21,11 @@ class PrefImport(Base):
         n.SetBool("NonIntrusiveNotificationsEnabled", True)
         with tempfile.TemporaryDirectory() as d:
             f = os.path.join(d, "old.cfg")
-            FreeCAD.ParamGet("User parameter:").Export(f)
+            with open(f, "w") as fh:
+                fh.write('<?xml version="1.0" encoding="UTF-8"?>\n<FCParameters><FCParamGroup Name="Root"><FCParamGroup Name="BaseApp"><FCParamGroup Name="Preferences">'
+                         '<FCParamGroup Name="AgentLinkTest"><FCInt Name="Changed" Value="7"/><FCInt Name="Added" Value="3"/></FCParamGroup>'
+                         '<FCParamGroup Name="NotificationArea"><FCBool Name="NonIntrusiveNotificationsEnabled" Value="1"/></FCParamGroup>'
+                         '</FCParamGroup></FCParamGroup></FCParamGroup></FCParameters>\n')
             g.SetInt("Changed", 1)
             g.RemInt("Added")
             n.SetBool("NonIntrusiveNotificationsEnabled", False)
@@ -31,9 +35,9 @@ class PrefImport(Base):
             self.assertEqual(g.GetInt("Added"), 3)
             self.assertEqual(g.GetInt("Kept"), 1)
             self.assertFalse(n.GetBool("NonIntrusiveNotificationsEnabled", True))
-            self.assertTrue(os.path.exists(out["backup"]))
+            self.assertEqual(out["groups"], ["BaseApp"])
         finally:
-            if os.path.exists(out["backup"]):
+            if out.get("backup") and os.path.exists(out["backup"]):
                 os.remove(out["backup"])
             FreeCAD.ParamGet("User parameter:BaseApp/Preferences").RemGroup("AgentLinkTest")
             n.RemBool("NonIntrusiveNotificationsEnabled")

@@ -58,6 +58,33 @@ _QUIET = (
 )
 
 
+def _insert_cfg(path):
+    """Merge a settings file into the running settings, group by top-level
+    group (FreeCAD gives no handle on the root itself): its values win."""
+    import tempfile
+
+    top = ET.parse(path).getroot().find("FCParamGroup")
+    if top is None:
+        raise ToolError("invalid_input", path + " is not a FreeCAD settings file.")
+    done = []
+    for g in top.findall("FCParamGroup"):
+        name = g.get("Name")
+        if not name:
+            continue
+        doc = ET.Element("FCParameters")
+        r = ET.SubElement(doc, "FCParamGroup", Name="Root")
+        r.extend(list(g))
+        fd, tmp = tempfile.mkstemp(suffix=".cfg")
+        os.close(fd)
+        try:
+            ET.ElementTree(doc).write(tmp, encoding="utf-8", xml_declaration=True)
+            FreeCAD.ParamGet(ROOT + name).Insert(tmp)
+        finally:
+            os.remove(tmp)
+        done.append(name)
+    return done
+
+
 def _alive(pid):
     try:
         os.kill(int(pid), 0)
@@ -672,14 +699,16 @@ def tools(session):
             raise ToolError("not_found", "No settings file at " + src)
         backup = os.path.join(os.path.expanduser("~"), "AgentLink", "prefs-backup-%d.cfg" % int(time.time()))
         os.makedirs(os.path.dirname(backup), exist_ok=True)
-        root = FreeCAD.ParamGet(ROOT)
-        root.Export(backup)
+        FreeCAD.saveParameter()
+        mine = os.path.join(FreeCAD.getUserConfigDir(), "user.cfg")
+        if os.path.exists(mine):
+            shutil.copy2(mine, backup)
         keep = {}
         for path, name in _KEEP:
             g = FreeCAD.ParamGet(ROOT + path)
             if name in g.GetBools():
                 keep[(path, name)] = g.GetBool(name)
-        root.Insert(src)
+        merged = _insert_cfg(src)
         for (path, name), v in keep.items():
             FreeCAD.ParamGet(ROOT + path).SetBool(name, v)
         FreeCAD.saveParameter()
@@ -693,7 +722,7 @@ def tools(session):
                     if os.path.isfile(os.path.join(old_mac, n)) and not os.path.exists(os.path.join(new_mac, n)):
                         shutil.copy2(os.path.join(old_mac, n), os.path.join(new_mac, n))
                         copied.append(n)
-        return {"from": src, "backup": backup, "kept": {"/".join(k): v for k, v in keep.items()}, "macros": copied, "note": "Merged: the file's values win, this one's other settings stay. Some (theme, toolbars) show after app_restart. pref_import { path: backup } puts this back."}
+        return {"from": src, "groups": merged, "backup": backup if os.path.exists(backup) else None, "kept": {"/".join(k): v for k, v in keep.items()}, "macros": copied, "note": "Merged: the file's values win, this one's other settings stay. Some (theme, toolbars) show after app_restart. pref_import { path: backup } puts this back."}
 
     return [
         Tool("app_install", "Install another FreeCAD release beside this one on a Mac: version (\"1.1.3\", \"latest\") from FreeCAD's GitHub release, SHA-256 checked; the current FreeCAD.app kept as \"FreeCAD <version>.app\". Runs in the background: no arguments reads its progress. Then app_restart { app } switches the window over; with the window closed, open: an .app carries settings over and opens it.",
