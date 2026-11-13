@@ -38,6 +38,12 @@ OPS = {
     "thread": "Path.Op.ThreadMilling",
     "surface": "Path.Op.Surface",
     "waterline": "Path.Op.Waterline",
+    "pocket3d": "Path.Op.Pocket",
+    "tapping": "Path.Op.Tapping",
+    "mill_facing": "Path.Op.MillFacing",
+    "probe": "Path.Op.Probe",
+    "custom": "Path.Op.Custom",
+    "flute": "Path.Op.Flute",
 }
 POSTS = ["grbl", "linuxcnc", "mach3_mach4", "marlin", "smoothie", "centroid", "generic"]
 RAPID = 3000.0  # mm/min, for the time estimate where the machine's is not known
@@ -256,7 +262,7 @@ def tools(session):
             raise ToolError("failed", f"The {kind} would not compute: {e}" + (f" — {HINTS[kind]}." if kind in HINTS else ".") + " Nothing was kept.") from None
 
     def make_op(d, mod, kind, a, job):
-        cls = {"drill": "ObjectDrilling", "helix": "ObjectHelix", "thread": "ObjectThreadMilling"}.get(kind)
+        cls = {"drill": "ObjectDrilling", "helix": "ObjectHelix", "thread": "ObjectThreadMilling", "tapping": "ObjectTapping"}.get(kind)
         if cls and hasattr(mod, cls):
             # FreeCAD 1.0's hole ops look for holes in Create before the op knows
             # its model, and fail; built the way newer releases do.
@@ -322,7 +328,7 @@ def tools(session):
         if kind == "adaptive":
             op.Side = "Inside" if a.get("side", "inside") == "inside" else "Outside"
             op.OperationType = "Profile" if a.get("finish") else "Clearing"
-        if kind in ("drill", "helix", "thread") and a.get("faces") is None:
+        if kind in ("drill", "helix", "thread", "tapping") and a.get("faces") is None:
             op.Proxy.findAllHoles(op)
             if not op.Base:
                 raise ToolError("failed", f"No holes the tool ({_q(job.Tools.Group[0].Tool.Diameter, 'mm')} mm) fits, upright, in {model.Label}: give faces, or a smaller tool (cam_tool). Nothing was kept.")
@@ -877,7 +883,7 @@ def tools(session):
     return [
         Tool("cam_job", "Start a CAM job for a body: the stock round it (stock { margin mm each side, top mm over, bottom mm under }) and the end mill (tool { diameter mm, feed and plunge mm/min, rpm, number }) — ask the person which mill and feeds; the defaults are gentle. Then cam_op.",
              obj({"body": {"type": "string"}, "tool": {"type": "object"}, "stock": {"type": "object"}, "name": {"type": "string"}}, ["tool"]), cam_job, changes=True),
-        Tool("cam_op", "Add an operation to the job and compute it: kind profile (round the outline, side outside|inside), pocket (clear down to the faces given — a pocket's floor), adaptive (adaptive clearing, side inside|outside; finish: true for a finishing pass), face (face the top flat), drill (the holes, every one when faces are left out), engrave (follows base: letters from draft_text, a sketch), helix (holes, helically), slot, deburr (edges chamfered with a V or chamfer tool), vcarve (base letters, a V-bit), thread (thread milling a hole: props ThreadName …), surface / waterline (3D finishing; need OpenCamLib). tool: one of the job's tools by name (cam_tool_add); props { Property: value } sets any of the op's own. stepDown mm, stepOver %, finalDepth mm (z), stockToLeave mm. Returns the cut and rapid lengths, minutes and the depth it reaches; refused with nothing kept when it makes no cutting moves.",
+        Tool("cam_op", "Add an operation to the job and compute it: kind profile (round the outline, side outside|inside), pocket (clear down to the faces given — a pocket's floor), adaptive (adaptive clearing, side inside|outside; finish: true for a finishing pass), face (face the top flat), drill (the holes, every one when faces are left out), engrave (follows base: letters from draft_text, a sketch), helix (holes, helically), slot, deburr (edges chamfered with a V or chamfer tool), vcarve (base letters, a V-bit), thread (thread milling a hole: props ThreadName …), surface / waterline (3D finishing; need OpenCamLib). tool: one of the job's tools by name (cam_tool_add); props { Property: value } sets any of the op's own. stepDown mm, stepOver %, finalDepth mm (z), stockToLeave mm. Returns the cut and rapid lengths, minutes and the depth it reaches; refused with nothing kept when it makes no cutting moves. Also pocket3d (3D pocket down to a floor), tapping (tapped holes, a tap tool), mill_facing, probe (a probe grid), custom (props.Gcode: lines of your own), flute — where this FreeCAD has them.",
              obj({"job": jobref, "kind": {"type": "string", "enum": list(OPS)}, "faces": faces, "tool": {"type": "string"}, "base": {"type": "array", "items": {"type": "string"}}, "props": {"type": "object"}, "body": {"type": "string"}, "side": {"type": "string", "enum": ["outside", "inside"]}, "finish": {"type": "boolean"}, "stepDown": {"type": "number"}, "stepOver": {"type": "number"}, "finalDepth": {"type": "number"}, "stockToLeave": {"type": "number"}, "name": {"type": "string"}}, ["kind"]),
              cam_op, changes=True),
         Tool("cam_list", "The job: stock, tool, each operation with its cut length, minutes and depth, and the total time. Changes nothing.", obj({"job": jobref}), cam_list),

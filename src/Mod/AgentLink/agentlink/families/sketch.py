@@ -287,8 +287,8 @@ def build(item):
             _arc(p0, r, a0 + math.pi, a0 + 2 * math.pi),  # 2 cap at start: inner to outer, bulging back
             _arc(p1, r, a1, a1 + math.pi),  # 3 cap at end: outer to inner
         ]
-        C += [("Coincident", 0, 3, 1, 3), ("Tangent", 2, 1, 1, 1), ("Tangent", 2, 2, 0, 1), ("Tangent", 3, 1, 0, 2), ("Tangent", 3, 2, 1, 2), ("Equal", 2, 3)]
-        D += [("r", ("Radius", 2, r)), ("radius", ("Radius", 0, R + r))]
+        C += [("Coincident", 0, 3, 1, 3), ("Tangent", 2, 1, 1, 1), ("Tangent", 2, 2, 0, 1), ("Tangent", 3, 1, 0, 2), ("Tangent", 3, 2, 1, 2)]
+        D += [("width", ("Radius", 2, r)), ("radius", ("Radius", 0, R + r))]
         return G, C, D
     if k == "bspline":
         pts = [pc.vec2(p, "points[]") for p in item.get("points") or []]

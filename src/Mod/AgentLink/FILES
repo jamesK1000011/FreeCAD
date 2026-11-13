@@ -32,6 +32,7 @@ agentlink/families/assembly_more.py
 agentlink/families/bim.py
 agentlink/families/bim_more.py
 agentlink/families/cam.py
+agentlink/families/cam_more.py
 agentlink/families/code.py
 agentlink/families/cut.py
 agentlink/families/doc.py
@@ -151,6 +152,7 @@ tests/_pd_base.py
 tests/test_assembly.py
 tests/test_assembly_more.py
 tests/test_cam.py
+tests/test_cam_more.py
 tests/test_ccx_io_more.py
 tests/test_cells.py
 tests/test_charts.py

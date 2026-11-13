@@ -84,7 +84,12 @@ def tools(s):
         act = a.get("action")
         if act in ("import", "import_all"):
             links = [o for o in d().Objects if o.TypeId.startswith("App::Link")] if act == "import_all" else objs(a.get("links"), "links")
-            outside = [o for o in links if getattr(o, "LinkedObject", None) is not None and o.LinkedObject.Document is not d()]
+
+            def target(o):
+                t = getattr(o, "LinkedObject", None)
+                return t[0] if isinstance(t, tuple) else t
+
+            outside = [o for o in links if target(o) is not None and target(o).Document is not d()]
             if not outside:
                 return {"imported": [], "note": "No link here points into another document."}
             got = d().importLinks(outside)
@@ -100,7 +105,7 @@ def tools(s):
             return done("link_edit", {"link": lk.Label, "now": to.Label})
         if act == "unlink":
             # A real copy in the link's place, keeping its placement.
-            src = lk.LinkedObject
+            src = lk.LinkedObject[0] if isinstance(lk.LinkedObject, tuple) else lk.LinkedObject
             if src is None:
                 raise ToolError("invalid_state", f"{lk.Label} links to nothing.")
             o = d().addObject("Part::Feature", "Body")
