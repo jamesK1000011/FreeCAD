@@ -55,6 +55,7 @@ NAMES = [
     "robot",
     "std_more",
     "cam_more",
+    "bim_gaps",
 ]
 
 

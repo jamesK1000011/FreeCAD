@@ -134,6 +134,13 @@ def tools(s):
     def object_duplicate(a):
         out = []
         for o in objs(a.get("objects")):
+            if a.get("simple"):
+                # Part's Simple copy: the shape alone, no history.
+                c = d().addObject("Part::Feature", "Copy")
+                c.Shape = Part.getShape(o)
+                c.Label = s.unique(a.get("name") or f"{o.Label} copy")
+                out.append({"from": o.Label, "copy": c.Label, "simple": True})
+                continue
             c = d().copyObject(o, bool(a.get("dependencies")))
             c.Label = s.unique(a.get("name") or f"{o.Label} copy")
             out.append({"from": o.Label, "copy": c.Label})
@@ -586,8 +593,8 @@ def tools(s):
              obj({"action": {"type": "string", "enum": ["replace", "unlink", "import", "import_all"]}, "link": st, "links": arr, "to": st, "name": st}, ["action"]), link_edit, changes=True),
         Tool("part_container", "An App::Part container holding objects, moved together by its placement (Std Part).",
              obj({"objects": arr, "at": v3, "axis": v3, "angle": num, "name": st}), part_container, changes=True),
-        Tool("object_duplicate", "Copy objects in the document; dependencies: true copies what each is built from too.",
-             obj({"objects": arr, "dependencies": {"type": "boolean"}, "name": st}, ["objects"]), object_duplicate, changes=True),
+        Tool("object_duplicate", "Copy objects in the document; dependencies: true copies what each is built from too; simple: true copies the shape alone (no history).",
+             obj({"objects": arr, "dependencies": {"type": "boolean"}, "simple": {"type": "boolean"}, "name": st}, ["objects"]), object_duplicate, changes=True),
         Tool("doc_merge", "Bring another .FCStd's objects into this document (Merge document).", obj({"path": st}, ["path"]), doc_merge, changes=True),
         Tool("doc_info", "The document's information: author, company, comment, license, licenseUrl, label — given ones are set; created and modified dates, file, size.",
              obj({k: st for k in ("author", "company", "comment", "license", "licenseUrl", "lastModifiedBy", "label")}), doc_info),

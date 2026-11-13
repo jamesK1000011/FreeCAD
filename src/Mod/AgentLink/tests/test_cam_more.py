@@ -70,14 +70,19 @@ class CamMore(unittest.TestCase):
         self.assertIn("ToolController", json.dumps(data))
 
     def test_3_newer_ops(self):
+        floor = [{"normal": [0, 0, 1], "near": [30, 20, 12]}]
         for kind in ("pocket3d", "mill_facing", "probe", "custom"):
             args = {"kind": kind}
             if kind == "custom":
                 args["props"] = {"Gcode": ["(hello)", "G0 Z10"]}
+            if kind == "pocket3d":
+                args["faces"] = floor
             err, out = self.call("cam_op", args)
             print(f"\ncam_op {kind}:", json.dumps(out)[:300])
             if err:
-                self.assertIn(out["error"]["code"], ("unavailable", "failed"), out)
+                self.assertEqual(out["error"]["code"], "unavailable", out)
+            elif kind == "custom":
+                self.assertIn("G0 Z10", " ".join(out["first"]))
 
 
 @unittest.skipUnless(HAVE, "FreeCAD is not importable here")

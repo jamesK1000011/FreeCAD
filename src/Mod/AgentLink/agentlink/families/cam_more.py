@@ -139,7 +139,7 @@ def tools(s):
             nm, kind = p.get("name"), p.get("type", "Float")
             if not nm:
                 raise bad("properties: [{ name, type (Float, Length, Angle, Integer, String, Bool), value }].")
-            bag.Proxy.addCustomProperty(bag, f"App::Property{kind}", nm, p.get("group", "Custom"), p.get("info", ""))
+            bag.Proxy.addCustomProperty(f"App::Property{kind}", nm, p.get("group", "Custom"), p.get("info", ""))
             if "value" in p:
                 setattr(bag, nm, p["value"])
         d().recompute()

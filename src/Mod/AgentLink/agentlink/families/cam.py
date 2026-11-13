@@ -344,6 +344,12 @@ def tools(session):
         d.recompute()
         cmds = list(op.Path.Commands) if getattr(op, "Path", None) is not None else []
         moves = [c for c in cmds if c.Name.upper() in ("G1", "G2", "G3", "G01", "G02", "G03") + CYCLES]
+        if kind in ("probe", "custom"):
+            # Not cuts: a probe's G38 touches, custom's own lines.
+            out = {"op": op.Label, "kind": kind, "job": job.Label, "commands": len(cmds), "first": [c.toGCode() for c in cmds[:8]]}
+            if not cmds:
+                raise ToolError("failed", f"The {kind} made no G-code: " + ("props.Gcode — its lines." if kind == "custom" else "props PointCountX / PointCountY / OutputFileName.") + " Nothing was kept.")
+            return out
         if not moves:
             raise ToolError("failed", f"The {kind} made no cutting moves: {'the faces are not ones it can cut' if a.get('faces') is not None else 'nothing found to cut — give faces'}; or the tool ({_q(job.Tools.Group[0].Tool.Diameter, 'mm')} mm) is too big for them. Nothing was kept.")
         out = {"op": op.Label, "kind": kind, "job": job.Label, **path_stats(cmds, op.ToolController),
