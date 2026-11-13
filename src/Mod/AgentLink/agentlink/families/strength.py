@@ -941,9 +941,7 @@ def tools(session):
 
     def fea_clear(a):
         had = _study(s.doc) is not None
-        m = dict(s.doc.Meta or {})
-        m.pop(store.KEY + KEY, None)
-        s.doc.Meta = m
+        store.remove(s.doc, KEY)
         s._agentlink_fea = None
         s.snapshot("fea_clear")
         return {"cleared": had}

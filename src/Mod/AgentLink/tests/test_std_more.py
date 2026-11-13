@@ -201,9 +201,14 @@ class StdMore(Base):
         u = self.ok("units_convert", {"value": "2 in", "to": "mm"})
         self.assertAlmostEqual(u["result"], 50.8, places=6)
         self.assertIn("different", self.refused("units_convert", {"value": "2 in", "to": "kg"})["message"])
-        fr = self.ok("object_freeze", {"objects": ["G base"]})
-        self.assertEqual(fr.get("frozen"), ["G base"])
-        self.ok("object_freeze", {"objects": ["G base"], "frozen": False})
+        import FreeCAD
+
+        if FreeCAD.GuiUp:
+            fr = self.ok("object_freeze", {"objects": ["G base"]})
+            self.assertEqual(fr.get("frozen"), ["G base"])
+            self.ok("object_freeze", {"objects": ["G base"], "frozen": False})
+        else:
+            self.assertEqual(self.refused("object_freeze", {"objects": ["G base"]})["code"], "unavailable")
         sk = self.ok("object_freeze", {"skipRecompute": True})
         self.assertTrue(sk["skipRecompute"])
         self.ok("object_freeze", {"skipRecompute": False})

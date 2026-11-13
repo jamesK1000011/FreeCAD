@@ -120,6 +120,7 @@ agentlink/guides/view.md
 agentlink/hull3d.py
 agentlink/install_job.py
 agentlink/iso286.py
+agentlink/keep.py
 agentlink/kicad.py
 agentlink/launcher_check.py
 agentlink/meshdist.py
@@ -188,6 +189,7 @@ tests/test_guides.py
 tests/test_hull3d.py
 tests/test_inspection.py
 tests/test_iso286.py
+tests/test_keep.py
 tests/test_licence_boundary.py
 tests/test_mass.py
 tests/test_material.py
@@ -223,6 +225,7 @@ tests/test_theme.py
 tests/test_thread.py
 tests/test_threemf.py
 tests/test_tools.py
+tests/test_unattended.py
 tests/test_usage.py
 tests/test_view.py
 tests/test_wall_readers.py

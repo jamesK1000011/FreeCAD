@@ -662,24 +662,30 @@ def tools(s):
             out["skipRecompute"] = bool(dd.RecomputesFrozen)
         if a.get("objects"):
             want = bool(a.get("frozen", True))
-            done_, cant = [], []
-            for o in objs(a["objects"]):
-                ok = False
+            targets = objs(a["objects"])
+            # FreeCAD has no Python door to freezing: only the window's
+            # command (Std_ToggleFreeze) sets it, on the selection.
+            if not getattr(FreeCAD, "GuiUp", False):
+                raise ToolError("unavailable", "Freezing objects works only through the FreeCAD window (FreeCAD gives no headless way): the window's link does it when it answers. skipRecompute works here.")
+            import FreeCADGui
+
+            def frozen(o):
                 try:
-                    o.setStatus("Freeze", want)
-                    ok = True
+                    return o.getStatusString() == "Freezed"
                 except Exception:
-                    try:
-                        (o.freeze if want else o.unfreeze)()
-                        ok = True
-                    except Exception:
-                        ok = False
-                (done_ if ok else cant).append(o.Label)
-            if cant and not done_:
-                raise ToolError("unavailable", "This FreeCAD cannot freeze objects (1.0 and newer can).")
-            out["frozen" if want else "unfrozen"] = done_
-            if cant:
-                out["not"] = cant
+                    return False
+
+            flip = [o for o in targets if frozen(o) != want]
+            if flip:
+                FreeCADGui.Selection.clearSelection()
+                for o in flip:
+                    FreeCADGui.Selection.addSelection(o)
+                FreeCADGui.runCommand("Std_ToggleFreeze", 0)
+                FreeCADGui.Selection.clearSelection()
+            out["frozen" if want else "unfrozen"] = [o.Label for o in targets if frozen(o) == want]
+            miss = [o.Label for o in targets if frozen(o) != want]
+            if miss:
+                out["not"] = miss
             out["note"] = "A frozen object keeps its shape through recomputes until unfrozen." if want else "Unfrozen: recompute brings them up to date."
         if not out:
             raise bad("objects (frozen: true | false) and/or skipRecompute: true | false.")

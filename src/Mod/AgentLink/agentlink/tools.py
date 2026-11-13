@@ -12,19 +12,32 @@
 
 import math
 import os
+import shutil
 import sys
+import tempfile
+import time
 
 import FreeCAD
 import Part
 
 from . import geometry as geo
-from . import fits_hw, gridfinity, printability, slicer, store
+from . import fits_hw, gridfinity, keep, printability, slicer, store
 from . import printmass
 from .protocol import Tool, ToolError
 
 DENSITY = {"pla": 1.24, "petg": 1.27, "abs": 1.04, "asa": 1.07, "pa6-cf": 1.12, "tpu-95a": 1.21}
 NDFEB = 7.5  # g/cm³, the magnets
 LINE = 0.42  # mm, one extrusion line of a 0.4 mm nozzle
+
+
+# Changing tools a macro does not replay: the session's own bookkeeping,
+# files and settings, the person's calls.
+NOT_IN_MACROS = {
+    "history_undo", "history_redo", "history_checkpoint", "history_restore", "batch", "doc_save", "doc_save_all", "doc_close",
+    "doc_revert", "app_restart", "app_install", "agentlink_update", "app_extensions", "app_recover", "pref_set", "pref_reset",
+    "pref_import", "pref_pack", "pref_rollback", "macro_save", "macro_run", "macro_approve", "macro_unapprove", "addon",
+    "note_add", "note_answer", "note_delete", "note_done", "dialog_answer", "queue_go", "doc_switch", "cmd_run", "menu_run",
+}
 
 
 def obj(props, required=()):
@@ -52,12 +65,23 @@ class Session:
         self.out_dir = out_dir or os.getcwd()
         self.steps = []  # [{step, tool, bodies: {name: stats}}]
         self.meta = {}  # body name -> {encased: …, generator: …}
+        # Undo steps made in this document so far (undo takes one back,
+        # redo adds one): how a checkpoint knows whether the undo stack
+        # still reaches it (unattended use, A).
+        self.tx = 0
+        # The changing calls, in order, for macro_save (J).
+        self.calls = []
+        # Documents this session changed: app_restart saves these (L).
+        self.agent_docs = set()
+        self.t0 = time.time()
+        self._autosaved = {}
 
     # ---- every change one undo step ----
 
     def execute(self, tool, fn):
         if not tool.changes:
             return fn()
+        start = self.doc
         self.doc.openTransaction(tool.name)
         try:
             out = fn()
@@ -65,7 +89,131 @@ class Session:
             self.doc.abortTransaction()
             raise
         self.doc.commitTransaction()
+        if self.doc is start:
+            self.tx += 1
+        try:
+            self.agent_docs.add(self.doc.Name)
+        except Exception:
+            pass
+        self.after_change()
         return out
+
+    def record_call(self, tool, args):
+        """A changing call that went through, for macro_save."""
+        if tool.changes and tool.name not in NOT_IN_MACROS:
+            import copy
+
+            self.calls.append({"tool": tool.name, "args": copy.deepcopy(args), "tx": self.tx, "step": len(self.steps)})
+            del self.calls[:-2000]
+
+    # ---- saved copies: checkpoints and auto-save (unattended use, A and C) ----
+
+    @staticmethod
+    def undo_limit():
+        try:
+            return int(FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Document").GetInt("MaxUndoSize", 20)) or 20
+        except Exception:
+            return 20
+
+    def checkpoint(self, name=None, auto=False):
+        """A copy of the document as it is now, under ~/AgentLink/checkpoints:
+        the person's own file is never touched. (entry, dropped)"""
+        d = self.doc
+        e = keep.cp_new(d.Name, name, step=len(self.steps), undo=d.UndoCount, tx=self.tx, auto=auto)
+        e.update({"label": d.Label, "fileName": d.FileName or "", "session": id(self)})
+        os.makedirs(os.path.dirname(e["file"]), exist_ok=True)
+        d.saveCopy(e["file"])
+        cap_mb = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/AgentLink").GetInt("CheckpointCapMB", 0)
+        dropped = keep.cp_add(d.Name, e, keep.cap_bytes(keep.free_bytes(keep.cp_dir(d.Name)), cap_mb))
+        self.checkpoints[e["id"]] = e
+        return e, dropped
+
+    def find_checkpoint(self, ref):
+        if ref is None or ref == "":
+            return None
+        return self.checkpoints.get(ref) or keep.cp_find(self.doc.Name, ref)
+
+    def reopen_copy(self, src, why):
+        """Put a saved copy in place of the document, under its own name,
+        label and file: the session goes on with its steps and checkpoints."""
+        d = self.doc
+        name, label, fname = d.Name, d.Label, d.FileName or ""
+        tmpd = tempfile.mkdtemp(prefix="agentlink-restore-")
+        tmp = os.path.join(tmpd, name + ".FCStd")
+        shutil.copy2(src, tmp)
+        keep_state = (self.checkpoints, self.steps, self.meta, self.tx, self.calls, self.family_state)
+        FreeCAD.closeDocument(name)
+        nd = FreeCAD.openDocument(tmp)
+        nd.Label = label
+        restored_file = True
+        if fname:
+            try:
+                nd.FileName = fname
+                restored_file = nd.FileName == fname
+            except Exception:
+                restored_file = False
+        self.switch(nd)
+        self.checkpoints, self.steps, self.meta, self.tx, self.calls, self.family_state = keep_state
+        self.tx = 0  # a fresh undo stack
+        self.saved_as = getattr(self, "saved_as", {})
+        if fname and not restored_file:
+            self.saved_as[nd.Name] = fname
+        try:
+            nd.recompute()
+        except Exception:
+            pass
+        return {"document": nd.Name, "label": nd.Label, "file": fname or None, "savedAs": None if restored_file else fname}
+
+    def restore(self, ref):
+        cp = self.find_checkpoint(ref)
+        if not cp:
+            known = [e["id"] + (f" ({e['name']})" if e.get("name") else "") for e in keep.cp_index(self.doc.Name)]
+            raise ToolError("not_found", f"checkpoint {ref!r}: {'the checkpoints: ' + ', '.join(known) if known else 'none for this document'} — history_checkpoint takes one.")
+        d = self.doc
+        if cp.get("session") == id(self) and keep.can_undo_back(cp, self.tx, d.UndoCount, self.undo_limit()):
+            names = []
+            while self.tx > int(cp.get("tx", 0)) and d.UndoCount > 0:
+                names.append(d.UndoNames[0])
+                d.undo()
+                self.tx -= 1
+            d.recompute()
+            self.snapshot("history_restore")
+            return {"done": "restore", "checkpoint": cp["id"], "how": "undo", "steps": names, "redo": "history_redo takes them back"}
+        if not os.path.isfile(cp.get("file", "")):
+            raise ToolError("not_found", f"{cp['id']}'s saved copy is gone ({cp.get('file')}).")
+        before, _ = self.checkpoint(f"before restore {cp['id']}", auto=True)
+        out = self.reopen_copy(cp["file"], "restore")
+        self.snapshot("history_restore")
+        return {"done": "restore", "checkpoint": cp["id"], "how": "file", **out, "before": before["id"],
+                "note": f"Reopened from its saved copy (past the undo stack's reach). history_restore {{ checkpoint: {before['id']} }} goes back to how it was."}
+
+    def autosave_now(self):
+        d = self.doc
+        keep.set_saving(True)
+        try:
+            f = keep.autosave_file(d.Name)
+            os.makedirs(os.path.dirname(f), exist_ok=True)
+            d.saveCopy(f)
+            keep._save(os.path.join(keep.autosave_dir(d.Name), "about.json"), {"label": d.Label, "fileName": d.FileName or "", "t": time.time()})
+            keep.autosave_prune(d.Name)
+        finally:
+            keep.set_saving(False)
+        self._autosaved[d.Name] = (time.time(), self.tx)
+        return f
+
+    def after_change(self):
+        """After a change: an auto-save copy when 5 minutes or 10 changes
+        have passed since the last (C). Never fails the call."""
+        try:
+            d = self.doc
+            last_t, last_tx = self._autosaved.get(d.Name, (self.t0, 0))
+            if keep.autosave_due(last_t, last_tx, time.time(), self.tx):
+                self.autosave_now()
+        except Exception as e:
+            try:
+                FreeCAD.Console.PrintWarning(f"Agent Link: auto-save skipped: {e}\n")
+            except Exception:
+                pass
 
     # ---- the document ----
 
@@ -77,13 +225,18 @@ class Session:
             return False
 
     def bodies(self):
+        return self.bodies_in(self.doc)
+
+    @classmethod
+    def bodies_in(cls, doc):
         """The parts: solid objects that nothing else is built from (a
         PartDesign Body, not its features; a boolean's result, not its
         inputs) and that are shown. A folder or a spreadsheet using one
         does not count."""
+        self = cls
         passive = ("App::DocumentObjectGroup", "Spreadsheet::Sheet", "App::Part", "Assembly::AssemblyObject", "Assembly::JointGroup")
         out = []
-        for o in self.doc.Objects:
+        for o in doc.Objects:
             if not self._solid(o):
                 continue
             # Built into another solid (a boolean, the next feature): not a
@@ -112,6 +265,8 @@ class Session:
         self.family_state = {}
         self.steps = []
         self.meta = {}
+        self.tx = 0
+        self.calls = []
 
     def body(self, ref):
         # Named, any solid object answers (a hidden one, a feature); left
@@ -618,15 +773,47 @@ class Session:
             verify = {"triangles": back.CountFacets, "volume": round(back.Volume, 1), "closed": back.isSolid()}
         return {"body": o.Label, "format": fmt, "path": path, "bytes": os.path.getsize(path), "verify": verify}
 
+    def _bodies_in_file(self, path):
+        """Each body's stats in a saved copy, opened hidden and closed."""
+        try:
+            nd = FreeCAD.openDocument(path, True)
+        except TypeError:
+            nd = FreeCAD.openDocument(path)
+        try:
+            nd.recompute()
+            return {o.Label: geo.stats(o.Shape) for o in self.bodies_in(nd)}
+        finally:
+            FreeCAD.closeDocument(nd.Name)
+
     def history_diff(self, a):
+        since = a.get("since")
+        if isinstance(since, str) and not since.isdigit():
+            cp = self.find_checkpoint(since)
+            if not cp:
+                raise ToolError("not_found", f"since {since!r}: no such checkpoint — history_checkpoint {{ list: true }} lists them.")
+            last = len(self.steps)
+            if cp.get("session") == id(self) and int(cp.get("step", -1)) <= last and last:
+                since = int(cp["step"])
+                if since == last:
+                    return {"since": cp["id"], "changed": False, "bodies": {}, "steps": []}
+            else:
+                before = self._bodies_in_file(cp["file"])
+                now = {o.Label: geo.stats(o.Shape) for o in self.bodies()}
+                changed = self._changed(before, now)
+                return {"since": cp["id"], "from": "its saved copy", "changed": bool(changed), "bodies": changed}
         if not self.steps:
             return {"changed": False, "note": "Nothing changed yet in this session."}
         last = len(self.steps)
-        since = a.get("since", last - 1)
+        since = last - 1 if since is None else (int(since) if isinstance(since, str) else since)
         if not isinstance(since, int) or not (0 <= since < last):
-            raise ToolError("invalid_input", f"since: a step from 0 to {last - 1} (session_state gives the step now).")
+            raise ToolError("invalid_input", f"since: a step from 0 to {last - 1} (session_state gives the step now), or a checkpoint (cp3 or its name).")
         before = self.steps[since - 1]["bodies"] if since > 0 else {}
         now = self.steps[-1]["bodies"]
+        changed = self._changed(before, now)
+        return {"since": since, "to": last, "changed": bool(changed), "bodies": changed, "steps": [s["tool"] for s in self.steps[since:]]}
+
+    @staticmethod
+    def _changed(before, now):
         changed = {}
         for name in sorted(set(before) | set(now)):
             b, n = before.get(name), now.get(name)
@@ -638,7 +825,7 @@ class Session:
                 changed[name] = {"removed": True}
             else:
                 changed[name] = {k: {"from": b[k], "to": n[k]} for k in n if b.get(k) != n[k]}
-        return {"since": since, "to": last, "changed": bool(changed), "bodies": changed, "steps": [s["tool"] for s in self.steps[since:]]}
+        return changed
 
 
 MAGNET_T_MM = gridfinity.MAGNET_T
@@ -765,7 +952,7 @@ def make_tools(session):
             s.export_file,
             changes=True,
         ),
-        Tool("history_diff", "What changed since a step (the one before the last by default): per body its volume, area, faces, solids and size from and to, and the steps between.", obj({"since": {"type": "integer"}}), s.history_diff),
+        Tool("history_diff", "What changed since a step (the one before the last by default) or a checkpoint (cp3 or its name — read from its saved copy when it is older than this session): per body its volume, area, faces, solids and size from and to, and the steps between.", obj({"since": {"type": ["integer", "string"]}}), s.history_diff),
     ]
 
 
@@ -904,6 +1091,7 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
 
     server = Server(name, version, tools, instructions(lean, window), run=session.execute, groups=set(LEAN) if lean else None, resources=Resources(session),
                     guard=lambda tool, args: paths.guard(tool, args, session.out_dir))
+    server.on_call = session.record_call
     from . import usage
 
     if os.environ.get("AGENTLINK_USAGE", "on") != "off":
@@ -1078,6 +1266,9 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
                     while undone < made and start.UndoCount > 0:
                         start.undo()
                         undone += 1
+                    if s.doc is start:
+                        s.tx = max(0, s.tx - undone)
+                        s.calls = [x for x in s.calls if x["tx"] <= s.tx]
                     start.recompute()
                     if s.doc is start:
                         s.snapshot("batch rolled back")
@@ -1099,6 +1290,7 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
                     if d.UndoCount == 0:
                         break
                     d.undo()
+                    s.tx = max(0, s.tx - 1)
             elif action == "redo":
                 n = int(a.get("steps", 1))
                 names = list(d.RedoNames)[:n]
@@ -1106,18 +1298,23 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
                     if d.RedoCount == 0:
                         break
                     d.redo()
+                    s.tx += 1
             elif action == "checkpoint":
-                cid = f"cp{len(s.checkpoints) + 1}"
-                s.checkpoints[cid] = {"undo": d.UndoCount, "step": len(s.steps)}
-                return {"checkpoint": cid, "undoCount": d.UndoCount, "step": len(s.steps)}
+                if a.get("list"):
+                    return {"document": d.Label, "checkpoints": [
+                        {"checkpoint": e["id"], **({"name": e["name"]} if e.get("name") else {}), "time": keep.stamp(e.get("t")), "bytes": e.get("bytes"),
+                         **({"auto": True} if e.get("auto") else {})} for e in keep.cp_index(d.Name)]}
+                name = a.get("name")
+                if name is not None and (not isinstance(name, str) or not name.strip() or len(name) > 60):
+                    raise ToolError("invalid_input", "name: a short name for the checkpoint (60 characters at most).")
+                e, dropped = s.checkpoint(name)
+                out = {"checkpoint": e["id"], **({"name": name} if name else {}), "step": e["step"], "file": e["file"], "bytes": e["bytes"],
+                       "note": "A saved copy: history_restore comes back to it even past the undo stack, or after FreeCAD restarts."}
+                if dropped:
+                    out["dropped"] = [x["id"] for x in dropped]
+                return out
             elif action == "restore":
-                cp = s.checkpoints.get(a.get("checkpoint"))
-                if not cp:
-                    raise ToolError("not_found", f"checkpoint {a.get('checkpoint')!r}: the checkpoints are {', '.join(s.checkpoints) or 'none'} — history_checkpoint takes one.")
-                names = []
-                while d.UndoCount > cp["undo"]:
-                    names.append(d.UndoNames[0])
-                    d.undo()
+                return s.restore(a.get("checkpoint"))
             d.recompute()
             s.snapshot(f"history_{action}")
             return {"done": action, "steps": names, "undoCount": d.UndoCount, "redoCount": d.RedoCount, "bodies": [o.Label for o in s.bodies()]}
@@ -1132,8 +1329,9 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         Tool("batch", "Run several tools in one call, in order: calls [{ tool, arguments }]. The first refused stops the rest (stopOnError: false runs them all), and with rollback (the default) undoes what the batch changed before it, so it stands or falls whole.", obj({"calls": {"type": "array", "items": {"type": "object"}}, "rollback": {"type": "boolean"}, "stopOnError": {"type": "boolean"}}, ["calls"]), batch),
         Tool("history_undo", "Undo the last change (steps: how many), as FreeCAD's Edit › Undo does.", obj({"steps": {"type": "integer"}}), history("undo")),
         Tool("history_redo", "Redo what was undone (steps: how many).", obj({"steps": {"type": "integer"}}), history("redo")),
-        Tool("history_checkpoint", "Mark the session now, to come back to with history_restore or measure from with history_diff { since: its step }.", obj({}), history("checkpoint")),
-        Tool("history_restore", "Undo every change since a checkpoint.", obj({"checkpoint": {"type": "string"}}, ["checkpoint"]), history("restore")),
+        Tool("history_checkpoint", "Save a copy of the document now (name: optional; named ones are kept), to come back to with history_restore or measure from with history_diff { since } — past FreeCAD's 20-step undo and across restarts. list: true lists this document's checkpoints. The person's file is never touched.",
+             obj({"name": {"type": "string"}, "list": {"type": "boolean"}}), history("checkpoint")),
+        Tool("history_restore", "Go back to a checkpoint (its id, cp3, or its name): by undo while the stack reaches it, else by reopening its saved copy (the state before is checkpointed first, so a restore can be undone the same way).", obj({"checkpoint": {"type": "string"}}, ["checkpoint"]), history("restore")),
     ]
     for t in core:
         t.group = "core"

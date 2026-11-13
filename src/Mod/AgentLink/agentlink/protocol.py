@@ -201,6 +201,8 @@ class Server:
         self.outbox = []
         # What the calls cost the agent (usage.Meter), when one is kept.
         self.meter = None
+        # Told of each call that went through: on_call(tool, args).
+        self.on_call = None
 
     def add(self, tool):
         self.tools[tool.name] = tool
@@ -286,6 +288,11 @@ class Server:
             if self.guard is not None:
                 self.guard(tool, args)
             out = self.run(tool, lambda: tool.fn(args))
+            if self.on_call is not None:
+                try:
+                    self.on_call(tool, args)
+                except Exception:
+                    pass
         except ToolError as e:
             return self.refusal(e.code, e.message)
         except ValueError as e:
