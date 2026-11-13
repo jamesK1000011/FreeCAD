@@ -178,6 +178,8 @@ class Server:
         self.guard = guard
         # Notifications to send after the reply in hand (list_changed).
         self.outbox = []
+        # What the calls cost the agent (usage.Meter), when one is kept.
+        self.meter = None
 
     def add(self, tool):
         self.tools[tool.name] = tool
@@ -207,6 +209,8 @@ class Server:
                 result = {}
             elif method == "tools/list":
                 result = {"tools": [t.listing() for t in self.listed()]}
+                if self.meter is not None:
+                    self.meter.list(result["tools"], self.instructions)
             elif method == "resources/list" and self.resources:
                 result = {"resources": self.resources.list()}
             elif method == "resources/read" and self.resources:
@@ -222,6 +226,25 @@ class Server:
         return None if mid is None else {"jsonrpc": "2.0", "id": mid, "result": result}
 
     def call(self, params):
+        t0 = time.time()
+        result = self._call(params)
+        if self.meter is not None:
+            try:
+                content = result.get("content") or []
+                text = "".join(c.get("text", "") for c in content if c.get("type") == "text")
+                img = next((c for c in content if c.get("type") == "image"), None)
+                import base64
+
+                data = base64.b64decode(img["data"][:64]) if img else None
+                err = None
+                if result.get("isError"):
+                    err = (json.loads(text).get("error") or {}).get("code", "error")
+                self.meter.call(str(params.get("name")), compact(params.get("arguments") or {}), text, data, err, (time.time() - t0) * 1000)
+            except Exception:
+                pass
+        return result
+
+    def _call(self, params):
         name = params.get("name")
         args = params.get("arguments") or {}
         tool = self.tools.get(name)

@@ -145,6 +145,7 @@ agentlink/supervise.py
 agentlink/threads_table.py
 agentlink/threemf.py
 agentlink/tools.py
+agentlink/usage.py
 agentlink/views.py
 agentlink_headless.py
 agentlink_state.py
@@ -211,6 +212,7 @@ tests/test_theme.py
 tests/test_thread.py
 tests/test_threemf.py
 tests/test_tools.py
+tests/test_usage.py
 tests/test_view.py
 tests/test_wall_readers.py
 tests/test_window_route.py
