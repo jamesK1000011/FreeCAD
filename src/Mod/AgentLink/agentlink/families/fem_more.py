@@ -120,10 +120,20 @@ def tools(s):
             qs = qs if isinstance(qs, list) else [qs]
             names = list(dict.fromkeys(n for q in qs for n, _ in facepick.pick(o.Shape, q, "refs.faces")))
             return [(o, tuple(names))]
+        import re
+
         for x in r:
+            m = re.match(r"^(.*)\.(Solid\d+)$", str(x))
+            if m:
+                head, sub = m.group(1), m.group(2)
+                o = picks.shaped(d(), head)
+                if not 1 <= int(sub[5:]) <= len(o.Shape.Solids):
+                    raise bad(f"{x}: {o.Label} has {len(o.Shape.Solids)} solids.")
+                out.setdefault(o.Name, (o, []))[1].append(sub)
+                continue
             head, sub = picks.split_ref(x)
             if head is None or sub is None:
-                raise bad(f"refs: \"Body.Face3\", not {x!r}.")
+                raise bad(f"refs: \"Body.Face3\" (or .Edge, .Vertex, .Solid), not {x!r}.")
             o = picks.shaped(d(), head)
             picks.element(o.Shape, sub, o.Label)
             out.setdefault(o.Name, (o, []))[1].append(sub)
