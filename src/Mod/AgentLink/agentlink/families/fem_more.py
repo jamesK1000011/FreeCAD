@@ -50,7 +50,7 @@ KINDS = {
     "geometry_2d": ("makeElementGeometry2D", None),
     "material_fluid": ("makeMaterialFluid", None),
     "material_reinforced": ("makeMaterialReinforced", None),
-    "material_nonlinear": ("makeMaterialMechanicalNonlinear", None),
+    "material_nonlinear": ("makeMaterialMechanicalNonlinear", "material"),
     # solvers and equations
     "solver_mystran": ("makeSolverMystran", None),
     "solver_z88": ("makeSolverZ88", None),
@@ -168,6 +168,12 @@ def tools(s):
             if sv is None:
                 raise ToolError("not_found", f"{an.Label} has no Elmer solver for equations: fem_add kind solver_elmer first.")
             o = getattr(F, fn)(d(), sv)
+        elif need == "material":
+            mat = picks.find(d(), a["material"], "material") if a.get("material") else next((x for x in an.Group if "MaterialSolid" in getattr(getattr(x, "Proxy", None), "Type", "") or x.TypeId == "App::MaterialObjectPython"), None)
+            if mat is None:
+                raise ToolError("not_found", f"{an.Label} has no solid material for a nonlinear model to extend: fea_native gives it one.")
+            o = getattr(F, fn)(d(), mat)
+            an.addObject(o)
         else:
             o = getattr(F, fn)(d())
             an.addObject(o)
@@ -299,7 +305,7 @@ def tools(s):
     st = {"type": "string"}
     return [
         Tool("fem_add", "Add anything FEM has to an analysis: kind (" + ", ".join(KINDS) + "); refs [\"Body.Face3\", …] or { body, faces: [queries] }; props { its FreeCAD properties (numbers in its units) } — the answer lists them; mesh / solver where a refinement or equation needs one; new: true makes a new analysis for a solver.",
-             obj({"kind": {"type": "string", "enum": list(KINDS)}, "analysis": st, "refs": {}, "props": {"type": "object"}, "mesh": st, "solver": st, "new": {"type": "boolean"}, "name": st}, ["kind"]), fem_add, changes=True),
+             obj({"kind": {"type": "string", "enum": list(KINDS)}, "analysis": st, "refs": {}, "props": {"type": "object"}, "mesh": st, "solver": st, "material": st, "new": {"type": "boolean"}, "name": st}, ["kind"]), fem_add, changes=True),
         Tool("fem_mesh", "FEM meshes: action netgen { body, props } (Netgen's mesh) | to_mesh { mesh, result } (the FEM mesh's outside as a plain mesh, deformed by a result) | clear_groups { mesh }.",
              obj({"action": {"type": "string", "enum": ["netgen", "to_mesh", "clear_groups"]}, "body": st, "mesh": st, "result": st, "analysis": st, "props": {"type": "object"}, "name": st}, ["action"]), fem_mesh, changes=True),
         Tool("fem_linearize", "Stress linearization through a wall from a FEM result (CalculiX result or post pipeline): from and to [x,y,z] across the wall, points, field (von Mises by default) → membrane, bending, membrane + bending, peak.",
