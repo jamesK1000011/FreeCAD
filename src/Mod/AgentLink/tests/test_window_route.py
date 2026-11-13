@@ -108,7 +108,21 @@ class WindowRoute(unittest.TestCase):
             threading.Thread(target=late, daemon=True).start()
             got = []
             t0 = time.time()
-            self.assertTrue(supervise.Window(got.append).call(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call"})))
+            seen = []
+            real_read = restart_mark.read
+
+            def read():
+                m = real_read()
+                seen.append((round(time.time() - t0, 2), m is not None, os.path.exists(mark)))
+                return m
+
+            restart_mark.read = read
+            try:
+                w = supervise.Window(got.append)
+                ok = w.call(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call"}))
+            finally:
+                restart_mark.read = real_read
+            self.assertTrue(ok, f"after {time.time() - t0:.2f} s; got {got}; reads {seen[-6:]}; mark there {os.path.exists(mark)}; env {os.environ.get('AGENTLINK_RESTART_MARK') == mark}; f {w.f is not None}")
             self.assertGreater(time.time() - t0, 1.0)
             self.assertEqual(json.loads(got[0])["result"]["where"], "window")
         finally:
