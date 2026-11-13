@@ -1033,20 +1033,34 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
         start = s.doc
         made = 0
         results = []
+        def undo_count(d):
+            # A call can close the document under the batch (app_restart,
+            # doc_close): read as gone, not as an error after the fact.
+            try:
+                return d.UndoCount if d is not None else None
+            except Exception:
+                return None
+
         for i, c in enumerate(calls):
             doc = s.doc
-            u0 = doc.UndoCount if doc is not None else 0
+            u0 = undo_count(doc) or 0
             r = server.call({"name": c["tool"], "arguments": c["arguments"]})
 
             body = _json.loads(r["content"][0]["text"])
             ok = not r.get("isError")
-            if ok and doc is start and s.doc is start:
-                d = start.UndoCount - u0
+            u1 = undo_count(start)
+            if u1 is None:
+                start = None
+            if ok and start is not None and doc is start and s.doc is start:
+                d = u1 - u0
                 made += d if d > 0 else (1 if u0 >= limit and getattr(server.tools.get(c["tool"]), "changes", False) else 0)
             results.append({"tool": c.get("tool"), "ok": ok, **({"result": body} if ok else {"error": body.get("error")})})
             if not ok and stop:
                 out = {"results": results, "stopped": i}
-                if rollback:
+                if rollback and start is None:
+                    out["undone"] = 0
+                    out["warning"] = "The document the batch started in was closed during it: nothing to take back there."
+                elif rollback:
                     undone = 0
                     while undone < made and start.UndoCount > 0:
                         start.undo()

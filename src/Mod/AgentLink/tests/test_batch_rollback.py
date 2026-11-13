@@ -50,6 +50,16 @@ class BatchRollback(unittest.TestCase):
         self.assertEqual(home.UndoCount, n)
         self.assertTrue(any(o.Label == "Keep" for o in home.Objects))
 
+    def test_document_closed_in_the_batch(self):
+        # app_restart and doc_close close the document under the batch: the
+        # batch answers, it does not fail reading the closed one.
+        self.call("part_primitive", self.box("Gone")["arguments"])
+        name = self.session.doc.Name
+        err, b = self.call("batch", {"calls": [{"tool": "doc_close", "arguments": {"discard": True}}, {"tool": "part_primitive", "arguments": {"kind": "nope"}}]})
+        self.assertFalse(err, b)
+        self.assertEqual(b["results"][0]["ok"], True, b)
+        self.assertNotIn(name, __import__("FreeCAD").listDocuments())
+
     def test_history_inside_a_rolling_batch_is_refused(self):
         err, e = self.call("batch", {"calls": [self.box("A"), {"tool": "history_undo", "arguments": {}}]})
         self.assertTrue(err)
