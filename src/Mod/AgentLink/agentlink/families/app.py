@@ -29,14 +29,32 @@ _INSTALL_DIR = os.path.join(os.path.expanduser("~"), "AgentLink", "install")
 # whether to copy the older ones. Done here beforehand, the same way
 # (ApplicationDirectories.migrateAllPaths), so it opens with them.
 _MIGRATE = (
-    "import FreeCAD as F,sys\n"
+    "import FreeCAD as F,os,sys\n"
     "AD=getattr(F,'ApplicationDirectories',None)\n"
     "p=[F.getUserAppDataDir(),F.getUserConfigDir()]\n"
     "if AD is None: sys.stdout.write('@@unversioned@@')\n"
-    "elif all(AD.usingCurrentVersionConfig(x) for x in p): sys.stdout.write('@@already@@'+F.getUserAppDataDir())\n"
+    "elif all(AD.usingCurrentVersionConfig(x) for x in p):\n"
+    "  done=[]\n"
+    "  for x in p:\n"
+    "    x=x.rstrip('/'); old=os.path.dirname(x)\n"
+    "    if not os.path.exists(os.path.join(x,'.agentlink-migrated')) and os.path.isdir(old):\n"
+    "      AD.migrateConfig(old,x); open(os.path.join(x,'.agentlink-migrated'),'w').close(); done.append(x)\n"
+    "  sys.stdout.write(('@@migrated@@' if done else '@@already@@')+repr(done or p))\n"
     "else:\n"
-    "  AD.migrateAllPaths(p)\n"
-    "  sys.stdout.write('@@migrated@@'+repr(p))\n"
+    "  new=AD.migrateAllPaths(p)\n"
+    "  sys.stdout.write('@@migrated@@'+repr(new))\n"
+)
+# Run in the new release once its own folders exist. FreeCAD 1.1.3 on
+# macOS 26+ hangs for good the first time a pop-up notification opens: Qt
+# logs a warning while making its window, the log goes back to the
+# notification area, which waits on itself. The pop-ups off (the list
+# behind the bell stays).
+_QUIET = (
+    "import FreeCAD as F,sys\n"
+    "g=F.ParamGet('User parameter:BaseApp/Preferences/NotificationArea')\n"
+    "g.SetBool('NonIntrusiveNotificationsEnabled',False)\n"
+    "F.saveParameter()\n"
+    "sys.stdout.write('@@quiet@@'+F.getUserConfigDir())\n"
 )
 
 
@@ -74,22 +92,32 @@ def _clean_env():
 
 
 def _carry_settings(app):
-    """Run the other release headless once to copy this one's settings and
-    add-ons into its versioned folders; says what it did."""
+    """Run the other release headless to copy this one's settings and
+    add-ons into its versioned folders (and, on a Mac, turn off the pop-up
+    notifications that hang 1.1.3 there); says what it did."""
+    import platform
     import subprocess
 
     bin_ = os.path.join(app, "Contents", "Resources", "bin")
     cmd = next((os.path.join(bin_, n) for n in ("freecadcmd", "FreeCADCmd") if os.path.exists(os.path.join(bin_, n))), None)
     if cmd is None:
         return "no FreeCADCmd in " + app + ": its first start asks about settings itself"
-    try:
-        r = subprocess.run([cmd, "-c", _MIGRATE], capture_output=True, text=True, timeout=300, env=_clean_env())
-    except Exception as e:
-        return "not carried over (%s): its first start asks" % e
-    m = re.search(r"@@(\w+)@@(.*)", (r.stdout or "") + (r.stderr or ""))
-    if not m:
-        return "not carried over: " + ((r.stderr or r.stdout or "").strip()[-300:] or "no answer")
-    return {"migrated": "settings and add-ons copied: " + m.group(2), "already": "it has its own settings already: " + m.group(2), "unversioned": "it shares this one's settings folder"}[m.group(1)]
+
+    def run(code):
+        try:
+            r = subprocess.run([cmd, "-c", code], capture_output=True, text=True, timeout=300, env=_clean_env())
+        except Exception as e:
+            return None, str(e)
+        out = (r.stdout or "") + (r.stderr or "")
+        m = re.search(r"@@(\w+)@@(.*)", out)
+        return (m.group(1), m.group(2)) if m else (None, out.strip()[-300:] or "no answer")
+
+    kind, what = run(_MIGRATE)
+    said = {"migrated": "settings and add-ons copied: " + what, "already": "it has its own settings already: " + what, "unversioned": "it shares this one's settings folder"}.get(kind, "not carried over: " + what)
+    if platform.system() == "Darwin":
+        q, w = run(_QUIET)
+        said += "; pop-up notifications off (they hang 1.1.3 on this macOS)" if q == "quiet" else "; pop-up notifications NOT turned off: " + w
+    return said
 
 
 ROOT = "User parameter:"
@@ -584,6 +612,15 @@ def tools(session):
             with open(state) as f:
                 cur = json.load(f)
         running = bool(cur and cur.get("state") not in ("installed", "failed") and _alive(cur.get("pid")))
+        if a.get("open"):
+            app = os.path.expanduser(a["open"]).rstrip("/")
+            if not (app.endswith(".app") and os.path.isdir(os.path.join(app, "Contents"))):
+                raise ToolError("not_found", "No FreeCAD app at " + app)
+            if FreeCAD.GuiUp:
+                raise ToolError("invalid_state", "This FreeCAD's window is open: app_restart { app } switches it over.")
+            said = _carry_settings(app)
+            subprocess.Popen(["/usr/bin/open", "-a", app], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_clean_env())
+            return {"opening": app, "settings": said, "note": "Its window opens in a few seconds; its link comes on by itself once Agent Link is among its add-ons."}
         version = a.get("version")
         if not version:
             if cur is None:
@@ -609,8 +646,8 @@ def tools(session):
         return {"started": True, "pid": p.pid, "version": version, "note": "Downloading FreeCAD's official disk image from its GitHub release, SHA-256 checked against the release's; the FreeCAD.app there now is kept under its version's name. app_install with no arguments follows it (a few minutes)."}
 
     return [
-        Tool("app_install", "Install another FreeCAD release beside this one on a Mac: version (\"1.1.3\", \"latest\") from FreeCAD's GitHub release, SHA-256 checked; the current FreeCAD.app kept as \"FreeCAD <version>.app\". Runs in the background: no arguments reads its progress. Then app_restart { app } switches the window over.",
-             obj({"version": {"type": "string"}}), app_install, changes=False),
+        Tool("app_install", "Install another FreeCAD release beside this one on a Mac: version (\"1.1.3\", \"latest\") from FreeCAD's GitHub release, SHA-256 checked; the current FreeCAD.app kept as \"FreeCAD <version>.app\". Runs in the background: no arguments reads its progress. Then app_restart { app } switches the window over; with the window closed, open: an .app carries settings over and opens it.",
+             obj({"version": {"type": "string"}, "open": {"type": "string"}}), app_install, changes=False),
         Tool("pref_get", "Read FreeCAD's settings: a parameter group (path, e.g. \"BaseApp/Preferences/View\") with its values and subgroups, or one setting (name). Anything Edit > Preferences shows lives here.",
              obj({"path": {"type": "string"}, "name": {"type": "string"}}), pref_get),
         Tool("pref_set", "Change FreeCAD's settings: path, then name + value or values { name: value }; the type follows the setting's own (or type: bool, int, uint, float, string). Says what each was.",
