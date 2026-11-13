@@ -53,6 +53,7 @@ NAMES = [
     "code",
     "openscad",
     "robot",
+    "std_more",
 ]
 
 

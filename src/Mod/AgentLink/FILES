@@ -66,6 +66,7 @@ agentlink/families/sheet.py
 agentlink/families/sketch.py
 agentlink/families/sketch_more.py
 agentlink/families/slicing.py
+agentlink/families/std_more.py
 agentlink/families/strength.py
 agentlink/families/surface.py
 agentlink/families/techdraw.py
@@ -193,8 +194,10 @@ tests/test_protocol.py
 tests/test_share.py
 tests/test_sheet.py
 tests/test_sketch.py
+tests/test_sketch_gaps.py
 tests/test_slice.py
 tests/test_slicer_presets.py
+tests/test_std_more.py
 tests/test_strength.py
 tests/test_techdraw.py
 tests/test_theme.py

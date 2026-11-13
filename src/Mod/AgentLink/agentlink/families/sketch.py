@@ -6,6 +6,7 @@
 # degrees.
 
 import math
+import os
 
 import FreeCAD
 import Part
@@ -132,6 +133,26 @@ def _line(a, b):
     return Part.LineSegment(a, b)
 
 
+def _font(path=None):
+    """A TrueType font: the one given, the Draft preference's, TechDraw's own, or a system one."""
+    import glob
+
+    tries = [path] if path else []
+    try:
+        tries.append(FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Draft").GetString("FontFile", ""))
+    except Exception:
+        pass
+    res = FreeCAD.getResourceDir()
+    tries += [os.path.join(res, "Mod", "TechDraw", "Resources", "fonts", "osifont-lgpl3fe.ttf"),
+              *glob.glob(os.path.join(res, "**", "*.ttf"), recursive=True)[:5],
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", *glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)[:3],
+              "/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf"]
+    for t in tries:
+        if t and os.path.isfile(os.path.expanduser(t)):
+            return os.path.expanduser(t)
+    raise ToolError("unavailable", "No TrueType font found: give text.font, a .ttf file's path.")
+
+
 def _arc(c, r, a0, a1):
     return Part.ArcOfCircle(Part.Circle(c, V(0, 0, 1), r), a0, a1)
 
@@ -248,6 +269,26 @@ def build(item):
         elif abs(d.x) < 1e-9:
             C.append(("Vertical", 2))
         D += [("r", ("Radius", 0, r)), ("length", ("Distance", 0, 3, 1, 3, d.Length))]
+        return G, C, D
+    if k == "arc_slot":
+        c = pc.vec2(item.get("center", [0, 0]), "center")
+        R = float(item.get("radius", 0))
+        r = float(item.get("width", 0)) / 2
+        a0, a1 = math.radians(float(item.get("start", 0))), math.radians(float(item.get("end", 90)))
+        if a1 <= a0:
+            a1 += 2 * math.pi
+        if R <= 0 or r <= 0 or r >= R:
+            raise ToolError("invalid_input", "arc_slot: center, radius (of its middle line), width (under twice the radius), start and end (deg, ccw).")
+        p0 = c + V(math.cos(a0), math.sin(a0), 0) * R
+        p1 = c + V(math.cos(a1), math.sin(a1), 0) * R
+        G = [
+            _arc(c, R + r, a0, a1),  # 0 outer
+            _arc(c, R - r, a0, a1),  # 1 inner
+            _arc(p0, r, a0 + math.pi, a0 + 2 * math.pi),  # 2 cap at start: inner to outer, bulging back
+            _arc(p1, r, a1, a1 + math.pi),  # 3 cap at end: outer to inner
+        ]
+        C += [("Coincident", 0, 3, 1, 3), ("Tangent", 2, 1, 1, 1), ("Tangent", 2, 2, 0, 1), ("Tangent", 3, 1, 0, 2), ("Tangent", 3, 2, 1, 2), ("Equal", 2, 3)]
+        D += [("r", ("Radius", 2, r)), ("radius", ("Radius", 0, R + r))]
         return G, C, D
     if k == "bspline":
         pts = [pc.vec2(p, "points[]") for p in item.get("points") or []]
@@ -743,20 +784,21 @@ def tools(session):
                 raise ToolError("invalid_input", "fillet.radius: mm, over 0.")
             n0 = len(sk.Geometry)
             try:
+                ch = (True,) if x.get("chamfer") else ()  # FreeCAD 1.0+: a straight cut, not an arc
                 if x.get("at") is not None:
                     g, v = x["at"]
-                    sk.fillet(gid(g), int(v), r, True, False)
+                    sk.fillet(gid(g), int(v), r, True, False, *ch)
                 else:
                     g1, g2 = (gid(g) for g in x.get("geos") or [])
                     p1, p2 = (FreeCAD.Vector(*pc.vec2(q, "fillet.near"), 0) for q in x.get("near") or [])
-                    sk.fillet(g1, g2, p1, p2, r, True, False)
+                    sk.fillet(g1, g2, p1, p2, r, True, False, *ch)
             except ValueError:
                 raise ToolError("invalid_input", "fillet: at [geo, vertex] (a corner where two curves meet), or geos [g1, g2] with near [[x, y], [x, y]] on each, and radius.")
             except Exception as e:
                 raise ToolError("failed", f"No fillet of {r:g} mm fits there: {e} — a smaller radius.")
             if len(sk.Geometry) == n0:
                 raise ToolError("failed", f"No fillet of {r:g} mm fits there — a smaller radius, or a corner where two curves meet.")
-            done.append(f"fillet r{r:g}: arc {len(sk.Geometry) - 1}")
+            done.append(f"{'chamfer' if x.get('chamfer') else 'fillet r'}{r:g}: {'line' if x.get('chamfer') else 'arc'} {len(sk.Geometry) - 1}")
         if "trim" in a:
             x = a["trim"]
             g = gid(x.get("geo"))
@@ -796,8 +838,67 @@ def tools(session):
             except Exception as e:
                 raise ToolError("failed", f"The geometry could not be mirrored: {e}.")
             done.append(f"mirrored {geos} about {about}: new {list(range(n0, len(sk.Geometry)))}")
+        if "group" in a:
+            # FreeCAD 1.2's Group constraint: the geometry held as one, placed
+            # and sized by a construction frame line (constrain that).
+            geos = sorted({gid(g) for g in a["group"]})
+            if len(geos) < 2:
+                raise ToolError("invalid_input", "group: two or more geometry ids.")
+            bb = None
+            for g in geos:
+                b2 = sk.Geometry[g].toShape().BoundBox
+                bb = b2 if bb is None else bb.united(b2)
+            sk.addGeometry(Part.LineSegment(V(bb.XMin, bb.YMin, 0), V(bb.XMin, bb.YMax, 0)), True)
+            fr = len(sk.Geometry) - 1
+            try:
+                sk.addConstraint(Sketcher.Constraint("Group", [fr, 0] + [x for g in geos for x in (g, 0)]))
+            except Exception:
+                sk.delGeometries([fr])
+                raise ToolError("unavailable", f"Group constraints came in FreeCAD 1.2; this is {'.'.join(FreeCAD.Version()[:3])}. Block constraints hold geometry still: set via sketch_constrain kind block.")
+            done.append(f"grouped {geos}: frame line {fr}")
+        if "text" in a:
+            x = a["text"]
+            words = str(x.get("text") or "")
+            if not words:
+                raise ToolError("invalid_input", "text.text: the words.")
+            at = pc.vec2(x.get("at", [0, 0]), "text.at")
+            hgt = float(x.get("height", 5))
+            if hgt <= 0:
+                raise ToolError("invalid_input", "text.height: mm, over 0.")
+            font = _font(x.get("font"))
+            n0 = len(sk.Geometry)
+            try:
+                sk.addGeometry(Part.LineSegment(V(at[0], at[1], 0), V(at[0], at[1] + hgt, 0)), True)
+                h = len(sk.Geometry) - 1
+                sk.addConstraint(Sketcher.Constraint("Text", [h, 0], words, font, True))
+                sk.setTextAndFont(len(sk.Constraints) - 1, words, font, True, bool(x.get("construction")))
+                how = "text constraint"
+            except Exception:
+                # Before FreeCAD 1.2: the letters' outlines as plain geometry.
+                if len(sk.Geometry) > n0:
+                    sk.delGeometries(list(range(n0, len(sk.Geometry))))
+                wires = Part.makeWireString(words, font, hgt)
+                for ch in wires:
+                    for w in ch:
+                        for e in w.Edges:
+                            e = e.translated(V(at[0], at[1], 0))
+                            if isinstance(e.Curve, Part.Line):
+                                g2 = Part.LineSegment(e.Vertexes[0].Point, e.Vertexes[-1].Point)
+                            else:
+                                g2 = e.toNurbs().Edges[0].Curve
+                            sk.addGeometry(g2, bool(x.get("construction")))
+                how = "outlines"
+            done.append(f"text {words!r} ({how}): geometry {n0}…{len(sk.Geometry) - 1}")
+        if "exposeInternal" in a:
+            for g in a["exposeInternal"]:
+                n = sk.exposeInternalGeometry(gid(g))
+                done.append(f"internal geometry of {g} restored ({n} added)")
+        if "removeAxesAlignment" in a:
+            geos = [gid(g) for g in a["removeAxesAlignment"]]
+            sk.removeAxesAlignment(geos)
+            done.append(f"axes alignment of {geos} taken off: horizontal/vertical became parallel/perpendicular")
         if not done:
-            raise ToolError("invalid_input", "Give one or more of: move { geo, vertex, to }, set [{ constraint, value }], construction { geo, on }, rename { constraint, name }, deleteConstraints [ids|names], delete [geometry ids], fillet { at [g, v] | geos, near; radius }, trim { geo, at }, split { geo, at }, mirror { geos, about }.")
+            raise ToolError("invalid_input", "Give one or more of: group [geos], text { text, at, height, font }, exposeInternal [geos], removeAxesAlignment [geos], move { geo, vertex, to }, set [{ constraint, value }], construction { geo, on }, rename { constraint, name }, deleteConstraints [ids|names], delete [geometry ids], fillet { at [g, v] | geos, near; radius }, trim { geo, at }, split { geo, at }, mirror { geos, about }.")
         doc().recompute()
         st = state_of(sk)
         b = pc.body_of(sk)
@@ -825,7 +926,7 @@ def tools(session):
         ),
         Tool(
             "sketch_add",
-            "Add geometry to a sketch, in its own x/y (mm): items [{ kind, …, construction, dims, name }]. kinds: line {from, to}; polyline {points, closed}; arc {center, radius, start, end (deg, ccw)}; arc3 {points: start, through, end}; circle {center, radius|diameter}; circle3 {points: three on it}; parabola {vertex, focal, rotation, from, to}; hyperbola {center, major, minor (semi-axes), rotation, from, to}; ellipse {center, major, minor (full sizes), rotation}; bspline {points it passes through, closed — or interpolate: false, points its poles, degree}; rectangle {center|corner, size [w,h]}; rounded_rectangle {…, radius}; polygon {center, radius (to corners), sides, rotation}; slot {from, to (end centres), radius}; point {at}. Shapes come with their own coincident/horizontal/vertical/tangent/equal constraints; dims: true adds their sizes as constraints (named <name>_width … when named — what param_bind binds). Answers the geometry ids per item and the solver's state. Lines: vertex 1 start, 2 end; arcs and circles: 3 centre.",
+            "Add geometry to a sketch, in its own x/y (mm): items [{ kind, …, construction, dims, name }]. kinds: line {from, to}; polyline {points, closed}; arc {center, radius, start, end (deg, ccw)}; arc3 {points: start, through, end}; circle {center, radius|diameter}; circle3 {points: three on it}; parabola {vertex, focal, rotation, from, to}; hyperbola {center, major, minor (semi-axes), rotation, from, to}; ellipse {center, major, minor (full sizes), rotation}; bspline {points it passes through, closed — or interpolate: false, points its poles, degree}; rectangle {center|corner, size [w,h]}; rounded_rectangle {…, radius}; polygon {center, radius (to corners), sides, rotation}; slot {from, to (end centres), radius}; arc_slot {center, radius (its middle), width, start, end}; point {at}. Shapes come with their own coincident/horizontal/vertical/tangent/equal constraints; dims: true adds their sizes as constraints (named <name>_width … when named — what param_bind binds). Answers the geometry ids per item and the solver's state. Lines: vertex 1 start, 2 end; arcs and circles: 3 centre.",
             obj({"sketch": sketch, "items": {"type": "array", "items": {"type": "object"}}}, ["items"]),
             sketch_add,
             changes=True,
@@ -859,9 +960,10 @@ def tools(session):
         ),
         Tool(
             "sketch_edit",
-            "Edit a sketch: move { geo, vertex (0 the whole, 1/2/3), to [x,y] }, set [{ constraint: id|name, value mm|deg }], construction { geo, on }, rename { constraint, name }, deleteConstraints [id|name], delete [geometry ids — later ids shift down, and their constraints go], fillet { at: [g, v] a corner, or geos [g1, g2] near [[x,y],[x,y]]; radius } (round a corner, the curves trimmed to it), trim { geo, at [x,y] } (cut off the piece there, between crossings), split { geo, at }, mirror { geos, about: \"x\" | \"y\" | \"origin\" | a line id } (symmetric copies). Features built on it recompute; a feature it breaks is refused with FreeCAD's error and nothing kept.",
+            "Edit a sketch: move { geo, vertex (0 the whole, 1/2/3), to [x,y] }, set [{ constraint: id|name, value mm|deg }], construction { geo, on }, rename { constraint, name }, deleteConstraints [id|name], delete [geometry ids — later ids shift down, and their constraints go], fillet { at: [g, v] a corner, or geos [g1, g2] near [[x,y],[x,y]]; radius } (round a corner, the curves trimmed to it), trim { geo, at [x,y] } (cut off the piece there, between crossings), split { geo, at }, mirror { geos, about: \"x\" | \"y\" | \"origin\" | a line id } (symmetric copies); fillet chamfer: true cuts the corner straight; group [geos] (held as one, FreeCAD 1.2); text { text, at, height, font, construction } (letters as geometry); exposeInternal [geos] (an ellipse's or B-spline's construction geometry back); removeAxesAlignment [geos]. Features built on it recompute; a feature it breaks is refused with FreeCAD's error and nothing kept.",
             obj({"sketch": sketch, "move": {"type": "object"}, "set": {}, "construction": {"type": "object"}, "rename": {"type": "object"}, "deleteConstraints": {"type": "array", "items": {}}, "delete": {"type": "array", "items": {"type": "integer"}},
-                 "fillet": {"type": "object"}, "trim": {"type": "object"}, "split": {"type": "object"}, "mirror": {"type": "object"}}),
+                 "fillet": {"type": "object"}, "trim": {"type": "object"}, "split": {"type": "object"}, "mirror": {"type": "object"},
+                 "group": {"type": "array", "items": {"type": "integer"}}, "text": {"type": "object"}, "exposeInternal": {"type": "array", "items": {"type": "integer"}}, "removeAxesAlignment": {"type": "array", "items": {"type": "integer"}}}),
             sketch_edit,
             changes=True,
         ),
