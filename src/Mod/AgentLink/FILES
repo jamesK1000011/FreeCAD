@@ -117,6 +117,7 @@ agentlink/guides/techdraw.md
 agentlink/guides/thread.md
 agentlink/guides/view.md
 agentlink/hull3d.py
+agentlink/install_job.py
 agentlink/iso286.py
 agentlink/kicad.py
 agentlink/launcher_check.py
@@ -152,6 +153,7 @@ agentlink_state.py
 package.xml
 tests/_fc.py
 tests/_pd_base.py
+tests/test_app_install.py
 tests/test_assembly.py
 tests/test_assembly_more.py
 tests/test_bim_gaps.py
