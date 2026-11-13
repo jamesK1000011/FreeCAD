@@ -124,7 +124,7 @@ class StdMore(Base):
         self.ok("pd_body_new", {"name": "P three"})
         self.ok("sketch_new", {"body": "P three", "plane": "XY", "name": "P sk3"})
         self.ok("sketch_add", {"sketch": "P sk3", "items": [{"kind": "rectangle", "center": [0, 0], "size": [5, 5]}]})
-        self.ok("pd_pad", {"sketch": "P sk3", "length": 3})
+        self.ok("pd_pad", {"body": "P three", "sketch": "P sk3", "length": 3})
         pad3 = next(o.Label for o in self.session.doc.getObjectsByLabel("P three")[0].Group if o.TypeId == "PartDesign::Pad")
         m = self.ok("pd_move_feature", {"feature": pad3, "to": "P two"})
         self.assertIn("P sk3", m["moved"])
