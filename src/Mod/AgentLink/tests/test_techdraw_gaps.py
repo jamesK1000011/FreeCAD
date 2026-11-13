@@ -96,14 +96,16 @@ class TechDrawGaps(Base):
 
         v = self.ok("td_view", {"page": "Gaps", "bodies": ["Plate"], "direction": "top", "scale": 1, "at": [200, 60], "name": "G arc"})["view"]
         view = self.session.doc.getObjectsByLabel(v)[0]
-        arc = next(f"Edge{i}" for i, e in enumerate(T.edges_of(view)) if hasattr(getattr(e, "Curve", None), "Radius"))
-        r = self.ok("td_dim_special", {"view": v, "kind": "arc_length", "refs": [arc]})
-        self.assertIn("31.42", r["text"] if "text" in r else self.session.doc.getObject(r["dimension"]).FormatSpec)
+        i, e = next((i, e) for i, e in enumerate(T.edges_of(view)) if hasattr(getattr(e, "Curve", None), "Radius"))
+        # the hole is 10 mm across; a release may split its circle in two
+        want = f"{5.0 * abs(e.LastParameter - e.FirstParameter):.2f}"
+        r = self.ok("td_dim_special", {"view": v, "kind": "arc_length", "refs": [f"Edge{i}"]})
+        self.assertIn(want, self.session.doc.getObject(r["dimension"]).FormatSpec)
         # a new scale: the length on the part stays the same
         view.ScaleType = "Custom"
         view.Scale = 2
         self.ok("td_dim_format", {"dims": [r["dimension"]], "decimals": 2})
-        self.assertIn("31.42", self.session.doc.getObject(r["dimension"]).FormatSpec)
+        self.assertIn(want, self.session.doc.getObject(r["dimension"]).FormatSpec)
 
         iso = self.ok("td_view", {"page": "Gaps", "bodies": ["Plate"], "direction": "iso", "scale": 1, "at": [200, 200], "name": "G iso"})["view"]
         iv = self.session.doc.getObjectsByLabel(iso)[0]
