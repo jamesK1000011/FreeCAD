@@ -2470,6 +2470,44 @@ def tools(session):
             bv.X, bv.Y = (pt2(a["at"], "at") if a.get("at") else (float(v.X), float(v.Y) - 60))
             recompute([bv])
             return done("td_view_more", {"kind": kind, **view_reading(bv)})
+        if kind in ("lock", "stack", "move"):
+            # From the window-only re-sort (unattended use, O): what the
+            # TechDraw buttons save into the drawing, done headless.
+            v = obj_of(doc(), a.get("view"), ["TechDraw::DrawView"], "view")
+            grp = next((p for p in v.InList if p.isDerivedFrom("TechDraw::DrawProjGroup")), None)
+            here = page_holding(v)
+            if kind == "lock":
+                if not hasattr(v, "LockPosition"):
+                    raise ToolError("unavailable", "This FreeCAD's views have no lock.")
+                v.LockPosition = bool(a.get("locked", True))
+                return done("td_view_more", {"kind": kind, "view": v.Label, "locked": bool(v.LockPosition)})
+            if kind == "stack":
+                if not hasattr(v, "StackOrder"):
+                    raise ToolError("unavailable", "This FreeCAD's views have no stacking order (1.0 and newer have).")
+                to = a.get("to", "top")
+                others = [x for x in (here.Views if here else []) if x is not v and hasattr(x, "StackOrder")]
+                orders = [int(x.StackOrder) for x in others] or [0]
+                if to == "top":
+                    v.StackOrder = max(orders) + 1
+                elif to == "bottom":
+                    v.StackOrder = min(orders) - 1
+                elif to == "up":
+                    v.StackOrder = int(v.StackOrder) + 1
+                elif to == "down":
+                    v.StackOrder = int(v.StackOrder) - 1
+                else:
+                    raise bad("to: top | bottom | up | down.")
+                return done("td_view_more", {"kind": kind, "view": v.Label, "stackOrder": int(v.StackOrder)})
+            dest = page_of(doc(), a.get("page"))
+            mover = grp or v
+            if here is dest:
+                return {"kind": kind, "view": mover.Label, "page": dest.Label, "note": "Already on that page."}
+            if here is not None:
+                here.removeView(mover)
+            dest.addView(mover)
+            recompute([mover])
+            return done("td_view_more", {"kind": kind, "view": mover.Label, "from": here.Label if here else None, "page": dest.Label,
+                                         **({"note": "Moved with its projection group."} if grp else {})})
         page = page_of(doc(), a.get("page"))
         if kind == "draft":
             src = picks.find(doc(), a.get("object"), "object")
@@ -2709,8 +2747,8 @@ def tools(session):
              obj({"dims": {"type": "array", "items": {"type": "string"}}, "direction": {"type": "string", "enum": ["horizontal", "vertical", "oblique"]}}, ["dims"]), td_dim_align, changes=True),
         Tool("td_dim_repair", "Point a dimension at new references (after the model changed): refs as td_dim takes them; the old ones are kept if TechDraw cannot measure the new.",
              obj({"dimension": {"type": "string"}, "view": {"type": "string"}, "refs": {"type": "array", "items": {}}}, ["dimension", "refs"]), td_dim_repair, changes=True),
-        Tool("td_view_more", "More views on a page: kind broken { view, breaks, gap } | draft { object (a Draft object) } | clip { width, height, frame } | clip_add / clip_remove { clip, view } | image { path, width, height } | symbol { path (an SVG), scale } | share { view } (the view also on this page), at [x, y].",
-             obj({"kind": {"type": "string", "enum": ["broken", "draft", "clip", "clip_add", "clip_remove", "image", "symbol", "share"]}, "page": {"type": "string"}, "view": {"type": "string"}, "object": {"type": "string"}, "breaks": {"type": "array", "items": {"type": "string"}},
+        Tool("td_view_more", "More views on a page: kind broken { view, breaks, gap } | draft { object (a Draft object) } | clip { width, height, frame } | clip_add / clip_remove { clip, view } | image { path, width, height } | symbol { path (an SVG), scale } | share { view } (the view also on this page) | lock { view, locked } | stack { view, to top|bottom|up|down } | move { view, page } (to another page), at [x, y].",
+             obj({"kind": {"type": "string", "enum": ["broken", "draft", "clip", "clip_add", "clip_remove", "image", "symbol", "share", "lock", "stack", "move"]}, "locked": {"type": "boolean"}, "to": {"type": "string", "enum": ["top", "bottom", "up", "down"]}, "page": {"type": "string"}, "view": {"type": "string"}, "object": {"type": "string"}, "breaks": {"type": "array", "items": {"type": "string"}},
                   "gap": {"type": "number"}, "clip": {"type": "string"}, "width": {"type": "number"}, "height": {"type": "number"}, "frame": {"type": "boolean"}, "path": {"type": "string"}, "scale": {"type": "number"}, "direction": {"type": "array", "items": {"type": "number"}}, "at": {"type": "array", "items": {}}, "name": {"type": "string"}}, ["kind"]), td_view_more, changes=True),
         Tool("td_lines", "A view's lines: action align_h / align_v { refs two points or an edge } (the view turned so they line up) | style { refs edges, style solid|dashed|dotted|dashdot|dashdotdot|none, weight mm, color } | extend / shorten { items (td_cosmetic's lines by order), by mm, centerlines } | erase { items, tags } (cosmetic lines gone).",
              obj({"view": {"type": "string"}, "action": {"type": "string", "enum": ["align_h", "align_v", "style", "extend", "shorten", "erase"]}, "refs": {"type": "array", "items": {}}, "style": {"type": "string"}, "weight": {"type": "number"}, "color": {},

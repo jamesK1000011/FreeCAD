@@ -333,6 +333,15 @@ def tools(session):
         return {"closed": closed, "document": s.doc.Name, "open": [d.Label for d in FreeCAD.listDocuments().values()]}
 
     def doc_open(a):
+        if a.get("recent") and not a.get("path"):
+            # The window's File › Recent files, headless (O): from settings.
+            g = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/RecentFiles")
+            files = []
+            for i in range(int(g.GetInt("RecentFiles", 4) or 4) + 20):
+                f = g.GetString(f"MRU{i}", "")
+                if f:
+                    files.append({"path": f, "exists": os.path.isfile(f)})
+            return {"recent": files, "note": "doc_open { path } opens one." if files else "No recent files."}
         p = where(a.get("path"))
         if not os.path.isfile(p):
             raise ToolError("not_found", f"{p}: no such file.")
@@ -747,7 +756,7 @@ def tools(session):
         Tool("doc_new", "Start a new, empty FreeCAD document and work in it from now on; the one before stays open (save it first: doc_save). Not undoable, and not in a batch's rollback.", obj({"name": {"type": "string"}}), doc_new),
         Tool("doc_close", "Close open documents (documents: names, labels or .FCStd paths; the current one when left out); one changed since saved is refused unless discard: true. Work moves to another open document. Not undoable.",
              obj({"documents": {"type": "array", "items": {"type": "string"}}, "discard": {"type": "boolean"}}), doc_close),
-        Tool("doc_open", "Open a FreeCAD document (.FCStd, path) and work in it from now on — recomputed, with any object's error listed. Other formats come in with import_file. Not undoable.", obj({"path": {"type": "string"}}, ["path"]), doc_open),
+        Tool("doc_open", "Open a FreeCAD document (.FCStd, path) and work in it from now on — recomputed, with any object's error listed. Other formats come in with import_file; recent: true lists the recent files. Not undoable.", obj({"path": {"type": "string"}, "recent": {"type": "boolean"}}), doc_open),
         Tool("doc_save", "Save the document as .FCStd: path (relative goes in the session's folder), else where it was saved, else <label>.FCStd there (\"<label> 2.FCStd\" … when that name is taken by another file). Never over another document's file unless overwrite: true — ask the person first. What setup and part_spec recorded is saved with it.", obj({"path": {"type": "string"}, "overwrite": {"type": "boolean"}}), doc_save),
         Tool("object_list", "Every object in the document: name, label, type, visible, parents (what uses it) and its shape (volume, area, faces, solids, size for a solid; faces and edges else) or mesh. type: a part of the type to keep (\"Part::\", \"Sketch\").", obj({"type": {"type": "string"}}), object_list),
         Tool("object_get", "One object's properties: value (mm, degrees; placements as { at, axis, angle }; links by label; a shape as its stats), type, readOnly. filter: a word in the name or group (\"Placement\", \"Base\"), or a list of names.", obj({"object": objref, "filter": {}}, ["object"]), object_get),

@@ -83,9 +83,32 @@ def _stress(s, a):
     cap = int(a.get("detail", 30000))
     V, F = render.subdivide(L["V"], L["F"], render.even_length(L["V"], L["F"], cap), cap=cap)
     vals = render.nearest_values(V, P, vm)
+    warp = None
+    if a.get("deform") not in (None, False, 0):
+        # The deformed shape (FEM's warp filter, headless): each spot moved by
+        # its nearest node's displacement times deform ("auto": the largest
+        # move shown as a twentieth of the part's size).
+        U = np.asarray(f.get("displacement") or [], dtype=float)
+        if len(U) == len(P):
+            mags = np.linalg.norm(U, axis=1)
+            k = a["deform"]
+            if k in (True, "auto"):
+                size = float(np.linalg.norm(np.ptp(np.asarray(V, float), axis=0))) or 1.0
+                k = 0.05 * size / float(mags.max()) if mags.max() > 0 else 1.0
+            k = float(k)
+            idx = np.empty(len(V), dtype=int)
+            Vf = np.asarray(V, float)
+            for i in range(0, len(Vf), 2048):
+                d = ((Vf[i:i + 2048, None, :] - P[None, :, :]) ** 2).sum(-1)
+                idx[i:i + 2048] = d.argmin(1)
+            V = Vf + k * U[idx]
+            warp = round(k, 3)
     y = (r["result"].get("material") or {}).get("yield")
     out = {"layers": [{"name": o.Label, "V": V, "F": F, "values": vals, "creases": True}], "unit": "MPa", "cmap": "jet", "worst": "max", "label": "VON MISES",
            "note": "Von Mises stress from the last solve, at the nearest mesh node." + (f" Yield {y:g} MPa." if y else "")}
+    if warp is not None:
+        out["note"] += f" Drawn deformed: displacements × {warp:g}."
+        out["deform"] = warp
     if stale:
         out["note"] += " The body changed since the solve: stale — fea_solve again."
         out["stale"] = True
@@ -282,7 +305,7 @@ def tools(session):
                 "map": {"type": "string"}, "range": {"type": "array", "items": {"type": "number"}},
                 "section": {"type": "object"}, "zoom": {"type": "object"},
                 "objects": {}, "layers": {"type": "array", "items": {"type": "string"}},
-                "reach": {"type": "number"}, "tolerance": {"type": "number"}, "detail": {"type": "integer", "description": "How many small triangles a map is read on (wall 16000, stress 30000): more is finer and slower."},
+                "reach": {"type": "number"}, "tolerance": {"type": "number"}, "deform": {"description": "map stress: draw the deformed shape, displacements times this (\"auto\" scales the largest to a twentieth of the part)."}, "detail": {"type": "integer", "description": "How many small triangles a map is read on (wall 16000, stress 30000): more is finer and slower."},
                 "width": {"type": "integer"}, "height": {"type": "integer"}, "inline": {"type": "boolean"}, "path": {"type": "string"},
             }),
             view_render,

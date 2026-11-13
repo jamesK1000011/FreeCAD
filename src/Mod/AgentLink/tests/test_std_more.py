@@ -192,6 +192,34 @@ class StdMore(Base):
         self.assertTrue(err)
         del add_body, Part
 
+    def test_10_resorted_from_the_window(self):
+        # Std commands the unattended re-sort (O) moved from window-only to headless
+        self.box("G base", [10, 10, 10])
+        g = self.ok("doc_graph", {"path": "graph"})
+        self.assertTrue(g["path"].endswith(".dot") and os.path.isfile(g["path"]))
+        self.assertIn("G base", g["roots"])
+        u = self.ok("units_convert", {"value": "2 in", "to": "mm"})
+        self.assertAlmostEqual(u["result"], 50.8, places=6)
+        self.assertIn("different", self.refused("units_convert", {"value": "2 in", "to": "kg"})["message"])
+        fr = self.ok("object_freeze", {"objects": ["G base"]})
+        self.assertEqual(fr.get("frozen"), ["G base"])
+        self.ok("object_freeze", {"objects": ["G base"], "frozen": False})
+        sk = self.ok("object_freeze", {"skipRecompute": True})
+        self.assertTrue(sk["skipRecompute"])
+        self.ok("object_freeze", {"skipRecompute": False})
+        self.box("G moved", [10, 10, 10])
+        # turn 90 degrees about z and move by (5, 0, 0)
+        P = [[0, 0, 0], [10, 0, 0], [0, 10, 0], [0, 0, 10]]
+        Q = [[5 - y, x, z] for x, y, z in P]
+        r = self.ok("object_align", {"object": "G moved", "pairs": [[p, q] for p, q in zip(P, Q)]})
+        self.assertLess(r["rms"], 1e-6)
+        self.assertAlmostEqual(abs(r["placement"]["angle"]), 90.0, places=3)
+        o = self.session.doc.getObjectsByLabel("G moved")[0]
+        bb = o.Shape.BoundBox
+        self.assertAlmostEqual(bb.XMin, -5.0, places=4)
+        self.assertAlmostEqual(bb.YMin, 0.0, places=4)
+        self.assertIn("recent", self.ok("doc_open", {"recent": True}))
+
 
 if __name__ == "__main__":
     unittest.main()

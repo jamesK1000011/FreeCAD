@@ -7,6 +7,7 @@
 # tools, join features and curve-network import; PartDesign's clone, moving
 # features between bodies and in the tree, the tip, and a stepped shaft.
 
+import math
 import os
 import random
 
@@ -20,7 +21,7 @@ from . import picks
 from .doc import colour
 
 GROUP = "std_more"
-INFO = "Links, App::Part, duplicates, merge files, document info, revert, save all, appearance and face colours, text documents; compounds, join features; PartDesign clone, move feature, reorder, tip, stepped shaft; OpenSCAD tree tidying, structured points, polynomial surface, robot tool, merged cells."
+INFO = "Links, App::Part, the dependency graph, freeze, units, point-pair alignment, duplicates, merge files, document info, revert, save all, appearance and face colours, text documents; compounds, join features; PartDesign clone, move feature, reorder, tip, stepped shaft; OpenSCAD tree tidying, structured points, polynomial surface, robot tool, merged cells."
 
 V = FreeCAD.Vector
 # Kept on the object itself, so a colour set headless survives the save and
@@ -603,11 +604,155 @@ def tools(s):
         cell = str(a.get("merge") or a.get("split")).split(":")[0]
         return done("sheet_cells", {"sheet": sh.Label, "merged": bool(a.get("merge")), "span": list(sh.getCellSpan(cell)) if hasattr(sh, "getCellSpan") else None})
 
+    # ---- from the window-only re-sort (unattended use, O) -------------------------------
+
+    def doc_graph(a):
+        """What is built from what (Std_DependencyGraph): each object and
+        the ones it uses, as text and a GraphViz file (SVG too when dot is
+        on this computer)."""
+        import shutil
+        import subprocess
+
+        dd = d()
+        edges, nodes = [], []
+        for o in dd.Objects:
+            nodes.append(o)
+            for u in o.OutList:
+                edges.append((o, u))
+        uses = {o.Label: sorted({u.Label for (x, u) in edges if x is o}) for o in nodes}
+        roots = sorted(o.Label for o in nodes if not o.InList)
+        out = {"objects": len(nodes), "links": len(edges), "roots": roots,
+               "uses": {k: v for k, v in uses.items() if v}}
+        if a.get("path") is not None or a.get("svg"):
+            def q(t):
+                return '"' + str(t).replace("\\", "\\\\").replace('"', '\\"') + '"'
+            dot = ["digraph G {", "  rankdir=BT;", "  node [shape=box, fontsize=10];"]
+            dot += [f"  {q(o.Name)} [label={q(o.Label)}];" for o in nodes]
+            dot += [f"  {q(x.Name)} -> {q(u.Name)};" for x, u in edges]
+            dot.append("}")
+            p = os.path.expanduser(a.get("path") or f"{dd.Label}_graph.dot")
+            if not os.path.isabs(p):
+                p = os.path.join(s.out_dir, p)
+            if not p.lower().endswith(".dot"):
+                p += ".dot"
+            os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+            with open(p, "w") as f:
+                f.write("\n".join(dot) + "\n")
+            out["path"] = p
+            exe = shutil.which("dot")
+            if a.get("svg"):
+                if exe:
+                    svg = p[:-4] + ".svg"
+                    r = subprocess.run([exe, "-Tsvg", p, "-o", svg], capture_output=True, timeout=60)
+                    if r.returncode == 0:
+                        out["svg"] = svg
+                    else:
+                        out["note"] = "GraphViz could not draw it: " + r.stderr.decode(errors="replace")[-200:]
+                else:
+                    out["note"] = "GraphViz's dot is not on this computer: the .dot file opens in any GraphViz viewer."
+        return out
+
+    def object_freeze(a):
+        dd = d()
+        out = {}
+        if "skipRecompute" in a:
+            if not hasattr(dd, "RecomputesFrozen"):
+                raise ToolError("unavailable", "This FreeCAD has no skip-recompute switch on documents.")
+            dd.RecomputesFrozen = bool(a["skipRecompute"])
+            out["skipRecompute"] = bool(dd.RecomputesFrozen)
+        if a.get("objects"):
+            want = bool(a.get("frozen", True))
+            done_, cant = [], []
+            for o in objs(a["objects"]):
+                ok = False
+                try:
+                    o.setStatus("Freeze", want)
+                    ok = True
+                except Exception:
+                    try:
+                        (o.freeze if want else o.unfreeze)()
+                        ok = True
+                    except Exception:
+                        ok = False
+                (done_ if ok else cant).append(o.Label)
+            if cant and not done_:
+                raise ToolError("unavailable", "This FreeCAD cannot freeze objects (1.0 and newer can).")
+            out["frozen" if want else "unfrozen"] = done_
+            if cant:
+                out["not"] = cant
+            out["note"] = "A frozen object keeps its shape through recomputes until unfrozen." if want else "Unfrozen: recompute brings them up to date."
+        if not out:
+            raise bad("objects (frozen: true | false) and/or skipRecompute: true | false.")
+        s.snapshot("object_freeze")
+        return out
+
+    def units_convert(a):
+        q = a.get("value")
+        to = a.get("to")
+        if q in (None, "") or not to:
+            raise bad("value: a quantity with its unit (\"2.5 in\", \"300 N*m\", \"45 deg\"); to: the unit wanted (\"mm\", \"lbf*ft\", \"rad\").")
+        try:
+            Q = FreeCAD.Units.Quantity(str(q))
+            U = FreeCAD.Units.Quantity(f"1 {to}")
+        except Exception as e:
+            raise bad(f"{q!r} or {to!r} is not a quantity FreeCAD reads: {e}")
+        if Q.Unit != U.Unit:
+            raise bad(f"{q} and {to} measure different things ({Q.Unit} vs {U.Unit}).")
+        v = Q.Value / U.Value
+        return {"value": str(q), "to": to, "result": float(f"{v:.10g}"), "text": f"{v:.6g} {to}"}
+
+    def object_align(a):
+        """Place an object so its points land on another's (Std_Alignment):
+        pairs [[from, to] …] (three or more for a full turn, one moves only),
+        the best fit's rms and largest miss."""
+        import numpy as np
+
+        o = objs([a.get("object")], "object")[0] if a.get("object") else None
+        pairs = a.get("pairs") or []
+        if o is None or len(pairs) < 1:
+            raise bad("object, pairs [[from xyz on it, to xyz where it goes] …]: one pair moves it; three or more set its turn too.")
+        try:
+            P = np.array([[float(c) for c in p[0]] for p in pairs])
+            Q = np.array([[float(c) for c in p[1]] for p in pairs])
+        except Exception:
+            raise bad("pairs: [[[x, y, z], [x, y, z]] …] in mm.")
+        if P.shape[1:] != (3,) or Q.shape != P.shape:
+            raise bad("pairs: each [[x, y, z], [x, y, z]].")
+        cp, cq = P.mean(0), Q.mean(0)
+        if len(pairs) >= 3:
+            H = (P - cp).T @ (Q - cq)
+            U, S, Vt = np.linalg.svd(H)
+            if S[1] < 1e-9 * max(1.0, S[0]):
+                raise bad("pairs: the from-points lie on one line; three that are not in a line set the turn.")
+            dsign = np.sign(np.linalg.det(Vt.T @ U.T)) or 1.0
+            R = Vt.T @ np.diag([1, 1, dsign]) @ U.T
+        else:
+            R = np.eye(3)
+        t = cq - R @ cp
+        fit = (R @ P.T).T + t
+        miss = np.linalg.norm(fit - Q, axis=1)
+        M = FreeCAD.Matrix(*[float(x) for x in (*R[0], t[0], *R[1], t[1], *R[2], t[2], 0, 0, 0, 1)])
+        o.Placement = FreeCAD.Placement(M).multiply(o.Placement)
+        pl = o.Placement
+        out = {"object": o.Label, "pairs": len(pairs), "rms": round(float(np.sqrt((miss ** 2).mean())), 4), "worst": round(float(miss.max()), 4),
+               "placement": {"at": [round(x, 4) for x in pl.Base], "axis": [round(x, 5) for x in pl.Rotation.Axis], "angle": round(math.degrees(pl.Rotation.Angle), 4)}}
+        if len(pairs) < 3:
+            out["note"] = "Moved only: three or more pairs (not in a line) set its turn too."
+        return done("object_align", out)
+
     st = {"type": "string"}
     arr = {"type": "array", "items": {"type": "string"}}
     num = {"type": "number"}
     v3 = {"type": "array", "items": num}
     return [
+        Tool("doc_graph", "What is built from what in the document (Std Dependency graph): roots and each object's inputs; path writes a GraphViz .dot (svg: true draws it when GraphViz is here). Changes nothing.",
+             obj({"path": st, "svg": {"type": "boolean"}}), doc_graph),
+        Tool("object_freeze", "Freeze objects (frozen: false thaws) so recomputes leave their shapes as they are (Std Toggle freeze); skipRecompute: true | false for the document (Std Toggle skip recompute).",
+             obj({"objects": arr, "frozen": {"type": "boolean"}, "skipRecompute": {"type": "boolean"}}), object_freeze, changes=True),
+        Tool("units_convert", "A quantity in other units (the Units calculator): value \"2.5 in\", to \"mm\". Changes nothing.",
+             obj({"value": {}, "to": st}, ["value", "to"]), units_convert),
+        Tool("object_align", "Place an object by point pairs (Std Alignment): pairs [[from on it, to where it goes] …] in mm; one pair moves it, three or more (not in a line) turn it too — the best fit, with its rms and worst miss.",
+             obj({"object": st, "pairs": {"type": "array", "items": {"type": "array"}}}, ["object", "pairs"]), object_align, changes=True),
         Tool("link_make", "A link (App::Link): to an object (or \"Box.Face3\" for one element), at a placement, count for an array of links; kind: group makes an App::LinkGroup of objects. Shows the object again without copying it.",
              obj({"to": st, "kind": {"type": "string", "enum": ["link", "group"]}, "objects": arr, "at": v3, "axis": v3, "angle": num, "count": {"type": "integer"}, "name": st}), link_make, changes=True),
         Tool("link_edit", "Change links: action replace { link, to } | unlink { link } (a real copy in its place) | import { links } / import_all (objects linked from another document copied in).",

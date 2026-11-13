@@ -115,5 +115,19 @@ class TechDrawGaps(Base):
         r = self.ok("td_dim_special", {"view": iso, "kind": "axo_length", "refs": [f"Edge{longest[0]}", f"Edge{other[0]}"]})
         self.assertIn(self.session.doc.getObject(r["dimension"]).FormatSpec, ("60.00", "40.00"))
 
+    def test_5_lock_stack_move(self):
+        v = self.ok("td_view", {"page": "Gaps", "bodies": ["Plate"], "direction": "front", "scale": 1, "at": [80, 40], "name": "G front"})["view"]
+        self.assertTrue(self.ok("td_view_more", {"kind": "lock", "view": v})["locked"])
+        self.assertFalse(self.ok("td_view_more", {"kind": "lock", "view": v, "locked": False})["locked"])
+        view = self.session.doc.getObjectsByLabel(v)[0]
+        if hasattr(view, "StackOrder"):
+            top = self.ok("td_view_more", {"kind": "stack", "view": v, "to": "top"})["stackOrder"]
+            self.assertEqual(self.ok("td_view_more", {"kind": "stack", "view": v, "to": "down"})["stackOrder"], top - 1)
+        self.ok("td_page", {"action": "new", "paper": "A4", "name": "Gaps two"})
+        m = self.ok("td_view_more", {"kind": "move", "view": v, "page": "Gaps two"})
+        self.assertEqual((m["from"], m["page"]), ("Gaps", "Gaps two"))
+        pages = [p for p in view.InList if p.TypeId == "TechDraw::DrawPage"]
+        self.assertEqual([p.Label for p in pages], ["Gaps two"])
+
 if __name__ == "__main__":
     unittest.main()
