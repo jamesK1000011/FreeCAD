@@ -22,6 +22,66 @@ from ..tools import obj
 GROUP = "app"
 INFO = "FreeCAD itself: settings (any parameter, preference packs), commands and menus run by name in the window, workbenches."
 
+_INSTALL_DIR = os.path.join(os.path.expanduser("~"), "AgentLink", "install")
+
+# FreeCAD 1.1 on keeps its settings and add-ons in a folder per release
+# (…/FreeCAD/v1-1); the first time a release opens it asks, in a dialog,
+# whether to copy the older ones. Done here beforehand, the same way
+# (ApplicationDirectories.migrateAllPaths), so it opens with them.
+_MIGRATE = (
+    "import FreeCAD as F,sys\n"
+    "AD=getattr(F,'ApplicationDirectories',None)\n"
+    "p=[F.getUserAppDataDir(),F.getUserConfigDir()]\n"
+    "if AD is None: sys.stdout.write('@@unversioned@@')\n"
+    "elif all(AD.usingCurrentVersionConfig(x) for x in p): sys.stdout.write('@@already@@'+F.getUserAppDataDir())\n"
+    "else:\n"
+    "  AD.migrateAllPaths(p)\n"
+    "  sys.stdout.write('@@migrated@@'+repr(p))\n"
+)
+
+
+def _alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+
+def _bundle_python(app=None):
+    import sys
+
+    if app is None:
+        exe = sys.executable
+        if ".app/" not in exe:
+            return None
+        app = exe.split(".app/")[0] + ".app"
+    for n in ("python3", "python"):
+        p = os.path.join(app, "Contents", "Resources", "bin", n)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _carry_settings(app):
+    """Run the other release headless once to copy this one's settings and
+    add-ons into its versioned folders; says what it did."""
+    import subprocess
+
+    bin_ = os.path.join(app, "Contents", "Resources", "bin")
+    cmd = next((os.path.join(bin_, n) for n in ("freecadcmd", "FreeCADCmd") if os.path.exists(os.path.join(bin_, n))), None)
+    if cmd is None:
+        return "no FreeCADCmd in " + app + ": its first start asks about settings itself"
+    try:
+        r = subprocess.run([cmd, "-c", _MIGRATE], capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        return "not carried over (%s): its first start asks" % e
+    m = re.search(r"@@(\w+)@@(.*)", (r.stdout or "") + (r.stderr or ""))
+    if not m:
+        return "not carried over: " + ((r.stderr or r.stdout or "").strip()[-300:] or "no answer")
+    return {"migrated": "settings and add-ons copied: " + m.group(2), "already": "it has its own settings already: " + m.group(2), "unversioned": "it shares this one's settings folder"}[m.group(1)]
+
+
 ROOT = "User parameter:"
 # Commands that would hold the window (modal dialogs) or end the session.
 REFUSED = {
@@ -434,6 +494,12 @@ def tools(session):
         import subprocess
         import sys
 
+        target = a.get("app")
+        if target:
+            target = os.path.expanduser(target).rstrip("/")
+            if not (target.endswith(".app") and os.path.isdir(os.path.join(target, "Contents"))):
+                raise ToolError("not_found", "No FreeCAD app at " + target + " (app_install says where it put one).")
+
         # A step playing hides the body: show it again before anything is saved.
         try:
             from .. import panel
@@ -470,6 +536,12 @@ def tools(session):
         FreeCAD.saveParameter()
         exe = sys.executable
         bundle = exe.split(".app/")[0] + ".app" if ".app/" in exe else None
+        migrated = None
+        if target:
+            # The settings and add-ons, this one's freshly written, carried
+            # into the other release's own folders before it first opens.
+            migrated = _carry_settings(target)
+            bundle = target
         files = " ".join("'" + f.replace("'", "'\\''") + "'" for f in reopen)
         if bundle:
             cmd = f"sleep 3; open -a '{bundle}' {files}"
@@ -486,9 +558,49 @@ def tools(session):
 
             app = QtWidgets.QApplication.instance()
         QtCore.QTimer.singleShot(300, app.quit)
-        return {"restarting": True, "saved": saved, "reopens": reopen, "note": "FreeCAD quits and opens again in a few seconds with these documents, its link on by itself; calls meanwhile wait for it (up to 90 s)."}
+        return {"restarting": True, "saved": saved, "reopens": reopen, **({"app": bundle, "settings": migrated} if target else {}), "note": "FreeCAD quits and opens again in a few seconds with these documents, its link on by itself; calls meanwhile wait for it (up to 90 s)."}
+
+    def app_install(a):
+        """Install another FreeCAD release beside this one (a Mac): started
+        in the background, then read back with no arguments."""
+        import platform
+        import subprocess
+        import sys
+
+        os.makedirs(_INSTALL_DIR, exist_ok=True)
+        state = os.path.join(_INSTALL_DIR, "state.json")
+        cur = None
+        if os.path.exists(state):
+            with open(state) as f:
+                cur = json.load(f)
+        running = bool(cur and cur.get("state") not in ("installed", "failed") and _alive(cur.get("pid")))
+        version = a.get("version")
+        if not version:
+            if cur is None:
+                return {"state": "none", "running_version": ".".join(FreeCAD.Version()[:3]), "next": "app_install { version: \"1.1.3\" } (or \"latest\")"}
+            out = dict(cur)
+            if cur.get("state") == "installed":
+                out["next"] = "app_restart { app: \"%s\" } opens it, settings and add-ons carried over" % cur.get("app")
+            elif cur.get("state") not in ("failed",) and not running:
+                out["state"] = "stopped"
+            return out
+        if running:
+            raise ToolError("invalid_state", "An install is already running (" + str(cur.get("state")) + "); app_install with no arguments follows it.")
+        if platform.system() != "Darwin":
+            raise ToolError("unsupported", "app_install installs the macOS release; elsewhere use the system's package manager.")
+        py = _bundle_python()
+        if py is None:
+            raise ToolError("not_found", "No python3 in this FreeCAD's bundle to run the install with.")
+        job = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "install_job.py")
+        if os.path.exists(state):
+            os.remove(state)
+        log = open(os.path.join(_INSTALL_DIR, "install.log"), "w")
+        p = subprocess.Popen([py, "-I", job, version, state], start_new_session=True, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        return {"started": True, "pid": p.pid, "version": version, "note": "Downloading FreeCAD's official disk image from its GitHub release, SHA-256 checked against the release's; the FreeCAD.app there now is kept under its version's name. app_install with no arguments follows it (a few minutes)."}
 
     return [
+        Tool("app_install", "Install another FreeCAD release beside this one on a Mac: version (\"1.1.3\", \"latest\") from FreeCAD's GitHub release, SHA-256 checked; the current FreeCAD.app kept as \"FreeCAD <version>.app\". Runs in the background: no arguments reads its progress. Then app_restart { app } switches the window over.",
+             obj({"version": {"type": "string"}}), app_install, changes=False),
         Tool("pref_get", "Read FreeCAD's settings: a parameter group (path, e.g. \"BaseApp/Preferences/View\") with its values and subgroups, or one setting (name). Anything Edit > Preferences shows lives here.",
              obj({"path": {"type": "string"}, "name": {"type": "string"}}), pref_get),
         Tool("pref_set", "Change FreeCAD's settings: path, then name + value or values { name: value }; the type follows the setting's own (or type: bool, int, uint, float, string). Says what each was.",
@@ -512,7 +624,7 @@ def tools(session):
         Tool("snapshot_latest", "The person's newest screenshot (index 2, 3 … older ones) as a picture with their marks (original: true without), with its note, numbered pins and their comments, workbench and time. Only the person takes them (camera button, Alt+Shift+S).",
              obj({"index": {"type": "integer"}, "original": {"type": "boolean"}}), snapshot_latest),
         Tool("snapshot_list", "The person's screenshots, newest first, without pictures: time, note, pins, saved path.", obj({}), snapshot_list),
-        Tool("app_restart", "Quit this FreeCAD window and open it again (new add-ons, a theme, settings that need a restart): settings written, changed documents saved and reopened; one never saved is refused unless discard: true. Window only.",
-             obj({"discard": {"type": "boolean"}}), app_restart),
+        Tool("app_restart", "Quit this FreeCAD window and open it again (new add-ons, a theme, settings that need a restart): settings written, changed documents saved and reopened; one never saved is refused unless discard: true; app: another FreeCAD .app (app_install's) opens that one instead, this one's settings and add-ons carried into its folders first. Window only.",
+             obj({"discard": {"type": "boolean"}, "app": {"type": "string"}}), app_restart),
         Tool("workbench", "The workbenches, the active one, and activate: a name (Part Design, BIM, FEM …). Window only.", obj({"activate": {"type": "string"}}), workbench),
     ]
