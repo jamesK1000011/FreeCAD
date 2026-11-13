@@ -49,7 +49,17 @@ class WindowRoute(unittest.TestCase):
         empty document; the one after goes there."""
         import tempfile
 
-        os.environ["AGENTLINK_RESTART_MARK"] = os.path.join(tempfile.mkdtemp(), "mark")
+        mark = os.path.join(tempfile.mkdtemp(), "mark")
+        os.environ["AGENTLINK_RESTART_MARK"] = mark
+
+        def clear_own():
+            # This test's mark by its own path: the env may name the next
+            # test's by the time this thread gets here.
+            try:
+                os.remove(mark)
+            except OSError:
+                pass
+
         try:
             srv = socket.socket()
             srv.bind(("127.0.0.1", 0))
@@ -103,7 +113,10 @@ class WindowRoute(unittest.TestCase):
                 for line in f:
                     f.write(json.dumps({"jsonrpc": "2.0", "id": json.loads(line)["id"], "result": {"where": "window"}}) + "\n")
                     f.flush()
-                    restart_mark.clear()
+                    try:
+                        os.remove(mark)  # its own, by path (see clear_own above)
+                    except OSError:
+                        pass
 
             threading.Thread(target=late, daemon=True).start()
             got = []
@@ -153,7 +166,17 @@ class WindowRoute(unittest.TestCase):
 
         from agentlink import restart_mark
 
-        os.environ["AGENTLINK_RESTART_MARK"] = os.path.join(tempfile.mkdtemp(), "mark")
+        mark = os.path.join(tempfile.mkdtemp(), "mark")
+        os.environ["AGENTLINK_RESTART_MARK"] = mark
+
+        def clear_own():
+            # This test's mark by its own path: the env may name the next
+            # test's by the time this thread gets here.
+            try:
+                os.remove(mark)
+            except OSError:
+                pass
+
         try:
             srv = socket.socket()
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -183,7 +206,7 @@ class WindowRoute(unittest.TestCase):
                 for ln in g:
                     g.write(json.dumps({"jsonrpc": "2.0", "id": json.loads(ln)["id"], "result": {"where": "window"}}) + "\n")
                     g.flush()
-                    restart_mark.clear()
+                    clear_own()
 
             threading.Thread(target=first, daemon=True).start()
             got = []
