@@ -34,14 +34,47 @@ FLAG = "AGENTLINK_SUPERVISED"
 WINDOW_PORT = int(os.environ.get("AGENTLINK_WINDOW_PORT", "7318"))
 # Heavy tools: their deadline is their estimate times three (N); with no
 # estimate yet, half an hour. The rest get a change's 120 s.
-HEAVY = {
-    "fea_native", "fea_buckle", "fea_shell", "fea_frame", "fem_mesh", "fea_refine", "asm_motion", "asm_sweep", "slice", "slice_with",
-    "view_render", "dfm_check", "part_review", "cam_sim", "meshobj_boolean", "meshobj_offset", "meshobj_decimate", "points_mesh",
-    "deviation_map", "deviation_align", "scan_check", "section_fit", "part_extract", "texture_prepare", "manual_render", "steps_render",
-}
-for _n in ("fea_solve", "fea_heat", "strength_check"):
-    HEAVY.add(_n)
+HEAVY = keep.HEAVY if keep is not None else set()
 NO_ESTIMATE = 1800.0
+# How long a heavy job waits for heat or memory pressure to pass before the
+# answer says it waited and why.
+QUEUE_WAIT = float(os.environ.get("AGENTLINK_QUEUE_WAIT", "600"))
+PERSON_ACTIVE = 30.0
+
+
+def queue_admit(tool):
+    """A heavy job's turn (N): None to go, else the answer's words. Held when
+    the person said wait (their window work came first); waits while macOS
+    reports heat throttling or memory pressure, up to QUEUE_WAIT."""
+    if keep is None or tool not in HEAVY:
+        return None
+    q = keep.queue_state()
+    if q.get("held"):
+        return (f"Held: {q.get('notice') or 'the person was working in the window while a heavy job ran'}. New heavy jobs wait for their go — "
+                "ask them in chat; queue_go once they say go.")
+    t0 = time.time()
+    while True:
+        th = keep.mac_thermal()
+        pr = keep.mac_pressure()
+        if not th and pr not in ("warn", "critical"):
+            break
+        waited = time.time() - t0
+        why = "macOS reports the Mac is throttling for heat" if th else f"macOS reports memory pressure ({pr})"
+        if waited >= QUEUE_WAIT:
+            return f"{tool} waited {int(waited)} s and did not start: {why}. Try again in a while, or a rough pass (smaller)."
+        time.sleep(min(15.0, max(1.0, QUEUE_WAIT - waited)))
+    q = keep.queue_state()
+    q["running"] = [{"tool": tool, "start": time.time()}]
+    keep.save_queue(q)
+    return None
+
+
+def queue_done(tool):
+    if keep is None or tool not in HEAVY:
+        return
+    q = keep.queue_state()
+    q["running"] = [r for r in q.get("running") or [] if r.get("tool") != tool]
+    keep.save_queue(q)
 # A call stuck behind a dialog this long is answered "blocked".
 DIALOG_WAIT = 4.0
 
@@ -318,6 +351,7 @@ def run(script, argv):
     lock = threading.Lock()
     pending = {}
     lines = {}  # id -> the line, for a quiet restart to send again
+    heavy_ids = {}  # hidden: id -> heavy tool, its queue place freed at the answer
     inflight = {}  # hidden: id -> {tool, args, start}
     hangs = {}  # call key -> times it hung
     deaths = []
@@ -352,6 +386,8 @@ def run(script, argv):
                 if mid is not None:
                     pending.pop(mid, None)
                     lines.pop(mid, None)
+                    if mid in heavy_ids:
+                        queue_done(heavy_ids.pop(mid))
                     if inflight.pop(mid, None) is not None:
                         state["last_reply"] = time.time()
                 write(line)
@@ -438,6 +474,9 @@ def run(script, argv):
         pending.clear()
         inflight.clear()
         lines.clear()
+        for tool_ in set(heavy_ids.values()):
+            queue_done(tool_)
+        heavy_ids.clear()
 
     window = Window(write)
 
@@ -449,6 +488,17 @@ def run(script, argv):
             time.sleep(keep.PING_EVERY if keep else 2.0)
             try:
                 now = time.time()
+                q = keep.queue_state()
+                if q.get("running") and not q.get("held"):
+                    idle = keep.person_idle_seconds()
+                    hb = heartbeat() or {}
+                    window_up = now - float(hb.get("t") or 0) < 10
+                    if idle is not None and idle < PERSON_ACTIVE and window_up:
+                        r = q["running"][0]
+                        q["held"] = True
+                        q["notice"] = f"A heavy job is running ({r.get('tool')}, since {time.strftime('%H:%M', time.localtime(r.get('start') or now))}); new heavy jobs wait for your go"
+                        keep.save_queue(q)
+                        keep.log_watchdog({"event": "held", "tool": r.get("tool")})
                 c = window.inflight
                 if c:
                     hb = heartbeat()
@@ -502,15 +552,28 @@ def run(script, argv):
                 pending.pop(mid, None)
                 write(_answer(mid, "invalid_state", f"{tool} with these arguments hung FreeCAD twice this session: refused for the rest of it. Try another way (other sizes, a rough pass, fewer objects)."))
                 continue
+        heavy_tool = None
+        if msg and msg.get("method") == "tools/call":
+            mid, tool, args = _call_info(line)
+            held = queue_admit(tool)
+            if held:
+                pending.pop(mid, None)
+                write(_answer(mid, "invalid_state", held))
+                continue
+            heavy_tool = tool if tool in HEAVY else None
         # Window first: a tool call goes to the FreeCAD window when its link
         # is on (Start link), so the person watches it land; else the hidden one.
         if msg and msg.get("method") == "tools/call" and window.call(line):
             pending.pop(msg.get("id"), None)
+            if heavy_tool:
+                queue_done(heavy_tool)
             continue
         if msg and msg.get("method") == "tools/call":
             mid, tool, args = _call_info(line)
             inflight[mid] = {"tool": tool, "args": args, "start": time.time()}
             lines[mid] = line
+            if heavy_tool:
+                heavy_ids[mid] = heavy_tool
         try:
             send_child(line)
         except OSError:

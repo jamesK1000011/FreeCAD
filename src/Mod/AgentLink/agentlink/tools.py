@@ -313,9 +313,39 @@ class Session:
             "step": len(self.steps),
             "outDir": self.out_dir,
             "where": getattr(self, "where", "hidden"),
+            **self._unattended_state(),
             **({"note": "The hidden FreeCAD answered: the FreeCAD window is closed, or its link is off or still starting, so this is not the document on screen."} if getattr(self, "where", "hidden") == "hidden" and os.environ.get("AGENTLINK_SUPERVISED") else {}),
             **({"launcher": _launcher()} if a.get("launcher") else {}),
         }
+
+    def _unattended_state(self):
+        """The machine preset, the heavy-job queue and a dialog in front
+        (unattended use, N, F), for session_state."""
+        out = {}
+        try:
+            g = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/AgentLink")
+            m = keep.preset({"heavySlots": g.GetInt("HeavySlots", 0), "memoryCeilingGB": g.GetFloat("MemoryCeilingGB", 0.0)})
+            out["machine"] = {k: m.get(k) for k in ("chip", "perfCores", "memoryGB", "fan", "heavySlots", "memoryCeilingGB") if m.get(k) not in (None, "")}
+            q = keep.queue_state()
+            queue = {}
+            if q.get("running"):
+                queue["running"] = [r.get("tool") for r in q["running"]]
+            if q.get("held"):
+                queue["held"] = q.get("notice") or "new heavy jobs wait for the person's go (queue_go)"
+            if queue:
+                out["queue"] = queue
+        except Exception:
+            pass
+        if getattr(FreeCAD, "GuiUp", False):
+            try:
+                from . import gui_link
+
+                d = gui_link.modal_info()
+                if d:
+                    out["dialog"] = {k: v for k, v in d.items() if k != "widget"}
+            except Exception:
+                pass
+        return out
 
     def gen_make(self, a):
         gen = a.get("generator", "gridfinity_bin")
@@ -1096,6 +1126,12 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
                     guard=lambda tool, args: paths.guard(tool, args, session.out_dir))
     server.on_call = session.record_call
     session.server = server
+    try:
+        from .heavy import Gate
+
+        server.gate = Gate(session)
+    except Exception:
+        pass
     from . import usage
 
     if os.environ.get("AGENTLINK_USAGE", "on") != "off":

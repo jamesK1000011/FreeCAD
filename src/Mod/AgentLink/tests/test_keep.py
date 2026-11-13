@@ -204,6 +204,13 @@ class Machine(Home):
         self.assertEqual(keep.memory_pressure_level("System-wide memory free percentage: 45%"), "normal")
         self.assertAlmostEqual(keep.hid_idle_seconds('"HIDIdleTime" = 12500000000'), 12.5)
 
+    def test_read_and_override(self):
+        m = keep.read_machine()
+        self.assertGreaterEqual(m["heavySlots"], 1)
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp.name, "machine.json")))
+        self.assertEqual(keep.preset({"memoryCeilingGB": 2.5})["memoryCeilingGB"], 2.5)
+        self.assertIn("fea_solve", keep.HEAVY)
+
     def test_queue(self):
         q = keep.queue_state()
         self.assertIsNone(keep.estimate(q, "fea_solve", 1000))

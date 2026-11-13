@@ -546,6 +546,100 @@ def macro_calls(text):
 
 # ---- N. the machine and heavy jobs --------------------------------------------------------
 
+# Heavy tools: solves (FEM, assembly), meshing, alignment and deviation,
+# slicing, renders and big booleans. They go through the queue, are timed
+# for estimates, and get their estimate times three as a deadline.
+HEAVY = {
+    "fea_native", "fea_buckle", "fea_shell", "fea_frame", "fem_mesh", "fea_refine", "fea_solve", "fea_heat", "strength_check",
+    "asm_motion", "asm_sweep", "slice", "slice_with", "view_render", "dfm_check", "part_review", "cam_sim",
+    "meshobj_boolean", "meshobj_offset", "meshobj_decimate", "points_mesh", "part_extract", "texture_prepare",
+    "deviation_map", "deviation_align", "scan_check", "section_fit", "manual_render", "steps_render",
+}
+SYSCTL_KEYS = ("machdep.cpu.brand_string", "hw.perflevel0.physicalcpu", "hw.physicalcpu", "hw.ncpu", "hw.memsize", "hw.model")
+
+
+def _run(argv, timeout=5):
+    import subprocess
+
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return r.stdout if r.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def read_machine():
+    """The preset, read from the machine once (macOS sysctl; elsewhere what
+    Python can see) and kept in machine.json."""
+    import sys
+
+    got = {}
+    if sys.platform == "darwin":
+        for k in SYSCTL_KEYS:
+            v = _run(["sysctl", "-n", k]).strip()
+            if v:
+                got[k] = v
+    else:
+        got["hw.ncpu"] = str(os.cpu_count() or 1)
+        got["hw.physicalcpu"] = got["hw.ncpu"]
+        try:
+            with open("/proc/meminfo") as f:
+                kb = int(re.search(r"MemTotal:\s+(\d+)", f.read()).group(1))
+            got["hw.memsize"] = str(kb * 1024)
+        except (OSError, AttributeError, ValueError):
+            pass
+        got["hw.model"] = "linux"
+    m = machine_from(got)
+    m["read"] = time.time()
+    save_machine(m)
+    return m
+
+
+def preset(overrides=None):
+    """The kept preset (read once), with the person's own settings on top:
+    { heavySlots, memoryCeilingGB } from Mod/AgentLink."""
+    m = machine() or read_machine()
+    for k, v in (overrides or {}).items():
+        if v:
+            m[k] = v
+    return m
+
+
+_cache = {}
+
+
+def _cached(key, fn, ttl=10.0):
+    v = _cache.get(key)
+    if v and time.time() - v[0] < ttl:
+        return v[1]
+    out = fn()
+    _cache[key] = (time.time(), out)
+    return out
+
+
+def person_idle_seconds():
+    import sys
+
+    if sys.platform != "darwin":
+        return None
+    return _cached("idle", lambda: hid_idle_seconds(_run(["ioreg", "-c", "IOHIDSystem", "-r", "-k", "HIDIdleTime"])))
+
+
+def mac_thermal():
+    import sys
+
+    if os.environ.get("AGENTLINK_FAKE_THERMAL"):  # tests
+        return True
+    return sys.platform == "darwin" and _cached("therm", lambda: thermal_limited(_run(["pmset", "-g", "therm"])))
+
+
+def mac_pressure():
+    import sys
+
+    if sys.platform != "darwin":
+        return "normal"
+    return _cached("press", lambda: memory_pressure_level(_run(["sysctl", "kern.memorystatus_vm_pressure_level"])))
+
 def machine_from(sysctl):
     """The preset from sysctl's answers: { chip, cores, perfCores, memoryGB,
     model, fan, heavySlots, memoryCeilingGB }."""

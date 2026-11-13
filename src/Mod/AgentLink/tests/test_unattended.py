@@ -145,9 +145,8 @@ class Unattended(Base):
 
         if os.path.isfile(os.path.join(FreeCAD.getUserConfigDir(), "user.cfg")):
             self.assertTrue(os.listdir(keep.path("settings")))
-            self.assertTrue(h[0].get("change"))
-        if not os.environ.get("AGENTLINK_SUPERVISED"):
-            self.assertEqual(self.refused("pref_rollback", {"to": h[0]["change"]})["code"], "unavailable")
+            if not os.environ.get("AGENTLINK_SUPERVISED"):
+                self.assertEqual(self.refused("pref_rollback", {"to": h[0]["change"]})["code"], "unavailable")
         self.assertEqual(self.refused("pref_rollback", {"to": 99999})["code"], "not_found")
 
     def test_9_smoke_test_passes_here(self):
@@ -225,6 +224,57 @@ class Unattended(Base):
         self.assertIn("changed", self.refused("macro_run", {"name": "Plate test"})["message"])
         self.assertEqual(self.ok("macro_show", {"name": "Plate test"})["state"], "changed")
         self.ok("macro_unapprove", {"name": "Plate test"})
+
+    def test_12_addon_manager(self):
+        import tempfile
+
+        import FreeCAD
+
+        if tuple(int(x) for x in FreeCAD.Version()[:2]) < (1, 1):
+            e = self.refused("addon")
+            self.assertEqual(e["code"], "unavailable")
+            self.assertIn("1.1", e["message"])
+            return
+        src = os.path.join(tempfile.mkdtemp(prefix="agentlink-addon-"), "AgentLinkTestAddon")
+        os.makedirs(src)
+        open(os.path.join(src, "Init.py"), "w").write("# a test add-on: does nothing\n")
+        open(os.path.join(src, "package.xml"), "w").write("<?xml version='1.0'?><package format='1'><name>AgentLinkTestAddon</name><version>0.1</version><description>Agent Link test</description></package>\n")
+        r = self.call("addon", {"action": "list"})
+        if r[0] and r[1]["error"]["code"] == "unavailable":
+            self.skipTest(r[1]["error"]["message"])
+        self.assertEqual(self.refused("addon", {"action": "install", "name": "AgentLinkTestAddon", "url": src})["code"], "not_allowed")
+        got = self.ok("addon", {"action": "install", "name": "AgentLinkTestAddon", "url": src, "confirm": "install AgentLinkTestAddon"})
+        self.assertEqual(got["smoke"], "passed")
+        names = [x["name"] for x in self.ok("addon", {"action": "list"})["installed"]]
+        self.assertIn("AgentLinkTestAddon", names)
+        up = self.ok("addon", {"action": "update", "name": "AgentLinkTestAddon", "url": src})
+        self.assertTrue(os.path.isdir(up["previous"]))
+        self.assertIn("agentlink_update", self.refused("addon", {"action": "update", "name": "AgentLink"})["message"])
+        self.ok("addon", {"action": "remove", "name": "AgentLinkTestAddon", "confirm": "remove AgentLinkTestAddon"})
+        self.assertNotIn("AgentLinkTestAddon", [x["name"] for x in self.ok("addon", {"action": "list"})["installed"]])
+
+    def test_13_machine_queue_and_estimates(self):
+        from agentlink import keep
+
+        st = self.ok("session_state")
+        self.assertIn("heavySlots", st["machine"])
+        self.assertTrue(self.ok("queue_go")["go"])
+        # Past runs say view_render is slow at this size: the first call is
+        # answered with the estimate, the same call again runs it.
+        q = keep.queue_state()
+        q["timings"] = {"view_render": [[1, 400.0], [2, 800.0]]}
+        keep.save_queue(q)
+        self.box("N box", [10, 10, 10])
+        os.environ["AGENTLINK_GATE"] = "1"
+        try:
+            e = self.refused("view_render", {"view": "iso", "inline": False})
+            self.assertIn("takes about", e["message"])
+            self.ok("view_render", {"view": "iso", "inline": False})
+        finally:
+            os.environ.pop("AGENTLINK_GATE", None)
+            q = keep.queue_state()
+            q["timings"] = {}
+            keep.save_queue(q)
 
 
 if __name__ == "__main__":

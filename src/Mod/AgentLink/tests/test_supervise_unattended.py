@@ -168,6 +168,26 @@ class Hidden(Sup):
         self.assertEqual(self.call("ping")[1], {"ok": "ping"})
 
 
+class Queue(Sup):
+    def test_held_until_go(self):
+        json.dump({"running": [], "waiting": [], "held": True, "notice": "A heavy job is running (fea_solve)", "timings": {}}, open(os.path.join(self.home, "queue.json"), "w"))
+        err, out = self.call("view_render", timeout=10)
+        self.assertTrue(err)
+        self.assertIn("Held", out["error"]["message"])
+        self.assertEqual(self.call("ping")[1], {"ok": "ping"})
+
+    def test_waits_for_heat_then_says_so(self):
+        self.sup.kill()
+        self.env["AGENTLINK_FAKE_THERMAL"] = "1"
+        self.env["AGENTLINK_QUEUE_WAIT"] = "2"
+        code = f"import sys; sys.path.insert(0, {AL!r}); from agentlink import supervise; supervise.run({os.path.join(self.tmp, 'fake_hidden.py')!r}, [])"
+        self.sup = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=self.env, text=True, bufsize=1)
+        err, out = self.call("view_render", timeout=30)
+        self.assertTrue(err)
+        self.assertIn("throttling for heat", out["error"]["message"])
+        self.assertEqual(self.call("ping")[1], {"ok": "ping"})
+
+
 class WindowSide(Sup):
     window = True
 

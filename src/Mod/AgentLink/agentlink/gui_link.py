@@ -237,6 +237,15 @@ class Link:
                     keep.log_watchdog({"event": "dialog", "title": d["title"], "pressed": act[1]})
             else:
                 self._dialog = None
+            # A heavy job held for the person's go (N): said in the status bar.
+            q = keep._load(keep.path("queue.json"), {}) or {}
+            if q.get("held") and q.get("notice"):
+                try:
+                    import FreeCADGui
+
+                    FreeCADGui.getMainWindow().statusBar().showMessage("Agent Link: " + q["notice"] + " (say go in chat).", 3000)
+                except Exception:
+                    pass
             docs = [{"name": x.Name, "label": x.Label, "file": x.FileName or ""} for x in FreeCAD.listDocuments().values()]
             keep._save(keep.path("heartbeat.json"), {
                 "pid": os.getpid(), "t": time.time(), "app": _bundle(), "freecad": ".".join(FreeCAD.Version()[:3]), "port": self.port,

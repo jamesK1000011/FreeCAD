@@ -118,6 +118,7 @@ agentlink/guides/surface.md
 agentlink/guides/techdraw.md
 agentlink/guides/thread.md
 agentlink/guides/view.md
+agentlink/heavy.py
 agentlink/hull3d.py
 agentlink/install_job.py
 agentlink/iso286.py

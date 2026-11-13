@@ -203,6 +203,8 @@ class Server:
         self.meter = None
         # Told of each call that went through: on_call(tool, args).
         self.on_call = None
+        # Heavy jobs' estimates and memory ceiling (agentlink/heavy.py).
+        self.gate = None
 
     def add(self, tool):
         self.tools[tool.name] = tool
@@ -287,7 +289,17 @@ class Server:
             check_input(tool.schema, args)
             if self.guard is not None:
                 self.guard(tool, args)
-            out = self.run(tool, lambda: tool.fn(args))
+            gate = self.gate
+            if gate is not None:
+                gate.before(tool, args)
+            try:
+                out = self.run(tool, lambda: tool.fn(args))
+            except BaseException:
+                if gate is not None:
+                    gate.after(tool, args, False)
+                raise
+            if gate is not None:
+                gate.after(tool, args, True)
             if self.on_call is not None:
                 try:
                     self.on_call(tool, args)
