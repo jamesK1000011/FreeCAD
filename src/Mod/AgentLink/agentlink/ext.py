@@ -158,6 +158,12 @@ def tools(session):
             r = str(a.get("repo") or "").strip()
             if not r:
                 raise ToolError("invalid_input", "repo: owner/repo, with @branch if not main.")
+            if act == "add":
+                # An extension is code FreeCAD runs at start: whose to add is
+                # the person's call, typed by them, never the agent's alone.
+                want = f"install {r}"
+                if (a.get("confirm") or "").strip() != want:
+                    raise ToolError("not_allowed", f"confirm: \"{want}\", word for word, typed by the person — an extension is code FreeCAD runs; ask them first, and say whose repository it is. Nothing was changed.")
             have = repos()
             have = (have + [r]) if act == "add" and r not in have else [x for x in have if x != r]
             FreeCAD.ParamGet(PREFS).SetString("ExtensionRepos", ",".join(have))
@@ -167,6 +173,6 @@ def tools(session):
         raise ToolError("invalid_input", "action: list, add, remove, sync.")
 
     return [Tool("app_extensions",
-                 "Extensions to Agent Link kept in git repositories: list (set and loaded), add / remove { repo: owner/repo[@branch] }, sync (fetched with this computer's own git sign-in and installed beside Agent Link; then app_restart). The repositories are a local setting.",
-                 {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "add", "remove", "sync"]}, "repo": {"type": "string"}}, "required": [], "additionalProperties": False},
+                 "Extensions to Agent Link kept in git repositories: list (set and loaded), add { repo: owner/repo[@branch], confirm: \"install <repo>\" typed by the person — an extension is code FreeCAD runs, so adding one is their call } / remove { repo }, sync (the listed ones fetched with this computer's own git sign-in and installed beside Agent Link; then app_restart). The list is a local setting only the person adds to.",
+                 {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "add", "remove", "sync"]}, "repo": {"type": "string"}, "confirm": {"type": "string"}}, "required": [], "additionalProperties": False},
                  app_extensions, group="core")]

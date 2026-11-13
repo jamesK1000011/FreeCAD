@@ -138,7 +138,9 @@ def tools(session):
                 m = FreeCAD.Matrix()
                 m.move(V(-c[0], -c[1], 0))
                 m2 = FreeCAD.Matrix()
-                m2.scale(f, f, 1)
+                # Uniform in all three: OCCT reads a matrix's scale as the cube
+                # root of its determinant, so (f, f, 1) scaled by f**(2/3).
+                m2.scale(f, f, f)
                 m = m2.multiply(m)
                 m3 = FreeCAD.Matrix()
                 m3.move(V(c[0], c[1], 0))

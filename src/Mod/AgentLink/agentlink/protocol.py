@@ -6,6 +6,7 @@
 # into an application bundle.
 
 import json
+import math
 import sys
 import time
 import traceback
@@ -82,11 +83,15 @@ def _typed(where, spec, v):
     t = spec.get("type")
     if isinstance(t, str) and t in _PY:
         ok = isinstance(v, _PY[t]) and not (t in ("number", "integer") and isinstance(v, bool))
+        if ok and isinstance(v, float) and not math.isfinite(v):
+            ok = False
         if not ok and isinstance(v, str):
             text = v.strip()
             try:
                 if t == "number":
                     v, ok = float(text), True
+                    if not math.isfinite(v):
+                        ok = False
                 elif t == "integer" and text.lstrip("-").isdigit():
                     v, ok = int(text), True
                 elif t == "boolean" and text.lower() in ("true", "false"):
@@ -158,8 +163,24 @@ def trim(out, limit):
     return out
 
 
+def _finite(o):
+    """NaN and infinities as null: JSON has no such numbers, and a client's
+    parser (Node's JSON.parse) refuses the whole reply when Python writes
+    them."""
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: _finite(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_finite(v) for v in o]
+    return o
+
+
 def compact(obj):
-    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+    try:
+        return json.dumps(obj, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    except ValueError:
+        return json.dumps(_finite(obj), separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
 
 class Server:

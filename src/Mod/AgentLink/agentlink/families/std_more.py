@@ -72,7 +72,7 @@ def tools(s):
         else:
             lk.LinkedObject = src
         lk.Label = s.unique(a.get("name") or f"{src.Label} link", lk)
-        if a.get("at") is not None:
+        if picks.placed(a):
             lk.Placement = picks.placement(a)
         if a.get("count"):
             lk.ElementCount = int(a["count"])
@@ -127,7 +127,7 @@ def tools(s):
             for g in [x for x in m.InList if x.TypeId == "App::Part"]:
                 g.removeObject(m)
             p.addObject(m)
-        if a.get("at") is not None:
+        if picks.placed(a):
             p.Placement = picks.placement(a)
         return done("part_container", {"part": p.Label, "objects": [m.Label for m in members], "note": "An App::Part moves everything in it together, by its placement."})
 
@@ -286,8 +286,10 @@ def tools(s):
         if getattr(o, "ViewObject", None) is not None:
             o.ViewObject.Visibility = False
         d().recompute()
+        if f.Shape.isNull() or "Invalid" in (getattr(f, "State", None) or []):
+            raise ToolError("failed", f"The filter keeps nothing of {o.Label} ({how}" + ("" if a.get("stencil") or not how.startswith("collision") else ", and collision filters need a stencil") + ") — nothing was made.")
         s.snapshot("compound_filter")
-        return {"filter": f.Label, "kept": len(f.Shape.childShapes()) if not f.Shape.isNull() else 0}
+        return {"filter": f.Label, "kept": len(f.Shape.childShapes())}
 
     def part_join(a):
         import BOPTools.JoinFeatures as J
@@ -327,7 +329,7 @@ def tools(s):
         b = d().addObject("PartDesign::Body", "Body")
         b.Label = s.unique(a.get("name") or f"{src.Label} clone", b)
         b.BaseFeature = src
-        if a.get("at") is not None:
+        if picks.placed(a):
             b.Placement = picks.placement(a)
         d().recompute()
         s.snapshot("pd_clone")
@@ -340,6 +342,7 @@ def tools(s):
         to = pdc.pd_body(d(), a.get("to"))
         if src is to:
             raise bad(f"{f.Label} is in {to.Label} already.")
+        broken0 = set(pdc.broken(d()))
         moved = [f]
         # A sketch's feature takes its sketch along, as the GUI's Move does.
         prof = getattr(f, "Profile", None)
@@ -361,9 +364,12 @@ def tools(s):
                     if new is not None:
                         setattr(o, sp, [(new, "")])
         d().recompute()
+        new_broken = [x for x in pdc.broken(d()) if x not in broken0]
+        if new_broken:
+            # Raised inside the tool's transaction: the move is taken back.
+            raise ToolError("invalid_state", f"Moving {f.Label} to {to.Label} breaks {', '.join(map(str, new_broken))} — nothing was moved. What it is built on must go with it, or it be rebuilt there.")
         s.snapshot("pd_move_feature")
-        return {"moved": [o.Label for o in moved], "from": src.Label if src else None, "to": to.Label, "tip": to.Tip.Label if to.Tip else None,
-                **({"broken": pdc.broken(d())} if pdc.broken(d()) else {})}
+        return {"moved": [o.Label for o in moved], "from": src.Label if src else None, "to": to.Label, "tip": to.Tip.Label if to.Tip else None}
 
     def pd_reorder(a):
         f = picks.find(d(), a.get("feature"), "feature")
@@ -374,12 +380,26 @@ def tools(s):
         target = pdc.in_body(b, a.get(where), what=where) if a.get(where) else None
         if target is None:
             raise bad("after or before: the feature to put it next to.")
+        broken0 = set(pdc.broken(d()))
+        tip_was = b.Tip
         b.removeObject(f)
         b.insertObject(f, target, where == "after")
+        # Put after the tip, a feature would drop out of the body's shape
+        # with nothing said: the tip goes with it, as in the window.
+        moved_tip = False
+        if where == "after" and tip_was is target:
+            b.Tip = f
+            moved_tip = True
+        elif tip_was is f:
+            b.Tip = f
         d().recompute()
+        new_broken = [x for x in pdc.broken(d()) if x not in broken0]
+        if new_broken:
+            raise ToolError("invalid_state", f"{f.Label} {where} {target.Label} breaks {', '.join(map(str, new_broken))} — nothing was moved: it uses something that would come after it.")
         s.snapshot("pd_reorder")
         order = [o.Label for o in b.Group if not o.TypeId.startswith("App::Origin")]
-        return {"body": b.Label, "order": order, **({"broken": pdc.broken(d())} if pdc.broken(d()) else {})}
+        return {"body": b.Label, "order": order, "tip": b.Tip.Label if b.Tip else None, **({"tipMoved": True} if moved_tip else {}),
+                "volume": round(b.Shape.Volume, 3) if not b.Shape.isNull() and b.Shape.Solids else None}
 
     def pd_tip(a):
         b = pdc.pd_body(d(), a.get("body"))
@@ -416,7 +436,7 @@ def tools(s):
         o = d().addObject("Part::Feature", "Shaft")
         o.Shape = solid.removeSplitter()
         o.Label = s.unique(a.get("name") or "Shaft", o)
-        if a.get("at") is not None:
+        if picks.placed(a):
             o.Placement = picks.placement(a)
         return done("pd_shaft", {"shaft": o.Label, "length": round(x, 3), "segments": len(segs), "volume": round(o.Shape.Volume, 3),
                                  "note": "Shoulders are sharp: pd_fillet/part chamfer them; strength_check or fem for loads."})
@@ -565,7 +585,7 @@ def tools(s):
             raise bad(f"{r.Label} is not a robot.")
         t = picks.shaped(d(), a.get("tool"), "tool")
         r.ToolShape = t
-        if a.get("at") is not None:
+        if picks.placed(a):
             r.ToolBase = picks.placement(a)
         return done("robot_tool", {"robot": r.Label, "tool": t.Label, "note": "The tool shape follows the robot's flange (its ToolBase offset)."})
 

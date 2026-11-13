@@ -5,10 +5,23 @@
 # opening, the project). Each check is a function (rule, subject, facts,
 # values) -> finding; a value it needs and lacks becomes a question, a value
 # within its tolerance of the limit an engineer's call, and an assumed value
-# never earns compliant on its own.
+# on any fact a check reads never earns compliant. Facts are converted to
+# one unit per kind on the way in (units.py): an unknown unit or a negative
+# tolerance is an error, a value outside its plausible band a question. A
+# rule whose applies key the subject holds as unknown (escape: null, use:
+# "Undefined") is a question too, never silence. "compliant" means within
+# the checked limits only.
 
-from . import framing
+import math
+
+from . import framing, units
 from .findings import finding
+
+UNKNOWN = (None, "", "undefined", "unknown", "notdefined", "none", "null")
+ASK_KEY = {"escape": "is this opening an emergency escape and rescue opening (one serving a sleeping room or basement)? yes / no",
+           "use": "what is this room used for (habitable, sleeping, storage, garage …)?",
+           "separates_garage": "does this separate the garage from the home? yes / no",
+           "role": "what does this member do (joist, rafter, beam, column)?"}
 
 CHECKS = {}
 
@@ -31,22 +44,52 @@ def ask(subject, fact, why):
     return {"subject": subject, "fact": fact, "ask": why}
 
 
-def matches(rule, subj):
+def _unknown(v):
+    return v is None or (isinstance(v, str) and v.strip().lower() in UNKNOWN)
+
+
+def match(rule, subj):
+    """("yes" | "no" | "absent" | "unknown", [keys held as unknown]). A key
+    the subject holds with another value: no (not applicable). A key it does
+    not carry at all: absent (silently skipped, as for a wall nobody said
+    separates a garage). A key it holds as unknown (None, "Undefined"): a
+    question once every known key matches."""
     ap = rule.get("applies") or {}
+    if not isinstance(ap, dict):
+        raise TypeError("the rule's applies is not an object")
+    unknown = []
     for k, want in ap.items():
+        held = k in subj or k in (subj.get("facts") or {})
         have = subj.get(k)
         if have is None:
             have = (get(subj.get("facts", {}), k) or {}).get("value")
+        if _unknown(have):
+            if held:
+                unknown.append(k)
+                continue
+            return "absent", []
         if isinstance(want, list):
             if have not in want:
-                return False
+                return "no", []
         elif have != want:
-            return False
-    return True
+            return "no", []
+    return ("unknown", unknown) if unknown else ("yes", [])
+
+
+def matches(rule, subj):
+    return match(rule, subj)[0] == "yes"
+
+
+def _empty(f):
+    if f is None:
+        return True
+    v = f.get("value")
+    return v is None or (isinstance(v, str) and not v.strip())
 
 
 def missing(rule, subj, names):
-    return [n for n in names if get(subj.get("facts", {}), n) is None]
+    """Names with no value: absent, None, or an empty string."""
+    return [n for n in names if _empty(get(subj.get("facts", {}), n))]
 
 
 def assumed_used(subj, names):
@@ -65,13 +108,15 @@ def _bound(rule, subj, state_if_ok, names, extra):
 def _limit(rule, subj, values, which):
     p = rule.get("params") or {}
     name = p.get("fact")
-    lim = next((v for k, v in p.items() if k.startswith("min_" if which == "fact.at_least" else "max_")), None)
-    if not name or lim is None:
+    key = next((k for k in p if k.startswith("min_" if which == "fact.at_least" else "max_")), None)
+    lim = p.get(key) if key else None
+    if not name or lim is None or not isinstance(lim, (int, float)) or isinstance(lim, bool) or not math.isfinite(lim):
         return finding(rule, subj["id"], "error", f"the rule's params need fact and a {'min_' if which == 'fact.at_least' else 'max_'} value")
     f = get(subj.get("facts", {}), name)
     if f is None:
         return finding(rule, subj["id"], "insufficient_information", f"{name} is not known", questions=[ask(subj["id"], name, rule.get("ask") or f"measure {name}")])
-    v, pm = float(f["value"]), float(f.get("pm") or 0)
+    lim, _ = units.limit_in(key, float(lim))
+    v, pm = float(f["value"]), abs(float(f.get("pm") or 0))
     lo, hi = v - pm, v + pm
     if which == "fact.at_least":
         state = "compliant" if lo >= lim else "non_compliant" if hi < lim else "manual_review_required"
@@ -131,6 +176,8 @@ def _height_share(rule, subj, values):
 @check("info.required")
 def _required(rule, subj, values):
     names = (rule.get("params") or {}).get("facts") or rule.get("needs") or []
+    if not isinstance(names, list) or not names:
+        return finding(rule, subj["id"], "error", "the rule names no facts to require (params.facts)")
     gone = missing(rule, subj, names)
     if gone:
         def wording(n):
@@ -140,7 +187,7 @@ def _required(rule, subj, values):
                 return "what it is made of: bim_material, or code_answer"
             return f"its {n.replace('_', ' ')}"
         return finding(rule, subj["id"], "insufficient_information", f"missing: {', '.join(gone)}", questions=[ask(subj["id"], n, wording(n)) for n in gone])
-    return finding(rule, subj["id"], "compliant", "all present")
+    return finding(rule, subj["id"], "compliant", f"all present: {', '.join(names)}")
 
 
 @check("framing.spacing")
@@ -150,17 +197,29 @@ def _spacing(rule, subj, values):
     return CHECKS["fact.at_most"](r, subj, values)
 
 
-def _loads(use, values, params):
+def _loads(use, values, params, defaults=None):
     """kPa by use from the values in force: load.live.<use>, load.dead.<use>,
-    snow from load.snow.ground times the roof factor for roofs."""
+    snow from load.snow.ground times the roof factor for roofs. A factor the
+    engine fills in itself goes on defaults (a list), if given."""
     def val(name):
-        v = values.get(name)
-        return float(v["value"]) if isinstance(v, dict) else (float(v) if v is not None else None)
+        return units.value_in(name, values.get(name), "kPa")
     live, dead = val(f"load.live.{use}"), val(f"load.dead.{use}")
     snow = None
     if use in ("roof", "rafter") and val("load.snow.ground") is not None:
-        snow = val("load.snow.ground") * float(params.get("snow_factor", val("load.snow.roof_factor") or 0.7))
+        fac = params.get("snow_factor")
+        if fac is None:
+            fac = val("load.snow.roof_factor")
+        if fac is None:
+            fac = 0.7
+            if defaults is not None:
+                defaults.append({"fact": "load.snow.roof_factor", "value": 0.7, "provenance": "defaulted", "note": "roof snow over ground snow (engine default)"})
+        snow = val("load.snow.ground") * float(fac)
     return live, dead, snow
+
+
+MEMBER_ASK = {"span": "the clear span between supports, mm", "spacing": "the on-centre spacing, mm",
+              "use": "what the member carries: floor, attic_storage, habitable_attic, roof",
+              "size": "the member's size (2x8) or its width and depth, mm"}
 
 
 @check("framing.member")
@@ -168,14 +227,15 @@ def _member(rule, subj, values):
     facts = subj.get("facts", {})
     sid = subj["id"]
     p = rule.get("params") or {}
-    if (get(facts, "truss") or {}).get("value") or subj.get("role") == "truss":
+    nc = list(framing.NOT_CHECKED)
+    if (get(facts, "truss") or {}).get("value") is True or subj.get("role") == "truss":
         return finding(rule, sid, "manual_review_required",
                        "part of an engineered truss: cutting, re-spanning or loading it beyond its design needs the truss maker's repair detail or an engineer's redesign",
-                       gate="truss")
+                       gate="truss", not_checked=nc)
     need = ["span", "spacing", "use"]
-    if get(facts, "size") is None and (get(facts, "b") is None or get(facts, "d") is None):
+    if _empty(get(facts, "size")) and (_empty(get(facts, "b")) or _empty(get(facts, "d"))):
         need.append("size")
-    gone = [n for n in need if get(facts, n) is None and not (n == "size" and get(facts, "size"))]
+    gone = [n for n in need if _empty(get(facts, n))]
     design = {k: (get(facts, f"design.{k}") or {}).get("value") for k in ("Fb", "Fv", "E", "Fc_perp")}
     if any(design[k] is None for k in ("Fb", "Fv", "E")):
         gone.append("design values")
@@ -184,64 +244,157 @@ def _member(rule, subj, values):
         if n == "design values":
             qs.append(ask(sid, "design.Fb/Fv/E", "the species and grade on the stamp, and its reference Fb, Fv, E (and Fc_perp) from the grade's table or the supplier — none are assumed"))
         else:
-            qs.append(ask(sid, n, {"span": "the clear span between supports, mm", "spacing": "the on-centre spacing, mm", "use": "what the member carries: floor, attic_storage, habitable_attic, roof",
-                                    "size": "the member's size (2x8) or its width and depth, mm"}.get(n, n)))
+            qs.append(ask(sid, n, MEMBER_ASK.get(n, n)))
     if get(facts, "truss") is None:
         qs.append(ask(sid, "truss", "is this member part of an engineered (manufactured) truss? yes / no"))
     if gone:
-        return finding(rule, sid, "insufficient_information", f"needs {', '.join(gone)}", questions=qs)
+        return finding(rule, sid, "insufficient_information", f"needs {', '.join(gone)}", questions=qs, not_checked=nc)
     use = get(facts, "use")["value"]
-    live, dead, snow = _loads(use, values, p)
+    defaults = []
+    try:
+        live, dead, snow = _loads(use, values, p, defaults)
+    except units.UnitError as e:
+        return finding(rule, sid, "error", f"a load in the packs in force: {e}", not_checked=nc)
     if live is None and snow is None or dead is None:
         return finding(rule, sid, "insufficient_information", f"no design loads for use {use!r} in the packs in force",
-                       questions=[ask("project", f"load.live.{use}", f"the live and dead loads for {use} (kPa) where this project is")])
+                       questions=[ask("project", f"load.live.{use}", f"the live and dead loads for {use} (kPa) where this project is")], not_checked=nc)
     member = {"span": get(facts, "span")["value"], "spacing": get(facts, "spacing")["value"]}
-    if get(facts, "size"):
+    if not _empty(get(facts, "size")):
         member["size"] = get(facts, "size")["value"]
     else:
         member["b"], member["d"] = get(facts, "b")["value"], get(facts, "d")["value"]
     if get(facts, "plies"):
         member["plies"] = get(facts, "plies")["value"]
+    if get(facts, "bearing"):
+        member["bearing"] = get(facts, "bearing")["value"]
     factors = {k: (get(facts, f"factor.{k}") or {}).get("value") for k in framing.FACTORS}
     factors = {k: v for k, v in factors.items() if v is not None}
     if "CD" not in factors:
-        factors["CD"] = float(p.get(f"cd_{'snow' if snow else 'live'}", 1.15 if snow else 1.0))
+        key = f"cd_{'snow' if snow else 'live'}"
+        factors["CD"] = float(p.get(key, 1.15 if snow else 1.0))
+        if key not in p:
+            defaults.append({"fact": "factor.CD", "value": factors["CD"], "provenance": "defaulted",
+                             "note": f"load duration {factors['CD']:g} for {'snow' if snow else 'live'} load (engine default)"})
     limits = {"live": p.get("min_span_ratio_live", 360), "total": p.get("min_span_ratio_total", 240)}
+    for k, pk in (("live", "min_span_ratio_live"), ("total", "min_span_ratio_total")):
+        if pk not in p:
+            defaults.append({"fact": f"limit.{k}", "value": limits[k], "provenance": "defaulted", "note": f"deflection limit L/{limits[k]} (engine default)"})
     tol = {"span": (get(facts, "span") or {}).get("pm") or 0, "d": (get(facts, "d") or {}).get("pm") or 0}
     try:
         res = framing.check_member(member, {"live": live or 0, "dead": dead, "snow": snow or 0}, design, factors, limits, tol)
     except (ValueError, KeyError) as e:
-        return finding(rule, sid, "error", f"the calculation would not run: {e}")
+        return finding(rule, sid, "error", f"the calculation would not run: {e}", not_checked=nc)
+    seen = {d["fact"] for d in defaults}
+    defaults += [d for d in res["defaults"] if d["fact"] not in seen and not d["fact"].startswith("limit.")]
     state = framing.verdict(res)
-    used = ["span", "spacing", "size", "design.Fb", "design.Fv", "design.E"]
-    extra = {"ratio": res["ratio"], "range": res["range"], "governs": res["governs"], "ratios": res["ratios"], "detail": res["detail"],
-             "loads_kPa": {"live": live, "dead": dead, "snow": snow}, "factors": res["factors"], "limits": limits}
+    used = ["span", "spacing", "size", "b", "d", "plies", "bearing", "use", "truss", "design.Fb", "design.Fv", "design.E", "design.Fc_perp"] + [f"factor.{k}" for k in framing.FACTORS]
+    loose = [{"value": n, **values[n]["loosened_by"]} for n in (f"load.live.{use}", f"load.dead.{use}", "load.snow.ground", "load.snow.roof_factor")
+             if isinstance(values.get(n), dict) and values[n].get("loosened_by")]
+    extra = {"ratio": res["ratio"], "range": res["range"], "governs": res["governs"], "governing_case": res["governing_case"], "ratios": res["ratios"],
+             "cases": res["cases"], "detail": res["detail"], "loads_kPa": {"live": live, "dead": dead, "snow": snow}, "factors": res["factors"],
+             "limits": limits, "defaults": defaults, "not_checked": nc, **({"loosened_values": loose} if loose else {})}
     state, extra = _bound(rule, subj, state, used, extra)
     if state == "compliant" and get(facts, "truss") is None:
         state = "manual_review_required"
         extra["questions"] = [ask(sid, "truss", "is this member part of an engineered (manufactured) truss? yes / no")]
         extra["note"] = "sized fine as a plain member; whether it is a truss member decides if this may be judged at all"
-    why = {"compliant": f"{res['governs']} governs at {res['ratio']:.2f} of the allowed",
-           "non_compliant": f"{res['governs']} at {res['ratio']:.2f} of the allowed: too small or too long for {use}",
+    case = " (dead load alone, CD 0.9)" if res["governing_case"] == "D" else ""
+    why = {"compliant": f"{res['governs']}{case} governs at {res['ratio']:.2f} of the allowed",
+           "non_compliant": f"{res['governs']}{case} at {res['ratio']:.2f} of the allowed: too small or too long for {use}",
            "manual_review_required": (f"rests on assumed {', '.join(extra['assumed'])}" if extra.get("assumed") else extra.get("note") or
                                       f"{res['governs']} between {res['range'][0]:.2f} and {res['range'][1]:.2f} of the allowed within the measurement tolerance")}[state]
     return finding(rule, sid, state, why, **extra)
 
 
-def run(rules, values, subjects, only=None):
-    """Every rule in force on every subject it applies to."""
+def reads(rule, subj):
+    """The facts a rule's check reads for a subject (for units, plausibility
+    and provenance), plus its applies keys."""
+    p = rule.get("params") or {}
+    c = rule.get("check")
+    facts = subj.get("facts") or {}
     out = []
+    if c in ("fact.at_least", "fact.at_most") or (c not in CHECKS and p.get("fact")):
+        out.append(p.get("fact"))
+    elif c == "framing.spacing":
+        out.append(p.get("fact") or "spacing")
+    elif c == "space.height_share":
+        out.append("height_profile")
+    elif c == "framing.member":
+        out += ["span", "spacing", "use", "truss", "plies", "bearing"]
+        out += ["size"] if not _empty(get(facts, "size")) else ["b", "d"]
+        out += [n for n in facts if n.startswith(("design.", "factor."))]
+    elif c == "info.required":
+        out += list(p.get("facts") or rule.get("needs") or [])
+    out += [k for k in (rule.get("applies") or {}) if k != "kind" and k in facts]
+    return [n for n in dict.fromkeys(out) if n]
+
+
+def _prepare(subj):
+    """A copy of a subject with its facts in the held units, and the problems."""
+    facts, probs = units.normalize_facts(subj.get("facts") or {})
+    return {**subj, "facts": facts}, probs
+
+
+def _one(fn, rule, subj, probs, values):
+    f = _judge(fn, rule, subj, probs, values)
+    if f is not None and rule.get("check") == "framing.member":
+        f["not_checked"] = list(framing.NOT_CHECKED)
+    return f
+
+
+def _judge(fn, rule, subj, probs, values):
+    sid = subj.get("id")
+    state, unknown = match(rule, subj)
+    if state == "absent":
+        return None
+    if state == "no":
+        ap = rule.get("applies") or {}
+        if "kind" in ap and ap["kind"] == subj.get("kind") and len(ap) > 1:
+            return finding(rule, sid, "not_applicable", "its kind matches but " + ", ".join(f"{k} is {subj.get(k, (get(subj.get('facts', {}), k) or {}).get('value'))!r}" for k in ap if k != "kind"))
+        return None
+    if state == "unknown":
+        return finding(rule, sid, "insufficient_information", f"whether this rule applies is not known: {', '.join(unknown)}",
+                       questions=[ask(sid, k, ASK_KEY.get(k, f"{k.replace('_', ' ')}: which applies here? the rule wants {rule['applies'][k]!r}")) for k in unknown])
+    names = reads(rule, subj)
+    bad = {n: probs[n] for n in names if n in probs}
+    if rule.get("check") == "info.required":
+        bad = {n: x for n, x in bad.items() if x["kind"] == "error"}
+    errs = [x["why"] for x in bad.values() if x["kind"] == "error"]
+    if errs:
+        return finding(rule, sid, "error", "refused: " + "; ".join(errs))
+    if bad:
+        return finding(rule, sid, "insufficient_information", "; ".join(x["why"] for x in bad.values()),
+                       questions=[ask(sid, n, x["ask"]) for n, x in bad.items()])
+    f = fn(rule, subj, values)
+    if f["state"] == "compliant":
+        facts = subj.get("facts") or {}
+        a = [n for n in names if (get(facts, n) or {}).get("provenance") == "assumed"]
+        if a:
+            f = finding(rule, sid, "manual_review_required", f"rests on assumed {', '.join(a)}: confirm before reading it as within the checked limits",
+                        **{k: v for k, v in f.items() if k not in ("rule", "subject", "state", "why", "cite", "title", "layerTrail", "scope")},
+                        assumed=a, questions=[ask(sid, n, f"confirm {n} (it was assumed)") for n in a])
+    return f
+
+
+def run(rules, values, subjects, only=None):
+    """Every rule in force on every subject it applies to. No rules in force
+    is an error finding, never an empty (clean-looking) result."""
+    if not rules:
+        return [finding("-", "-", "error", "no rules are in force for this project's jurisdiction and date: nothing was checked. Set the project (code_project) to a place a pack covers, or import a pack.")]
+    out = []
+    prepared = [_prepare(s) for s in subjects]
     for rid, rule in sorted(rules.items()):
         if only and not any(t in (rule.get("tags") or []) or t == rid for t in only):
             continue
         fn = CHECKS.get(rule.get("check"))
-        hits = [s for s in subjects if matches(rule, s)]
         if fn is None:
             out.append(finding(rule, "-", "error", f"no check named {rule.get('check')!r} in this engine (update Agent Link?)"))
             continue
-        for s in hits:
+        for s, probs in prepared:
             try:
-                out.append(fn(rule, s, values))
+                f = _one(fn, rule, s, probs, values)
             except Exception as e:  # a check's own failure is reported, never taken as a pass
-                out.append(finding(rule, s.get("id"), "error", f"{type(e).__name__}: {e}"))
+                f = finding(rule, s.get("id"), "error", f"{type(e).__name__}: {e}")
+            if f is not None:
+                out.append(f)
     return out

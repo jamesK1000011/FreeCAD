@@ -18,6 +18,17 @@ INFO = "Part extras: sections, 2D offsets, elements copied out, shells/solids fr
 V = FreeCAD.Vector
 
 
+def _sew(shape, tol):
+    """Faces joined where they meet within tol mm (the tolerance asked for
+    was quoted back but never given to the sewing)."""
+    if not hasattr(shape, "sewShape"):
+        return
+    try:
+        shape.sewShape(float(tol))
+    except TypeError:
+        shape.sewShape()
+
+
 def bad(msg):
     return ToolError("invalid_input", msg)
 
@@ -182,7 +193,7 @@ def tools(s):
             tol = float(a.get("tolerance", 0.01))
             if not sh.isClosed():
                 sew = Part.Shape(sh)
-                sew.sewShape() if hasattr(sew, "sewShape") else None
+                _sew(sew, tol)
                 sh = sew if sew.Shells else sh
             if build == "solid":
                 shells = sh.Shells or [sh]
@@ -256,7 +267,7 @@ def tools(s):
             sh = solids[0] if len(solids) == 1 else Part.makeCompound(solids)
         elif op == "sew":
             tol = float(a.get("tolerance", 0.01))
-            sh.sewShape() if hasattr(sh, "sewShape") else None
+            _sew(sh, tol)
             try:
                 sh = sh.copy()
                 sh.fix(tol, tol, tol)
@@ -354,15 +365,15 @@ def tools(s):
     body = {"type": "string"}
     return [
         Tool("part_section", "Section curves where a body meets another body (with, parametric Part::Section) or a plane { normal, at }: the curves' edges, length, closed loops; face: true also fills the closed loops into a face (its area). Cut-lines, intersection checks, outlines at a height.",
-             obj({"body": body, "with": body, "plane": {"type": "object"}, "face": {"type": "boolean"}, "approximate": {"type": "boolean"}, "parametric": {"type": "boolean"}, "name": body}, ["body"]), section),
+             obj({"body": body, "with": body, "plane": {"type": "object"}, "face": {"type": "boolean"}, "approximate": {"type": "boolean"}, "parametric": {"type": "boolean"}, "name": body}, ["body"]), section, changes=True),
         Tool("part_offset2d", "Offset a wire, sketch or flat face in its plane (Part::Offset2D): distance mm (+ out, − in), join arc | tangent | intersection, fill: true for the band between the two, intersection: true to merge loops that meet. Kerf and clearance outlines, gasket bands.",
-             obj({"shape": body, "distance": {"type": "number"}, "join": {"type": "string", "enum": ["arc", "tangent", "intersection"]}, "fill": {"type": "boolean"}, "intersection": {"type": "boolean"}, "parametric": {"type": "boolean"}, "name": body}, ["shape", "distance"]), offset2d),
+             obj({"shape": body, "distance": {"type": "number"}, "join": {"type": "string", "enum": ["arc", "tangent", "intersection"]}, "fill": {"type": "boolean"}, "intersection": {"type": "boolean"}, "parametric": {"type": "boolean"}, "name": body}, ["shape", "distance"]), offset2d, changes=True),
         Tool("part_extract", "Copy elements out as a body of their own (Part's element copy and shape builder): refs [\"Box.Face3\", \"Box.Edge2\", whole objects]; build copy (as they are) | wire (edges joined) | face (closed edges filled) | shell (faces sewn) | solid (a closed shell made a solid).",
-             obj({"refs": {"type": "array", "items": {}}, "build": {"type": "string", "enum": ["copy", "wire", "face", "shell", "solid"]}, "tolerance": {"type": "number"}, "name": body}, ["refs"]), extract),
+             obj({"refs": {"type": "array", "items": {}}, "build": {"type": "string", "enum": ["copy", "wire", "face", "shell", "solid"]}, "tolerance": {"type": "number"}, "name": body}, ["refs"]), extract, changes=True),
         Tool("part_defeature", "Take features off a solid by their faces (Part defeaturing): faces [\"Face12\", …] — every face of a hole, boss or fillet together; the gap closes as if the feature was never there. For simplifying imported STEP bodies before FEA or CAM.",
-             obj({"body": body, "faces": {"type": "array", "items": {"type": "string"}}, "name": body}, ["faces"]), defeature),
+             obj({"body": body, "faces": {"type": "array", "items": {"type": "string"}}, "name": body}, ["faces"]), defeature, changes=True),
         Tool("part_fix", "Repair a shape: op reverse (flip its orientation) | solid (a closed shell or faces made a solid) | sew (faces joined at tolerance mm) | fix (ShapeFix tolerances). Reports valid and closed.",
-             obj({"body": body, "op": {"type": "string", "enum": ["reverse", "solid", "sew", "fix"]}, "tolerance": {"type": "number"}, "name": body}, ["body", "op"]), fix),
+             obj({"body": body, "op": {"type": "string", "enum": ["reverse", "solid", "sew", "fix"]}, "tolerance": {"type": "number"}, "name": body}, ["body", "op"]), fix, changes=True),
         Tool("part_datum", "A datum: kind point | line | plane | csys, at [x,y,z], normal (plane/line) or axis + angle, or attached to a face/edge/vertex (to \"Box.Face6\", mode a FreeCAD MapMode) with the placement as its offset. Reference geometry for attachments, sketches and measurements.",
-             obj({"kind": {"type": "string", "enum": ["point", "line", "plane", "csys"]}, "at": {"type": "array", "items": {"type": "number"}}, "normal": {}, "axis": {}, "angle": {"type": "number"}, "to": body, "mode": body, "name": body}), datum),
+             obj({"kind": {"type": "string", "enum": ["point", "line", "plane", "csys"]}, "at": {"type": "array", "items": {"type": "number"}}, "normal": {}, "axis": {}, "angle": {"type": "number"}, "to": body, "mode": body, "name": body}), datum, changes=True),
     ]

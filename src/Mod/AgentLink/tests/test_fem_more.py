@@ -55,8 +55,18 @@ class FemMore(unittest.TestCase):
         self.assertGreater(len(added), 30)
 
     def test_2_props_and_solvers(self):
-        sp = self.call("fem_add", {"kind": "spring", "refs": ["Bar.Face2"], "props": {"NormalStiffness": 1000}})
+        sp = self.call("fem_add", {"kind": "spring", "refs": ["Bar.Face2"], "props": {"NormalStiffness": "1000 N/mm"}})
         self.assertFalse(sp[0], sp[1])
+        # A bare number for a quantity went in FreeCAD's internal units
+        # (ForceX: 100 was 0.1 N): refused now, the unit asked for.
+        err, e = self.call("fem_add", {"kind": "initial_pressure", "props": {"Pressure": 2}})
+        self.assertTrue(err)
+        self.assertIn("unit", e["error"]["message"])
+        ok = self.call("fem_add", {"kind": "initial_pressure", "props": {"Pressure": "2 MPa"}})
+        self.assertFalse(ok[0], ok[1])
+        p = [o for o in self.session.doc.Objects if hasattr(o, "Pressure") and "InitialPressure" in o.TypeId + getattr(getattr(o, "Proxy", None), "Type", "")]
+        if p:
+            self.assertAlmostEqual(p[-1].Pressure.getValueAs("MPa").Value, 2.0, places=6)
         for kind in ("solver_z88", "solver_mystran"):
             err, out = self.call("fem_add", {"kind": kind})
             if err:

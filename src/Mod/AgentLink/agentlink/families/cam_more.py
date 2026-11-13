@@ -223,7 +223,7 @@ def tools(s):
         lk = asm.newObject("App::Link", "Link")
         lk.LinkedObject = part
         lk.Label = s.unique(part.Label, lk)
-        if a.get("at") is not None:
+        if picks.placed(a):
             lk.Placement = picks.placement(a)
         d().recompute()
         s.snapshot("asm_new_part")

@@ -58,6 +58,78 @@ _QUIET = (
 )
 
 
+def _freecad_bundle(target):
+    """A FreeCAD release to switch to: an app bundle in /Applications or
+    ~/Applications whose Info.plist names FreeCAD. Anything else is refused:
+    the path is run, and a folder the agent made itself (export_file makes
+    folders) must not pass for an app."""
+    import plistlib
+
+    t = os.path.realpath(os.path.expanduser(str(target)).rstrip("/"))
+    homes = [os.path.realpath("/Applications"), os.path.realpath(os.path.expanduser("~/Applications"))]
+    if not (t.endswith(".app") and os.path.dirname(t) in homes and os.path.isdir(os.path.join(t, "Contents"))):
+        raise ToolError("not_found", f"No FreeCAD app at {target}: a release in /Applications or ~/Applications (app_install says where it put one).")
+    try:
+        with open(os.path.join(t, "Contents", "Info.plist"), "rb") as f:
+            info = plistlib.load(f)
+    except Exception:
+        info = {}
+    names = " ".join(str(info.get(k, "")) for k in ("CFBundleIdentifier", "CFBundleName", "CFBundleExecutable")).lower()
+    if "freecad" not in names:
+        raise ToolError("not_found", f"{t} is not a FreeCAD app (its Info.plist names {info.get('CFBundleIdentifier') or 'nothing'}).")
+    return t
+
+
+# Settings the agent may not change: who decides how far an agent goes
+# (Collab's cap and merge gate), the code FreeCAD loads (extension
+# repositories, the macro folder) and the programs it runs (solver and
+# mesher paths). Set by the person in Preferences or the panel; an agent
+# that could set them could raise its own rights or have its code run.
+_GUARDED = {("Mod/AgentLink", "ExtensionRepos"), ("Mod/AgentLink", "CollabAllow"), ("Mod/AgentLink", "AgentsMayMerge"), ("Macro", "MacroPath")}
+_GUARDED_WORDS = ("binarypath", "executable", "exepath", "binpath")
+
+
+def guarded(path, name):
+    p = (path or "").strip("/")
+    if p.startswith(ROOT):
+        p = p[len(ROOT):]
+    for gp, gn in _GUARDED:
+        if name == gn and (p.endswith(gp) or p == gp):
+            return True
+    return any(w in (name or "").lower() for w in _GUARDED_WORDS)
+
+
+def _guarded_values(path="BaseApp"):
+    """The guarded settings as they stand, the whole tree walked."""
+    out = {}
+    g = FreeCAD.ParamGet(ROOT + path)
+    for row in g.GetContents() or []:
+        if guarded(path, row[1]):
+            out[(path, row[1])] = (row[0], row[2])
+    for sub in g.GetGroups() or []:
+        out.update(_guarded_values(path + "/" + sub))
+    return out
+
+
+def _guarded_restore(before):
+    """Put the guarded settings back as they were: changed ones reset,
+    new ones taken out. Returns the names put back."""
+    after = _guarded_values()
+    back = []
+    for key, (kind, val) in after.items():
+        if before.get(key) == (kind, val):
+            continue
+        g = FreeCAD.ParamGet(ROOT + key[0])
+        rem = {"Boolean": g.RemBool, "Integer": g.RemInt, "Unsigned": g.RemUnsigned, "Float": g.RemFloat, "String": g.RemString}.get(kind)
+        if rem:
+            rem(key[1])
+        if key in before:
+            k0, v0 = before[key]
+            {"Boolean": g.SetBool, "Integer": g.SetInt, "Unsigned": g.SetUnsigned, "Float": g.SetFloat, "String": g.SetString}[k0](key[1], v0)
+        back.append("/".join(key))
+    return back
+
+
 def _insert_cfg(path):
     """Merge a settings file into the running settings, group by top-level
     group (FreeCAD gives no handle on the root itself): its values win."""
@@ -167,7 +239,30 @@ REFUSED = {
     "Std_Print": "the person prints",
     "Std_PrintPdf": "export_file to PDF",
     "Std_About": "session_state",
+    "Std_RecentMacros": "running a macro is the person's call",
+    "Std_MacroStartDebug": "running a macro is the person's call",
+    "Std_Revert": "doc_revert, after the person says to drop their changes",
+    "Std_CloseActiveWindow": "doc_close",
+    "Std_ExportDependencyGraph": "it asks where to save in a dialog",
+    "Std_ExportGraphviz": "it asks where to save in a dialog",
+    "Part_Export": "export_file",
+    "Part_Import": "import_file { path }",
+    "Mesh_Import": "import_file { path }",
+    "Mesh_Export": "meshobj_export",
+    "Std_RecentFiles": "doc_open { path }",
 }
+# Families of commands refused by name: macros by number run the person's
+# macros; every other import or export asks for a file in a dialog.
+REFUSED_LIKE = re.compile(r"^(Std_Dlg|Std_Macro_\d|Std_MacroStep|Std_ToggleBreakpoint|.*_(Import|Export)$)")
+
+
+def refused(name):
+    """Why a command is not run from here, or None."""
+    if name in REFUSED:
+        return REFUSED[name]
+    if name and REFUSED_LIKE.match(name):
+        return "it runs a macro or asks in a dialog that would hold the window — the matching tool does the job"
+    return None
 
 
 def _gui():
@@ -200,12 +295,26 @@ def _set(g, name, value, kind=None):
         kind = (old or {}).get("type", "").lower()
     if not kind:
         kind = "boolean" if isinstance(value, bool) else "integer" if isinstance(value, int) else "float" if isinstance(value, float) else "string"
+    if value is None:
+        raise ToolError("invalid_input", f"{name}: a value (pref_reset takes a setting back to its default).")
     if kind in ("boolean", "bool"):
+        # bool("false") is True: text is read as what it says.
+        if isinstance(value, str):
+            t = value.strip().lower()
+            if t not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+                raise ToolError("invalid_input", f"{name}: true or false, not {value!r}.")
+            value = t in ("true", "1", "yes", "on")
         g.SetBool(name, bool(value))
-    elif kind in ("integer", "int"):
-        g.SetInt(name, int(value))
-    elif kind in ("unsigned", "uint"):
-        g.SetUnsigned(name, int(value))
+    elif kind in ("integer", "int", "unsigned", "uint"):
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            raise ToolError("invalid_input", f"{name}: a whole number, not {value!r}.") from None
+        if f != int(f):
+            raise ToolError("invalid_input", f"{name}: a whole number, not {value!r} (it would be cut to {int(f)}).")
+        if kind in ("unsigned", "uint") and f < 0:
+            raise ToolError("invalid_input", f"{name}: 0 or more.")
+        (g.SetInt if kind in ("integer", "int") else g.SetUnsigned)(name, int(f))
     elif kind in ("float", "double"):
         g.SetFloat(name, float(value))
     else:
@@ -337,6 +446,9 @@ def tools(session):
             values[a["name"]] = a.get("value")
         if not values:
             raise ToolError("invalid_input", "name and value, or values { name: value }.")
+        hit = [k for k in values if guarded(path, k)]
+        if hit:
+            raise ToolError("not_allowed", f"{', '.join(hit)}: the person's to set (Edit > Preferences, or Agent Link's panel) — they decide what an agent may do, what code FreeCAD loads and what programs it runs. Nothing was changed.")
         done = {}
         for k, v in values.items():
             before = _contents(g).get(k, {}).get("value")
@@ -349,6 +461,9 @@ def tools(session):
         names = a.get("names") or []
         if not names:
             raise ToolError("invalid_input", "names: the settings to take back to FreeCAD's defaults.")
+        hit = [k for k in names if guarded(path, k)]
+        if hit:
+            raise ToolError("not_allowed", f"{', '.join(hit)}: the person's to reset (Edit > Preferences, or Agent Link's panel). Nothing was changed.")
         for k in names:
             kind = _contents(g).get(k, {}).get("type", "")
             {"Boolean": g.RemBool, "Integer": g.RemInt, "Unsigned": g.RemUnsigned, "Float": g.RemFloat, "String": g.RemString}.get(kind, lambda _n: None)(k)
@@ -388,8 +503,8 @@ def tools(session):
                     row["shortcut"] = info["shortcutText"]
             except Exception:
                 pass
-            if name in REFUSED:
-                row["refused"] = REFUSED[name]
+            if refused(name):
+                row["refused"] = refused(name)
             rows.append(row)
             if len(rows) >= int(a.get("limit", 80)):
                 break
@@ -398,8 +513,8 @@ def tools(session):
     def cmd_run(a):
         gui = _gui()
         name = a.get("name", "")
-        if name in REFUSED or re.match(r"^Std_Dlg", name):
-            raise ToolError("refused", f"{name} opens a dialog that would hold the window: {REFUSED.get(name, 'its settings are pref_set; its job, the matching tool')}.")
+        if refused(name):
+            raise ToolError("refused", f"{name} is not run from here: {refused(name)}.")
         if name not in gui.listCommands():
             raise ToolError("not_found", f"No command '{name}': cmd_list {{ query }} finds them.")
         gui.runCommand(name, int(a.get("index", 0)))
@@ -429,8 +544,8 @@ def tools(session):
             raise ToolError("invalid_input", "path: the menu's titles, e.g. [\"View\", \"Standard views\", \"Fit all\"].")
         act = _find_action(path)
         name = act.objectName()
-        if name in REFUSED or re.match(r"^Std_Dlg", name or ""):
-            raise ToolError("refused", f"'{' > '.join(path)}' ({name}) opens a dialog that would hold the window: {REFUSED.get(name, 'pref_set or the matching tool')}.")
+        if refused(name):
+            raise ToolError("refused", f"'{' > '.join(path)}' ({name}) is not run from here: {refused(name)}.")
         if act.menu() is not None:
             raise ToolError("invalid_input", "That is a menu: menu_list { menu } shows its items.")
         if not act.isEnabled():
@@ -563,9 +678,7 @@ def tools(session):
 
         target = a.get("app")
         if target:
-            target = os.path.expanduser(target).rstrip("/")
-            if not (target.endswith(".app") and os.path.isdir(os.path.join(target, "Contents"))):
-                raise ToolError("not_found", "No FreeCAD app at " + target + " (app_install says where it put one).")
+            target = _freecad_bundle(target)
 
         # A step playing hides the body: show it again before anything is saved.
         try:
@@ -609,12 +722,13 @@ def tools(session):
             # into the other release's own folders before it first opens.
             migrated = _carry_settings(target)
             bundle = target
-        files = " ".join("'" + f.replace("'", "'\\''") + "'" for f in reopen)
+        # The app and the files go to the shell as arguments, never into the
+        # command's text: a path is not shell code, whatever it holds.
         if bundle:
-            cmd = f"sleep 3; open -a '{bundle}' {files}"
+            argv = ["/bin/sh", "-c", 'sleep 3; exec open -a "$0" "$@"', bundle, *reopen]
         else:
-            cmd = f"sleep 3; '{exe}' {files} &"
-        subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_clean_env() if target else None)
+            argv = ["/bin/sh", "-c", 'sleep 3; "$0" "$@" &', exe, *reopen]
+        subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_clean_env() if target else None)
         for d in list(FreeCAD.listDocuments().values()):
             FreeCAD.closeDocument(d.Name)
         from PySide import QtCore, QtGui
@@ -708,7 +822,9 @@ def tools(session):
             g = FreeCAD.ParamGet(ROOT + path)
             if name in g.GetBools():
                 keep[(path, name)] = g.GetBool(name)
+        guard0 = _guarded_values()
         merged = _insert_cfg(src)
+        put_back = _guarded_restore(guard0)
         for (path, name), v in keep.items():
             FreeCAD.ParamGet(ROOT + path).SetBool(name, v)
         FreeCAD.saveParameter()
@@ -722,14 +838,14 @@ def tools(session):
                     if os.path.isfile(os.path.join(old_mac, n)) and not os.path.exists(os.path.join(new_mac, n)):
                         shutil.copy2(os.path.join(old_mac, n), os.path.join(new_mac, n))
                         copied.append(n)
-        return {"from": src, "groups": merged, "backup": backup if os.path.exists(backup) else None, "kept": {"/".join(k): v for k, v in keep.items()}, "macros": copied, "note": "Merged: the file's values win, this one's other settings stay. Some (theme, toolbars) show after app_restart. pref_import { path: backup } puts this back."}
+        return {"from": src, "groups": merged, "backup": backup if os.path.exists(backup) else None, "kept": {"/".join(k): v for k, v in keep.items()}, "macros": copied, **({"guardedKept": put_back} if put_back else {}), "note": "Merged: the file's values win, this one's other settings stay — except the guarded ones (what an agent may do, extension repositories, the macro folder, program paths), which stay as they were. Some (theme, toolbars) show after app_restart. To undo, the backup is a whole settings file: a merge of it puts back the values it held but leaves keys the import added."}
 
     return [
         Tool("app_install", "Install another FreeCAD release beside this one on a Mac: version (\"1.1.3\", \"latest\") from FreeCAD's GitHub release, SHA-256 checked; the current FreeCAD.app kept as \"FreeCAD <version>.app\". Runs in the background: no arguments reads its progress. Then app_restart { app } switches the window over; with the window closed, open: an .app carries settings over and opens it.",
              obj({"version": {"type": "string"}, "open": {"type": "string"}}), app_install, changes=False),
         Tool("pref_get", "Read FreeCAD's settings: a parameter group (path, e.g. \"BaseApp/Preferences/View\") with its values and subgroups, or one setting (name). Anything Edit > Preferences shows lives here.",
              obj({"path": {"type": "string"}, "name": {"type": "string"}}), pref_get),
-        Tool("pref_set", "Change FreeCAD's settings: path, then name + value or values { name: value }; the type follows the setting's own (or type: bool, int, uint, float, string). Says what each was.",
+        Tool("pref_set", "Change FreeCAD's settings: path, then name + value or values { name: value }; the type follows the setting's own (or type: bool, int, uint, float, string). Says what each was. Refused for the person's own: Agent Link's CollabAllow, AgentsMayMerge and ExtensionRepos, the macro folder, and program paths (…BinaryPath, …Executable).",
              obj({"path": {"type": "string"}, "name": {"type": "string"}, "value": {}, "values": {"type": "object"}, "type": {"type": "string"}}), pref_set, changes=True),
         Tool("pref_import", "Bring settings over from another file: by default the release before this one's user.cfg (after a FreeCAD upgrade), or path. Merged in, the file's values winning; this FreeCAD's settings exported to a backup first; macros the new one lacks copied too (macros: false not).",
              obj({"path": {"type": "string"}, "macros": {"type": "boolean"}}), pref_import),

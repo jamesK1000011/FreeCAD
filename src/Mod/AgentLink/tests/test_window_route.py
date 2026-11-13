@@ -43,6 +43,40 @@ class WindowRoute(unittest.TestCase):
         self.assertTrue(w.call(json.dumps({"jsonrpc": "2.0", "id": 8, "method": "tools/call"})))
         srv.close()
 
+    def test_window_gone_is_said_once_not_answered_by_the_hidden_one(self):
+        """The window answered, then went (the person quit, a crash): the
+        next call is answered with that, not run on the hidden FreeCAD's
+        empty document; the one after goes there."""
+        import tempfile
+
+        os.environ["AGENTLINK_RESTART_MARK"] = os.path.join(tempfile.mkdtemp(), "mark")
+        try:
+            srv = socket.socket()
+            srv.bind(("127.0.0.1", 0))
+            srv.listen(1)
+            supervise.WINDOW_PORT = srv.getsockname()[1]
+
+            def once():
+                conn, _ = srv.accept()
+                f = conn.makefile("rw", encoding="utf-8", newline="\n")
+                line = f.readline()
+                f.write(json.dumps({"jsonrpc": "2.0", "id": json.loads(line)["id"], "result": {}}) + "\n")
+                f.flush()
+                conn.close()
+                srv.close()
+
+            threading.Thread(target=once, daemon=True).start()
+            got = []
+            w = supervise.Window(got.append)
+            self.assertTrue(w.call(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call"})))
+            # The connection went with the window, mid-session, no restart mark.
+            self.assertTrue(w.call(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call"})))
+            self.assertTrue(json.loads(got[-1])["result"]["isError"])
+            self.assertIn("may or may not", got[-1])
+            self.assertFalse(w.call(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call"})))
+        finally:
+            os.environ.pop("AGENTLINK_RESTART_MARK", None)
+
     def test_restarting_window_is_waited_for(self):
         """A restart mark standing: the call waits for the window to listen
         again instead of going to the hidden FreeCAD."""

@@ -1,9 +1,16 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # A finding: one rule judged on one subject. Five states and an error state;
-# nothing here ever says "passes code".
+# nothing here ever says "passes code". The state "compliant" is kept for the
+# API, but it means only "within the checked limits": every finding carries
+# its scope (what this rule looked at) and not_checked (what it did not).
 
 STATES = ("non_compliant", "manual_review_required", "insufficient_information", "error", "compliant", "not_applicable")
 ORDER = {s: i for i, s in enumerate(STATES)}  # worst first
+WITHIN = "within the checked limits"
+LABEL = {"compliant": f"{WITHIN} (compliant)", "non_compliant": "outside the checked limits (non compliant)",
+         "manual_review_required": "for an engineer's review", "insufficient_information": "needs information",
+         "error": "check failed (error — never a pass)", "not_applicable": "not applicable"}
+NOT_CHECKED = ["any rule not in the packs in force", "how it is built on site (an inspector's job)", "anything a licensed professional would add"]
 
 
 def finding(rule, subject, state, why, **kw):
@@ -17,9 +24,16 @@ def finding(rule, subject, state, why, **kw):
             f["title"] = rule["title"]
         if rule.get("_trail"):
             f["layerTrail"] = rule["_trail"]
+        if rule.get("_loosened"):
+            f["loosened"] = rule["_loosened"]
     for k, v in kw.items():
         if v is not None:
             f[k] = v
+    if state == "compliant" and WITHIN not in f["why"]:
+        f["why"] = f"{f['why']}: {WITHIN} — not an approval"
+    title = (rule.get("title") if isinstance(rule, dict) else None) or f["rule"]
+    f.setdefault("scope", f"only what this rule checks ({title}); a result here is {WITHIN}, never an approval")
+    f.setdefault("not_checked", list(NOT_CHECKED))
     return f
 
 

@@ -19,6 +19,7 @@ agentlink/code/framing.py
 agentlink/code/ids.py
 agentlink/code/packs.py
 agentlink/code/packs_shipped/example.demo.json
+agentlink/code/units.py
 agentlink/commands.py
 agentlink/data/slicer-minimal.json
 agentlink/echo.py
@@ -164,6 +165,9 @@ tests/test_ccx_io_more.py
 tests/test_cells.py
 tests/test_charts.py
 tests/test_code_engine.py
+tests/test_code_redteam.py
+tests/test_core_guards.py
+tests/test_core_guards_fc.py
 tests/test_cut.py
 tests/test_doc.py
 tests/test_draft.py
@@ -178,6 +182,7 @@ tests/test_fem_more.py
 tests/test_files.py
 tests/test_fitting.py
 tests/test_flat2d.py
+tests/test_gaps_redteam.py
 tests/test_guides.py
 tests/test_hull3d.py
 tests/test_inspection.py

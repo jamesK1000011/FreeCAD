@@ -586,12 +586,22 @@ class Session:
     def export_file(self, a):
         o = self.body(a.get("body"))
         ext = os.path.splitext(a.get("path") or "")[1].lower().lstrip(".")
-        fmt = (a.get("format") or {"stp": "step", "step": "step", "stl": "stl"}.get(ext) or "step").lower()
+        by_ext = {"stp": "step", "step": "step", "stl": "stl"}
+        fmt = (a.get("format") or by_ext.get(ext) or "step").lower()
         if fmt not in ("step", "stl"):
             raise ToolError("invalid_input", "format: step or stl.")
-        path = a.get("path") or os.path.join(self.out_dir, f"{o.Label}.{fmt}")
+        # A path whose extension is not the format's was written anyway, as
+        # STEP: house.FCStd became a STEP file under a FreeCAD name.
+        if ext and by_ext.get(ext) != fmt:
+            raise ToolError("invalid_input", f"path: .{ext} is not a {fmt.upper()} file — end it .{'step' if fmt == 'step' else 'stl'}, or leave the extension off.")
+        path = os.path.expanduser(a.get("path") or os.path.join(self.out_dir, f"{o.Label}.{fmt}"))
         if not os.path.isabs(path):
             path = os.path.join(self.out_dir, path)
+        if not ext:
+            path += ".step" if fmt == "step" else ".stl"
+        tol = a.get("tolerance", 0.01)
+        if not isinstance(tol, (int, float)) or isinstance(tol, bool) or not (0.001 <= float(tol) <= 5):
+            raise ToolError("invalid_input", "tolerance: 0.001 … 5 mm (how far the STL's triangles may stray from the surface).")
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         if fmt == "step":
             o.Shape.exportStep(path)
@@ -601,8 +611,7 @@ class Session:
             import Mesh
             import MeshPart
 
-            tol = float(a.get("tolerance", 0.01))
-            m = MeshPart.meshFromShape(Shape=o.Shape, LinearDeflection=tol, AngularDeflection=0.0873, Relative=False)
+            m = MeshPart.meshFromShape(Shape=o.Shape, LinearDeflection=float(tol), AngularDeflection=0.0873, Relative=False)
             m.write(path)
             back = Mesh.Mesh(path)
             verify = {"triangles": back.CountFacets, "volume": round(back.Volume, 1), "closed": back.isSolid()}

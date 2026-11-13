@@ -5,7 +5,7 @@
 # fact a property requirement and "material" a material requirement. Facts
 # with no IFC home (a species asked of the person) stay out, and are listed.
 
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape, quoteattr
 
 ENTITY = {"member": ["IFCBEAM", "IFCMEMBER", "IFCCOLUMN"], "space": ["IFCSPACE"], "opening": ["IFCWINDOW", "IFCDOOR"],
           "wall": ["IFCWALL"], "slab": ["IFCSLAB"], "roof": ["IFCROOF"], "covering": ["IFCCOVERING"]}
@@ -39,9 +39,11 @@ def write(rules, title, version="1.0", author="agentlink@example.invalid"):
         if not reqs:
             continue
         for e in ents:
-            name = escape(r.get("title") or rid)
-            specs.append(f'<specification name="{name}" ifcVersion="IFC4 IFC2X3" identifier="{escape(rid)}"'
-                         + (f' description="{escape(str((r.get("cite") or {})))}"' if r.get("cite") else "") + ">"
+            name = quoteattr(str(r.get("title") or rid))
+            ident = quoteattr(str(rid))
+            desc = quoteattr(str(r.get("cite") or ""))
+            specs.append(f'<specification name={name} ifcVersion="IFC4 IFC2X3" identifier={ident}'
+                         + (f" description={desc}" if r.get("cite") else "") + ">"
                          + f"<applicability minOccurs=\"0\" maxOccurs=\"unbounded\"><entity><name>{_sv(e)}</name></entity></applicability>"
                          + "<requirements>" + "".join(reqs) + "</requirements></specification>")
     xml = (f'<?xml version="1.0" encoding="UTF-8"?>\n<ids {NS}><info><title>{escape(title)}</title><version>{escape(version)}</version>'

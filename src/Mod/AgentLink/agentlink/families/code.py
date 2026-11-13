@@ -5,7 +5,8 @@
 # document, the checks run in five states, the questions that would decide
 # what is still open, a wood member's span check by hand with a beam FEM
 # beside it, and the handoff packet for a licensed professional. Nothing
-# here approves anything: every answer says it is a planning estimate.
+# here approves anything: every answer says it is a planning estimate, and
+# "compliant" means only within the checked limits.
 
 import csv
 import datetime
@@ -17,9 +18,9 @@ import shutil
 import FreeCAD
 
 from .. import store
-from ..code import DISCLAIMER, beamfem, engine, framing, packs
+from ..code import DISCLAIMER, beamfem, engine, framing, packs, units
 from ..code import ids as idsfile
-from ..code.findings import STATES, questions, summary
+from ..code.findings import LABEL, STATES, WITHIN, questions, summary
 from ..protocol import Tool, ToolError
 from ..tools import obj
 
@@ -96,7 +97,24 @@ def tools(session):
         if not pr.get("jurisdiction"):
             raise ToolError("invalid_state", "No project yet: code_project { jurisdiction (US-WA-Pierce-DuPont, or XX for the example pack), date } first.")
         ps, errs = all_packs()
-        rules, values, conflicts, used = packs.resolve(ps, pr["jurisdiction"], pr.get("date") or datetime.date.today().isoformat(), pr.get("include"))
+        try:
+            rules, values, conflicts, used = packs.resolve(ps, pr["jurisdiction"], pr.get("date") or datetime.date.today().isoformat(), pr.get("include"))
+        except packs.PackError as e:
+            raise ToolError("invalid_state", f"The packs in force cannot be stacked: {e}") from None
+        values = dict(values)
+        for name, f in ((st.get("answers") or {}).get("project") or {}).items():
+            # the person's project-wide answers (a ground snow load …) as values; a pack's value is never loosened by them
+            spec = {"value": f.get("value"), "provenance": f.get("provenance", "user_supplied"), "from": "the person (code_answer project)",
+                    **({"unit": f["unit"]} if f.get("unit") else {})}
+            old = values.get(name)
+            way = (old or {}).get("stricter")
+            if old is not None and way and isinstance(spec["value"], (int, float)) and isinstance(old.get("value"), (int, float)):
+                if (way == "higher" and spec["value"] < old["value"]) or (way == "lower" and spec["value"] > old["value"]):
+                    conflicts = conflicts + [{"value": name, "pack": "code_answer project", "kept": old["value"], "refused": spec["value"],
+                                              "why": "the person's answer is looser than the packs in force: the pack's value holds"}]
+                    continue
+                spec["stricter"] = way
+            values[name] = spec
         return rules, values, conflicts, used, errs
 
     # ---- facts from the model --------------------------------------------------------
@@ -135,6 +153,8 @@ def tools(session):
             elif t == "Space" or pn == "_Space":
                 bb = sh.BoundBox
                 use = str(getattr(o, "SpaceType", "") or "").lower().replace(" ", "_") or None
+                if use in ("undefined", "notdefined", "unknown"):
+                    use = None  # asked, never guessed
                 f = {"clear_height": fact(round(bb.ZLength, 1), "measured", "model", note="the space's tallest clear height")}
                 prof = height_profile(sh)
                 if prof:
@@ -244,14 +264,25 @@ def tools(session):
                     return float(q.Placement.Base.z)
         return 0.0
 
-    def subjects(st=None):
+    def subjects(st=None, warnings=None):
+        """The model's subjects with the person's answers on them. Answers for
+        "project" are values, not a subject; answers for a label the model no
+        longer has (and no kind given) make no phantom subject: they go on
+        warnings (a list), if given."""
         st = st or state()
         subs = model_subjects()
         byid = {x["id"]: x for x in subs}
         for sid, given in (st.get("answers") or {}).items():
+            if sid == "project":
+                continue
             sub = byid.get(sid)
             if sub is None:
-                sub = {"id": sid, "kind": (given.get("kind") or {}).get("value", "member"), "facts": {}}
+                if not (given.get("kind") or {}).get("value"):
+                    if warnings is not None:
+                        warnings.append({"subject": sid, "facts": sorted(given),
+                                         "why": "answers kept for a subject the model no longer has (renamed or deleted?): code_answer clear: true forgets them, or give kind to check it as something not modelled"})
+                    continue
+                sub = {"id": sid, "kind": given["kind"]["value"], "facts": {}}
                 subs.append(sub)
                 byid[sid] = sub
             for name, f in given.items():
@@ -329,19 +360,28 @@ def tools(session):
         st["project"] = pr
         rules, values, conflicts, used, errs = resolved(st)
         save(st)
+        s._agentlink_code = None
         s.snapshot("code_project")
         out = {"project": pr, "packs": used, "rules": len(rules), "values": {k: v.get("value") for k, v in values.items()}, "step": len(s.steps)}
         if conflicts:
             out["conflicts"] = conflicts
         if errs:
             out["refusedPacks"] = errs
-        if not used:
-            out["note"] = "No pack applies here yet: import one (code_packs import), or try the example with jurisdiction XX."
+        lo = packs.loosened(rules, values)
+        if lo:
+            out["loosened"] = lo
+        if not rules:
+            out["note"] = "No rules are in force here yet, so code_check will refuse to run: import a pack (code_packs import), or try the example with jurisdiction XX."
         out["disclaimer"] = DISCLAIMER
         return out
 
     def code_facts(a):
-        subs = subjects()
+        warn = []
+        subs = subjects(warnings=warn)
+        proj = (state().get("answers") or {}).get("project")
+        if proj:
+            # project-wide answers: values beside the packs', not a subject the rules judge
+            subs = subs + [{"id": "project", "kind": "project", "facts": proj, "note": "project-wide values: they join the packs' values and may not loosen them"}]
         want = a.get("subject")
         if want:
             subs = [x for x in subs if x["id"] == want]
@@ -350,8 +390,8 @@ def tools(session):
         kinds = {}
         for x in subs:
             kinds[x["kind"]] = kinds.get(x["kind"], 0) + 1
-        return {"subjects": subs[: int(a.get("limit", 60))], "counts": kinds,
-                "note": "provenance: measured (model geometry), derived (worked out from it), user_supplied (code_answer), assumed (a default — never enough for compliant)."}
+        return {"subjects": subs[: int(a.get("limit", 60))], "counts": kinds, **({"warnings": warn} if warn else {}),
+                "note": "provenance: measured (model geometry), derived (worked out from it), user_supplied (code_answer), assumed (never enough to be within the checked limits). Lengths are held in mm, areas mm2, loads kPa, design values MPa."}
 
     def code_answer(a):
         sids = a.get("subjects") or ([a["subject"]] if a.get("subject") else [])
@@ -363,39 +403,75 @@ def tools(session):
             for sid in sids:
                 ans.pop(sid, None)
             save(st)
+            s._agentlink_code = None
             s.snapshot("code_answer")
             return {"cleared": sids}
         given = a.get("facts")
         if not isinstance(given, dict) or not given:
             raise bad("facts: { name: value } or { name: { value, pm, unit, note } } — span 3600, spacing 406, size \"2x8\", truss false, use \"habitable_attic\", design.Fb 5.9 …")
-        for sid in sids:
-            row = put(ans, sid, given)
-        save(st)
-        s.snapshot("code_answer")
-        return {"subjects": sids, "facts": row, "step": len(s.steps)}
-
-    def put(ans, sid, given):
-        row = ans.setdefault(sid, {})
+        checked, doubts = {}, []
         for k, v in given.items():
-            spec = v if isinstance(v, dict) and "value" in v else {"value": v}
-            row[k] = {"value": spec["value"], "provenance": spec.get("provenance", "user_supplied"), "source": "the person",
-                      **({"pm": float(spec["pm"])} if spec.get("pm") else {}), **({"unit": spec["unit"]} if spec.get("unit") else {}),
-                      **({"note": spec["note"]} if spec.get("note") else {})}
-            if row[k]["provenance"] not in ("user_supplied", "assumed", "measured"):
-                raise bad(f"{k}.provenance: user_supplied (the default), measured or assumed.")
-        return row
+            checked[k], doubt = clean(k, v)
+            if doubt:
+                doubts.append(doubt)
+        for sid in sids:
+            row = ans.setdefault(sid, {})
+            row.update(checked)
+        save(st)
+        s._agentlink_code = None
+        s.snapshot("code_answer")
+        out = {"subjects": sids, "facts": row, "step": len(s.steps)}
+        if doubts:
+            out["check"] = doubts
+        if any(sid not in ("project",) and sid not in {x["id"] for x in model_subjects()} and not (ans[sid].get("kind") or {}).get("value") for sid in sids):
+            out["warning"] = "a subject here is not in the model: give kind (member, space, opening …) to check it as something not modelled, or it is not checked"
+        return out
+
+    def clean(k, v):
+        """One answer, checked and held in the engine's units: (fact, doubt)."""
+        spec = dict(v) if isinstance(v, dict) and "value" in v else {"value": v}
+        if spec.get("provenance", "user_supplied") not in ("user_supplied", "assumed", "measured"):
+            raise bad(f"{k}.provenance: user_supplied (the default), measured or assumed.")
+        if spec.get("pm") is not None:
+            try:
+                spec["pm"] = float(spec["pm"])
+            except (TypeError, ValueError):
+                raise bad(f"{k}.pm: a number (plus-minus, 0 or more).") from None
+        if k.startswith("factor."):
+            try:
+                framing.check_factors({k.split(".", 1)[1]: spec["value"]})
+            except ValueError as e:
+                raise bad(str(e)) from None
+        f, prob = units.normalize(k, spec)
+        if prob and prob["kind"] == "error":
+            raise bad(prob["why"])
+        row = {"value": f["value"], "provenance": spec.get("provenance", "user_supplied"), "source": "the person",
+               **({"pm": f["pm"]} if f.get("pm") else {}), **({"unit": f["unit"]} if f.get("unit") else {}),
+               **({"given": f["given"]} if f.get("given") else {}), **({"confirmed": True} if spec.get("confirmed") else {}),
+               **({"note": spec["note"]} if spec.get("note") else {})}
+        return row, ({"fact": k, "ask": prob["ask"]} if prob else None)
 
     def run_checks(a):
+        """(findings, packs used, conflicts, extra { refusedPacks, loosened,
+        warnings }). Refuses when no rule is in force."""
         rules, values, conflicts, used, errs = resolved()
-        subs = subjects()
+        if not rules:
+            raise ToolError("invalid_state", "No rules are in force for this project's jurisdiction and date, so nothing can be checked (this is not a clean result). "
+                            + ("Packs refused as malformed: " + "; ".join(errs) + ". " if errs else "")
+                            + "code_packs lists the packs; code_project sets the place and date (XX tries the shipped example).")
+        warn = []
+        subs = subjects(warnings=warn)
         if a.get("subjects"):
             subs = [x for x in subs if x["id"] in a["subjects"]]
         out = engine.run(rules, values, subs, only=a.get("tags"))
-        s._agentlink_code = {"findings": out, "at": datetime.datetime.now().isoformat(timespec="seconds"), "packs": used, "conflicts": conflicts}
-        return out, used, conflicts
+        extra = {k: v for k, v in (("refusedPacks", errs), ("loosened", packs.loosened(rules, values)), ("warnings", warn)) if v}
+        filtered = bool(a.get("subjects") or a.get("tags"))
+        s._agentlink_code = {"findings": out, "at": datetime.datetime.now().isoformat(timespec="seconds"), "packs": used, "conflicts": conflicts,
+                             "filtered": filtered, **extra}
+        return out, used, conflicts, extra
 
     def code_check(a):
-        out, used, conflicts = run_checks(a)
+        out, used, conflicts, more = run_checks(a)
         sm = summary(out)
         show = sm["findings"]
         if not a.get("all"):
@@ -408,6 +484,8 @@ def tools(session):
             res["more"] = len(show) - int(a.get("limit", 40))
         if conflicts:
             res["conflicts"] = conflicts
+        res.update(more)
+        res["meaning"] = f"compliant means {WITHIN} of the rules in force, for the facts given — not an approval; each finding lists its scope and what it did not check."
         q = questions(out)
         if q:
             res["questions"] = len(q)
@@ -416,7 +494,7 @@ def tools(session):
 
     def code_missing(a):
         cached = getattr(s, "_agentlink_code", None)
-        out = cached["findings"] if cached and not a.get("fresh") else run_checks({})[0]
+        out = cached["findings"] if cached and not cached.get("filtered") and not a.get("fresh") else run_checks({})[0]
         q = questions(out)
         size = int(a.get("batch", 5))
         return {"questions": q[:size], "remaining": max(0, len(q) - size), "total": len(q),
@@ -426,8 +504,9 @@ def tools(session):
         member = {k: a[k] for k in ("size", "b", "d", "plies", "span", "spacing", "bearing", "repetitive") if a.get(k) is not None}
         loads = dict(a.get("loads") or {})
         design = dict(a.get("design") or {})
+        tol = dict(a.get("tol") or {})
         if a.get("units") == "imperial":
-            member, loads, design = framing.imperial(member, loads, design)
+            member, loads, design, tol = framing.imperial(member, loads, design, tol)
         if not loads and a.get("use"):
             try:
                 _, values, _, _, _ = resolved()
@@ -441,12 +520,12 @@ def tools(session):
             raise bad("loads { live, dead, snow } (kPa, or psf with units imperial), or use with a project's packs.")
         if any(design.get(k) is None for k in ("Fb", "Fv", "E")):
             raise bad("design: { Fb, Fv, E (MPa, or psi with units imperial), Fc_perp } — the reference values for the species and grade on the stamp, from its table or the supplier. None are assumed here.")
-        return member, loads, design
+        return member, loads, design, tol
 
     def code_span(a):
-        member, loads, design = span_inputs(a)
+        member, loads, design, tol = span_inputs(a)
         try:
-            res = framing.check_member(member, loads, design, a.get("factors"), a.get("limits"), a.get("tol"))
+            res = framing.check_member(member, loads, design, a.get("factors"), a.get("limits"), tol)
         except (ValueError, KeyError) as e:
             raise bad(str(e))
         res["state"] = framing.verdict(res)
@@ -483,7 +562,7 @@ def tools(session):
             if sub is None:
                 raise ToolError("not_found", f"subject {a['subject']!r}: code_facts lists them.")
             f = sub["facts"]
-            g = lambda n: (engine.get(f, n) or {}).get("value")  # noqa: E731
+            g = lambda n: units.normalize(n, f[n])[0].get("value") if n in f else None  # noqa: E731  (held units: mm, MPa)
             a = {**a, "span": a.get("span") or g("span"), "spacing": a.get("spacing") or g("spacing"), "size": a.get("size") or g("size"),
                  "b": a.get("b") or g("b"), "d": a.get("d") or g("d"), "use": a.get("use") or g("use") or sub.get("use"),
                  "design": a.get("design") or {k: g(f"design.{k}") for k in ("Fb", "Fv", "E", "Fc_perp") if g(f"design.{k}") is not None},
@@ -491,50 +570,74 @@ def tools(session):
             if a.get("size"):
                 a.pop("b", None)
                 a.pop("d", None)
-        member, loads, design = span_inputs(a)
-        res = framing.check_member(member, loads, design, a.get("factors"), a.get("limits"))
+        member, loads, design, tol = span_inputs(a)
+        try:
+            res = framing.check_member(member, loads, design, a.get("factors"), a.get("limits"), tol)
+        except (ValueError, KeyError) as e:
+            raise bad(str(e))
         return {"member": a.get("name") or "member", "hand": {"ratio": res["ratio"], "governs": res["governs"], "deflection_total_mm": res["detail"]["deflection_total_mm"], "fb_MPa": res["detail"]["fb_MPa"]},
                 "fem": fem_compare(res, design, a), "disclaimer": DISCLAIMER}
 
     def code_packet(a):
-        cached = getattr(s, "_agentlink_code", None)
-        out, used, conflicts = (cached["findings"], cached["packs"], cached["conflicts"]) if cached and not a.get("fresh") else run_checks({})
+        # always fresh and unfiltered: never the last (possibly narrowed) code_check
+        out, used, conflicts, more = run_checks({})
         st = state()
         name = (a.get("name") or st.get("project", {}).get("name") or "handoff").replace(" ", "_")
         folder = os.path.join(s.out_dir, f"{name}_packet")
         os.makedirs(folder, exist_ok=True)
         sm = summary(out)
         stamp = datetime.datetime.now().isoformat(timespec="minutes")
-        payload = {"disclaimer": DISCLAIMER, "made": stamp, "project": st.get("project"), "packs": used, "conflicts": conflicts,
-                   "counts": sm["counts"], "findings": sm["findings"]}
+        payload = {"disclaimer": DISCLAIMER, "meaning": f"compliant means {WITHIN} only — not an approval", "made": stamp, "project": st.get("project"),
+                   "packs": used, "conflicts": conflicts, **more, "counts": sm["counts"], "findings": sm["findings"]}
         with open(os.path.join(folder, "findings.json"), "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, default=str)
-        lines = [f"# Findings: {name}", "", f"*{DISCLAIMER}*", "", f"Made {stamp}. Packs: {', '.join(used) or 'none'}.", "",
-                 "| State | Count |", "| --- | --- |"] + [f"| {k} | {v} |" for k, v in sm["counts"].items()] + [""]
+        lines = [f"# Findings: {name}", "", "## Planning estimate — not an approval", "", DISCLAIMER,
+                 f"A result headed {WITHIN} means only that: the rules in force, for the facts given, found nothing outside their limits. Each finding lists what it did not check. A licensed professional reviews, approves and stamps.", "",
+                 f"Made {stamp}. Packs: {', '.join(used) or 'none'}.", "",
+                 "| State | Count |", "| --- | --- |"] + [f"| {LABEL.get(k, k)} | {v} |" for k, v in sm["counts"].items()] + [""]
+        if more.get("refusedPacks"):
+            lines += ["## Packs refused as malformed", ""] + [f"- {e}" for e in more["refusedPacks"]] + [""]
+        if conflicts:
+            lines += ["## Layer conflicts", ""] + [f"- {c.get('value') or c.get('rule')} ({c.get('pack')}): {c.get('why')}" for c in conflicts] + [""]
+        if more.get("loosened"):
+            lines += ["## Loosened by an amendment", ""] + [f"- {x.get('value') or x.get('rule')} {x.get('param', '')}: {x.get('from')} to {x.get('to')} by {x.get('pack')} {x.get('cite') or ''}" for x in more["loosened"]] + [""]
+        if more.get("warnings"):
+            lines += ["## Warnings", ""] + [f"- {w['subject']}: {w['why']}" for w in more["warnings"]] + [""]
         for stt in STATES:
             fs = [x for x in sm["findings"] if x["state"] == stt]
             if not fs or stt == "not_applicable":
                 continue
-            lines += [f"## {stt.replace('_', ' ')}", ""]
+            lines += [f"## {LABEL.get(stt, stt).capitalize()}", ""]
             for x in fs:
                 cite = x.get("cite") or {}
                 c = " ".join(str(cite.get(k)) for k in ("code", "edition", "section", "source") if cite.get(k))
                 lines.append(f"- **{x['subject']}**: {x.get('title') or x['rule']}. {x['why']}" + (f" (ratio {x['ratio']})" if x.get("ratio") is not None else "") + (f" [{c}]" if c else ""))
+                if x.get("not_checked"):
+                    lines.append(f"  - not checked: {', '.join(x['not_checked'])}")
+                if x.get("defaults"):
+                    lines.append("  - engine defaults: " + "; ".join(f"{d['fact']} {d['value']}" for d in x["defaults"]))
             lines.append("")
         with open(os.path.join(folder, "findings.md"), "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
         # assumptions: every fact not measured from the model
-        alines = [f"# Assumptions and inputs: {name}", "", f"*{DISCLAIMER}*", "", "| Subject | Value | Is | Provenance | ± | Source / note |", "| --- | --- | --- | --- | --- | --- |"]
-        for sub in subjects(st):
+        alines = [f"# Assumptions and inputs: {name}", "", "## Planning estimate — not an approval", "", DISCLAIMER, "",
+                  "| Subject | Value | Is | Provenance | ± | Source / note |", "| --- | --- | --- | --- | --- | --- |"]
+        for sub in subjects(st, warnings=[]):
             for k, f in sorted(sub["facts"].items()):
                 if f.get("provenance") in ("user_supplied", "assumed", "derived"):
                     alines.append(f"| {sub['id']} | {k} | {f['value']} | {f['provenance']} | {f.get('pm', '')} | {f.get('source', '')} {f.get('note', '')} |")
+        for k, f in sorted(((st.get("answers") or {}).get("project") or {}).items()):
+            alines.append(f"| project | {k} | {f.get('value')} | {f.get('provenance')} | {f.get('pm', '')} | the person |")
         loads = [x for x in sm["findings"] if x.get("loads_kPa")]
         if loads:
             alines += ["", "## Loads used (kPa)", ""] + [f"- {x['subject']}: {x['loads_kPa']}" for x in loads]
+        dfl = [x for x in sm["findings"] if x.get("defaults")]
+        if dfl:
+            alines += ["", "## Engine defaults (filled in, not given)", ""] + [f"- {x['subject']}: " + "; ".join(f"{d['fact']} {d['value']} ({d.get('note', '')})" for d in x["defaults"]) for x in dfl]
         with open(os.path.join(folder, "assumptions.md"), "w", encoding="utf-8") as f:
             f.write("\n".join(alines) + "\n")
-        slines = [f"# Structural: {name}", "", f"*{DISCLAIMER}*", "", "| Member | State | Governs | Ratio | Range | Bending | Shear | Defl. live | Defl. total | Bearing |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+        slines = [f"# Structural: {name}", "", "## Planning estimate — not an approval", "", DISCLAIMER, "",
+                  f"Hand checks of simple spans: {WITHIN} only. Not checked: {', '.join(framing.NOT_CHECKED)}.", "", "| Member | State | Governs | Ratio | Range | Bending | Shear | Defl. live | Defl. total | Bearing |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
         for x in sm["findings"]:
             if x.get("ratios"):
                 r = x["ratios"]
@@ -546,7 +649,7 @@ def tools(session):
         with open(os.path.join(folder, "cutlist.csv"), "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["member", "size", "b_mm", "d_mm", "length_mm", "material"])
-            for sub in subjects(st):
+            for sub in subjects(st, warnings=[]):
                 if sub["kind"] == "member":
                     g = lambda n: (engine.get(sub["facts"], n) or {}).get("value", "")  # noqa: E731
                     w.writerow([sub["id"], g("size"), g("b"), g("d"), g("length") or g("span"), g("material")])
@@ -568,24 +671,24 @@ def tools(session):
     s_ = {"type": "string"}
     num = {"type": "number"}
     return [
-        Tool("code_packs", "Rule packs: action list (the packs found, by layer, jurisdiction, version, effective date) | import (path: a pack .json into your pack folder, checked first) | export (id, path) | ids (the information rules as a buildingSMART IDS 1.0 file: id, or the project's in force) | schema (the pack format). Packs hold paraphrased, cited rules — never a code's text.",
+        Tool("code_packs", "Rule packs: action list (the packs found, by layer, jurisdiction, version, effective date) | import (path: a pack .json into your pack folder, checked first) | export (id, path) | ids (the information rules as a buildingSMART IDS 1.0 file: id, or the project's in force) | schema (the pack format). Packs hold paraphrased, cited rules — never a code's text. A pack is refused (and listed under refused) when it breaks the format: applies not an object, a non-finite number (Infinity, NaN), a negative load, a value object without value, a model pack's number without stricter (higher | lower), jurisdiction \"*\" on anything but a model pack, superseded not after effective. Optional code and edition (IRC, 2021) let the resolver refuse two editions in force at once.",
              obj({"action": {"type": "string", "enum": ["list", "import", "export", "ids", "schema"]}, "path": s_, "id": s_}), code_packs),
-        Tool("code_project", "Set the project the checks are for: jurisdiction (hierarchical, US-WA-Pierce-DuPont; XX tries the shipped example), date (permit or design date, YYYY-MM-DD: picks the pack versions in force), include [contractor or owner pack ids], name. Answers the packs used, rules in force, values (loads …) and any layer conflicts.",
+        Tool("code_project", "Set the project the checks are for: jurisdiction (hierarchical, US-WA-Pierce-DuPont, matched without regard to case; XX tries the shipped example), date (permit or design date, YYYY-MM-DD: picks the pack versions in force), include [contractor or owner pack ids], name. Answers the packs used, rules in force, values (loads …), any layer conflicts (a value or parameter looser than the layer below is refused; the base value's stricter direction holds), anything a state or local amendment loosened explicitly (op loosen with a cite: listed under loosened and in the findings), and packs refused as malformed. Refuses when two packs of the same code and layer (two editions) are both in force: set superseded on the older. With no rules in force it says so, and code_check will refuse.",
              obj({"jurisdiction": s_, "date": s_, "include": {"type": "array", "items": s_}, "occupancy": s_, "name": s_}), code_project, changes=True),
         Tool("code_facts", "What the checks will read: each member, room and opening from the BIM model with its facts (b, d, span, spacing, size, clear heights, sill …) and where each came from — measured, derived, user_supplied, assumed. subject narrows to one. Changes nothing.",
              obj({"subject": s_, "limit": {"type": "integer"}}), code_facts),
-        Tool("code_answer", "Keep the person's answers with the document: subject (a label, or a new one for something not modelled) or subjects [labels] for one answer to several, facts { span: 3600, spacing: 406, size: \"2x8\", truss: false, use: \"habitable_attic\", escape: true, \"design.Fb\": 5.9, \"design.Fv\": 1.2, \"design.E\": 11000 } — a value, or { value, pm, unit, note, provenance }. clear: true forgets a subject's answers. Answers win over what the model says.",
+        Tool("code_answer", "Keep the person's answers with the document: subject (a label in the model; something not modelled needs kind too, or it is only warned about and not checked; \"project\" for project-wide values such as load.snow.ground, which join the pack values but may not loosen them) or subjects [labels] for one answer to several, facts { span: 3600, spacing: 406, size: \"2x8\", truss: false, use: \"habitable_attic\", escape: true, \"design.Fb\": 5.9, \"design.Fv\": 1.2, \"design.E\": 11000 } — a value, or { value, pm, unit, note, provenance, confirmed }. Units are converted on the way in and held as mm (lengths: mm, cm, m, in, ft), mm2 (areas: mm2, m2, in2, ft2), kPa (load.*: kPa, psf) and MPa (design.*: MPa, psi); a unit not in that list is refused, and with no unit the held unit is meant. A value outside its plausible band (span 300–15000 mm, spacing 200–2500, riser 100–250, sill 0–2500, Fb 2–40 MPa, Fv 0.3–5, E 3000–25000 …) is kept but asked about (is this in mm?) until given with its unit or confirmed: true. pm must be 0 or more; factor.* must be within its NDS range (CD 0.9–2.0, Cr 1.0–1.15 …) or it is refused. An assumed provenance on any fact a check reads keeps it from being within the checked limits. clear: true forgets a subject's answers. Answers win over what the model says, and each answer clears the last code_check's results.",
              obj({"subject": s_, "subjects": {"type": "array", "items": s_}, "facts": {"type": "object"}, "clear": {"type": "boolean"}}), code_answer, changes=True),
-        Tool("code_check", "Run the rules in force on the model: each finding compliant | non_compliant | insufficient_information | manual_review_required | not_applicable | error, worst first, with its citation, values, ratio and why. tags [framing, geometry, information] or subjects narrow it; detail: true adds each member's working. A planning estimate, never approval.",
+        Tool("code_check", "Run the rules in force on the model: each finding compliant (within the checked limits only, never a sign-off) | non_compliant | insufficient_information | manual_review_required | not_applicable | error, worst first, with its citation, values, ratio, why, scope and not_checked (what it did not look at). A subject whose applies key is unknown (an opening not yet said to be an escape, a room of undefined use) gets a question, not silence; a value in a unit the engine does not know or with a negative ± is an error; a value outside its plausible band is a question (is this in mm?); an assumed value on any fact a check reads is never within the checked limits. Refuses (an error, not an empty result) when no rule is in force. Also lists packs refused as malformed, layer conflicts, loosened values, and answers kept for subjects the model no longer has. tags [framing, geometry, information] or subjects narrow it; detail: true adds each member's working (both load cases). A planning estimate, never approval.",
              obj({"tags": {"type": "array", "items": s_}, "subjects": {"type": "array", "items": s_}, "detail": {"type": "boolean"}, "all": {"type": "boolean"}, "limit": {"type": "integer"}}), code_check),
-        Tool("code_missing", "The questions that would decide the open findings, most-needed first, a few at a time (batch, 5): what to measure or confirm, about which subject, and which rules wait on it. Ask the person, keep the answers with code_answer, check again.",
+        Tool("code_missing", "The questions that would decide the open findings, most-needed first, a few at a time (batch, 5): what to measure or confirm, about which subject, and which rules wait on it. Uses the last code_check only if it was unfiltered and nothing was answered since; otherwise (or with fresh: true) runs every check again. Ask the person, keep the answers with code_answer, check again.",
              obj({"batch": {"type": "integer"}, "fresh": {"type": "boolean"}}), code_missing),
-        Tool("code_span", "A wood member checked by hand, as an engineer would first: size (\"2x8\", plies) or b, d; span and spacing (mm, or ft and in with units imperial); loads { live, dead, snow } kPa (psf) or use (from the project's packs); design { Fb, Fv, E, Fc_perp } MPa (psi) — the reference values for its species and grade, none assumed; factors { CD, CM, Ct, CF, Cr … }; limits { live: 360, total: 240 }; tol { span, d } plus-minus. Answers ratios for bending, shear, deflection, bearing, the governing one, its range and the state; fem: true adds a CalculiX beam model beside it.",
+        Tool("code_span", "A first hand check of one wood member on a simple span (a planning estimate, not an engineer's design): size (\"2x8\", plies) or b, d; span and spacing (mm, or ft and in with units imperial); loads { live, dead, snow } kPa (psf) or use (from the project's packs); design { Fb, Fv, E, Fc_perp } MPa (psi) — the reference values for its species and grade, none assumed; factors { CD, CM, Ct, CL, CF, Cfu, Ci, Cr, Cb }, each within its NDS range or refused (CD 0.9–2.0); limits { live: 360, total: 240 }; tol { span, d } plus-minus, 0 or more (ft and in with units imperial; a depth tolerance that leaves no depth is refused). Two load cases: dead plus live (or snow) at CD, and dead alone at CD 0.9; the worse governs. Cr 1.15 only for dimension lumber (89 mm or thinner a ply) at 610 mm or closer, never timbers. Answers ratios for bending, shear, deflection, bearing, the governing one and its case, its range, the state (compliant = within these checked limits only), defaults (every value the engine filled in: bearing length, Cr, CD, deflection limits) and not_checked (connections, ledgers, notches, lateral stability, uplift …); fem: true adds a CalculiX beam model beside it.",
              obj({"size": s_, "plies": {"type": "integer"}, "b": num, "d": num, "span": num, "spacing": num, "bearing": num, "repetitive": {"type": "boolean"}, "units": {"type": "string", "enum": ["si", "imperial"]},
                   "loads": {"type": "object"}, "use": s_, "design": {"type": "object"}, "factors": {"type": "object"}, "limits": {"type": "object"}, "tol": {"type": "object"}, "fem": {"type": "boolean"}, "name": s_, "timeout": num}), code_span),
         Tool("code_fem", "The rough FEM look at a member: a CalculiX beam model (pinned, roller, the uniform load) beside the hand check — stress and mid-span deflection, how far apart they are, and a discrepancy note past 15 %. subject (a member, its facts and answers) or the inputs code_span takes. Needs ccx.",
              obj({"subject": s_, "size": s_, "b": num, "d": num, "span": num, "spacing": num, "units": {"type": "string", "enum": ["si", "imperial"]}, "loads": {"type": "object"}, "use": s_,
                   "design": {"type": "object"}, "factors": {"type": "object"}, "limits": {"type": "object"}, "name": s_, "timeout": num}), code_fem),
-        Tool("code_packet", "Write the handoff packet for a licensed professional: a folder with findings (json, md), assumptions (every value not measured, its ± and source, the loads), structural (member by member), a cut list; ifc and drawings (paths from bim_export, td_export) copied in. Every file carries the planning-estimate notice.",
+        Tool("code_packet", "Write the handoff packet for a licensed professional: a folder with findings (json, md), assumptions (every value not measured, its ± and source, the loads, the engine's defaults), structural (member by member, with what was not checked), a cut list; ifc and drawings (paths from bim_export, td_export) copied in. Always runs every check fresh and unfiltered (never the last, possibly narrowed, code_check; fresh is accepted and ignored), and refuses like code_check when no rule is in force. Lists refused packs, layer conflicts and loosened values. Every file opens with the planning-estimate notice as a heading; compliant results are headed \"within the checked limits\".",
              obj({"name": s_, "ifc": s_, "drawings": s_, "fresh": {"type": "boolean"}}), code_packet),
     ]

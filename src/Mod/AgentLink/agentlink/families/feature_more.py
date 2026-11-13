@@ -198,6 +198,12 @@ def tools(session):
             raise bad("Two of pitch (mm per turn), height (mm) and turns.")
         modes = {("height", "pitch"): "pitch-height-angle", ("pitch", "turns"): "pitch-turns-angle", ("height", "turns"): "height-turns-angle"}
         mode = modes[tuple(sorted(given))]
+        # growth (mm wider each turn, a conical spiral) is a mode of its
+        # own, by height and turns; it was set and then ignored.
+        if a.get("growth"):
+            if tuple(sorted(given)) != ("height", "turns"):
+                raise bad("growth: with height and turns (FreeCAD's height-turns-growth), not pitch.")
+            mode = "height-turns-growth"
         try:
             f.Mode = mode
         except Exception:

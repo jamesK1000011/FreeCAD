@@ -176,5 +176,66 @@ class Ids(unittest.TestCase):
         self.assertTrue(any(f == "species" for _, f, _ in skipped))
 
 
+class Hardening(unittest.TestCase):
+    """Behaviour added with the red-team fixes that test_code_redteam does not pin."""
+
+    def setUp(self):
+        ps, _ = packs.load_dir(HERE)
+        self.rules, self.values, _, _ = packs.resolve(ps, "xx", "2026-11-12")  # jurisdiction in any case
+
+    def test_infinity_in_a_pack_file_refused(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "bad.json"), "w", encoding="utf-8") as f:
+            f.write('{"pack": {"id": "bad", "layer": "model", "jurisdiction": "XX", "version": "1.0.0", "effective": "2020-01-01"}, "values": {"load.live.floor": {"value": Infinity, "stricter": "higher"}}}')
+        ps, errs = packs.load_dir(d)
+        self.assertEqual(ps, [])
+        self.assertTrue(errs)
+        self.assertTrue(json.loads(json.dumps(errs)))
+
+    def test_explicit_loosen_is_kept_and_shown(self):
+        base = pack("m", "model", "US", values={"load.live.floor": {"value": 1.92, "stricter": "higher"}})
+        loc = pack("l", "local", "US-WA", values={"load.live.floor": {"value": 1.44, "op": "loosen", "cite": {"source": "ord. 7"}}})
+        rules, values, _, _ = packs.resolve([base, loc], "US-WA", "2026-11-12")
+        self.assertEqual(values["load.live.floor"]["value"], 1.44)
+        self.assertEqual(values["load.live.floor"]["loosened_by"]["from"], 1.92)
+        self.assertEqual(packs.loosened(rules, values)[0]["value"], "load.live.floor")
+        with self.assertRaises(packs.PackError):  # a contractor never loosens
+            pack("c", "contractor", "US", values={"load.live.floor": {"value": 1.0, "op": "loosen", "cite": {"source": "me"}}})
+
+    def test_known_mismatch_is_not_applicable(self):
+        out = engine.run(self.rules, self.values, [{"id": "Store", "kind": "space", "use": "storage", "facts": {"clear_height": 1800}}])
+        self.assertTrue(out)
+        self.assertTrue(all(f["state"] == "not_applicable" for f in out))
+
+    def test_findings_carry_scope_and_wording(self):
+        out = engine.run(self.rules, self.values, [{"id": "Stairs", "kind": "stair", "facts": {"tread_depth": 270}}])
+        ok = next(f for f in out if f["rule"] == "example.stair.tread")
+        self.assertEqual(ok["state"], "compliant")
+        self.assertIn("within the checked limits", ok["why"])
+        self.assertTrue(ok["scope"] and ok["not_checked"])
+
+    def test_member_working_lists_defaults_and_not_checked(self):
+        d = {"design.Fb": 6.0, "design.Fv": 1.0, "design.E": 9000}
+        out = engine.run(self.rules, self.values, [{"id": "J", "kind": "member", "role": "joist",
+                                                    "facts": dict(truss=False, span=2400, spacing=406, use="floor", size="2x8", **d)}])
+        f = next(x for x in out if x["rule"] == "example.framing.member")
+        self.assertEqual(f["state"], "compliant")
+        got = {x["fact"] for x in f["defaults"]}
+        self.assertTrue({"bearing", "factor.Cr", "factor.CD"} <= got)
+        for word in ("connections", "ledgers", "notches", "lateral", "uplift"):
+            self.assertTrue(any(word in n for n in f["not_checked"]), word)
+
+    def test_factor_out_of_range_is_error(self):
+        d = {"design.Fb": 6.0, "design.Fv": 1.0, "design.E": 9000, "factor.CD": 3.0}
+        out = engine.run(self.rules, self.values, [{"id": "J", "kind": "member", "facts": dict(truss=False, span=2400, spacing=406, use="floor", size="2x8", **d)}])
+        self.assertEqual(next(x for x in out if x["rule"] == "example.framing.member")["state"], "error")
+
+    def test_unknown_unit_is_error_and_confirmed_skips_band(self):
+        out = engine.run(self.rules, self.values, [{"id": "S", "kind": "stair", "facts": {"riser_height": {"value": 8, "unit": "furlong"}}}])
+        self.assertEqual(next(x for x in out if x["rule"] == "example.stair.riser")["state"], "error")
+        out = engine.run(self.rules, self.values, [{"id": "S", "kind": "stair", "facts": {"width": {"value": 6000, "confirmed": True}}}])
+        self.assertEqual(next(x for x in out if x["rule"] == "example.stair.width")["state"], "compliant")
+
+
 if __name__ == "__main__":
     unittest.main()

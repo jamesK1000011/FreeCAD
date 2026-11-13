@@ -352,6 +352,10 @@ def tools(session):
         d = s.doc
         if a.get("path"):
             p = where(a["path"], ".FCStd")
+            # Another model's file is not this document's to write over.
+            mine = os.path.abspath(d.FileName) if d.FileName else None
+            if os.path.exists(p) and os.path.abspath(p) != mine and not a.get("overwrite"):
+                raise ToolError("invalid_input", f"{p} is another FreeCAD document already there: another name, or overwrite: true once the person says to replace it.")
             os.makedirs(os.path.dirname(p), exist_ok=True)
             d.saveAs(p)
         elif d.FileName:
@@ -359,6 +363,12 @@ def tools(session):
             p = d.FileName
         else:
             p = where(f"{d.Label or d.Name}.FCStd")
+            if os.path.exists(p) and not a.get("overwrite"):
+                base = p[:-6]
+                k = 2
+                while os.path.exists(f"{base} {k}.FCStd"):
+                    k += 1
+                p = f"{base} {k}.FCStd"
             d.saveAs(p)
         return {"document": d.Name, "path": p, "bytes": os.path.getsize(p)}
 
@@ -738,7 +748,7 @@ def tools(session):
         Tool("doc_close", "Close open documents (documents: names, labels or .FCStd paths; the current one when left out); one changed since saved is refused unless discard: true. Work moves to another open document. Not undoable.",
              obj({"documents": {"type": "array", "items": {"type": "string"}}, "discard": {"type": "boolean"}}), doc_close),
         Tool("doc_open", "Open a FreeCAD document (.FCStd, path) and work in it from now on — recomputed, with any object's error listed. Other formats come in with import_file. Not undoable.", obj({"path": {"type": "string"}}, ["path"]), doc_open),
-        Tool("doc_save", "Save the document as .FCStd: path (relative goes in the session's folder), else where it was saved, else <label>.FCStd there. What setup and part_spec recorded is saved with it.", obj({"path": {"type": "string"}}), doc_save),
+        Tool("doc_save", "Save the document as .FCStd: path (relative goes in the session's folder), else where it was saved, else <label>.FCStd there (\"<label> 2.FCStd\" … when that name is taken by another file). Never over another document's file unless overwrite: true — ask the person first. What setup and part_spec recorded is saved with it.", obj({"path": {"type": "string"}, "overwrite": {"type": "boolean"}}), doc_save),
         Tool("object_list", "Every object in the document: name, label, type, visible, parents (what uses it) and its shape (volume, area, faces, solids, size for a solid; faces and edges else) or mesh. type: a part of the type to keep (\"Part::\", \"Sketch\").", obj({"type": {"type": "string"}}), object_list),
         Tool("object_get", "One object's properties: value (mm, degrees; placements as { at, axis, angle }; links by label; a shape as its stats), type, readOnly. filter: a word in the name or group (\"Placement\", \"Base\"), or a list of names.", obj({"object": objref, "filter": {}}, ["object"]), object_get),
         Tool("object_set", "Set properties of an object by name: values { Length: 20, Placement: { at, axis, angle }, Refine: true, Base: \"Box\", Mode: \"…\" } — each converted to its type (numbers in mm and degrees, or strings with a unit \"1 in\"); enumerations checked; read-only ones refused. Recomputes; refused and undone when that fails. Trap: a plain shape (Part::Feature from a boolean) has no sizes to set — only placement.", obj({"object": objref, "values": {"type": "object"}}, ["object", "values"]), object_set, changes=True),

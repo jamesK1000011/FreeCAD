@@ -55,15 +55,24 @@ def direction(v, name, default=None):
 
 
 def placement(a):
-    """at [x,y,z] and rotate { axis, angle (degrees) } into a Placement."""
+    """at [x,y,z] and a rotation — rotate { axis, angle } or axis and angle
+    beside at (degrees) — into a Placement. Tools list one or the other;
+    either is taken, so a rotation given is never dropped."""
     pos = vec3(a.get("at"), "at", (0, 0, 0))
     rot = FreeCAD.Rotation()
     r = a.get("rotate")
+    if r is None and (a.get("axis") is not None or a.get("angle") is not None):
+        r = {"axis": a.get("axis"), "angle": a.get("angle", 0)}
     if r:
         if not isinstance(r, dict):
             raise ToolError("invalid_input", "rotate: { axis: [x,y,z], angle: degrees }.")
         rot = FreeCAD.Rotation(direction(r.get("axis"), "rotate.axis", (0, 0, 1)), num(r.get("angle", 0), "rotate.angle"))
     return FreeCAD.Placement(pos, rot)
+
+
+def placed(a):
+    """Whether a placement was asked for at all: at, axis, angle or rotate."""
+    return any(a.get(k) is not None for k in ("at", "axis", "angle", "rotate"))
 
 
 def placement_json(p):

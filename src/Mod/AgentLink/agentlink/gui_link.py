@@ -20,6 +20,25 @@ from .tools import Session, build_server
 PORT = 7318
 
 
+def _tool_name(line):
+    try:
+        m = json.loads(line)
+        return (m.get("params") or {}).get("name") if m.get("method") == "tools/call" else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def looks_like_call(line):
+    """A JSON-RPC 2.0 message: an object with jsonrpc "2.0" and a method."""
+    if len(line) > 8_000_000 or not line.lstrip().startswith("{"):
+        return False
+    try:
+        m = json.loads(line)
+    except ValueError:
+        return False
+    return isinstance(m, dict) and m.get("jsonrpc") == "2.0" and isinstance(m.get("method"), str)
+
+
 class Link:
     def __init__(self, port=PORT):
         self.port = port
@@ -94,10 +113,30 @@ class Link:
             threading.Thread(target=self._read, args=(conn,), daemon=True).start()
 
     def _read(self, conn):
+        """Lines of JSON-RPC, one object each. Anything else ends the
+        connection at once: a web page can reach 127.0.0.1 too, and a
+        browser's request starts with an HTTP line ("POST / HTTP/1.1") and
+        headers, so its body — a tool call — was run once the lines that
+        were not JSON had been skipped. Only a client speaking the protocol
+        from its first line is served."""
         f = conn.makefile("rw", encoding="utf-8", newline="\n")
-        for line in f:
-            if line.strip():
+        try:
+            for line in f:
+                if not line.strip():
+                    continue
+                if not looks_like_call(line):
+                    break
                 self.inbox.put((line, f, conn))
+                continue
+            else:
+                return
+        except (OSError, UnicodeDecodeError):
+            pass
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+            conn.close()
+        except OSError:
+            pass
 
     def _back(self):
         """After app_restart: False while the documents it is reopening are
@@ -173,7 +212,7 @@ class Link:
                 reply = self.server.handle(json.loads(line))
             except ValueError:
                 reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "not JSON"}}
-            if not self.going and "app_restart" in line:
+            if not self.going and _tool_name(line) == "app_restart":
                 from . import restart_mark
 
                 self.going = restart_mark.going(restart_mark.read())

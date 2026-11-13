@@ -146,8 +146,20 @@ def tools(s):
                 raise bad(f"props.{k}: {o.Label} has no such property — it has {', '.join(p for p in o.PropertiesList if p[0].isupper())[:600]}.")
             try:
                 cur = getattr(o, k)
-                if isinstance(cur, FreeCAD.Units.Quantity) and isinstance(v, (int, float)):
-                    v = FreeCAD.Units.Quantity(v, cur.Unit)
+                if isinstance(cur, FreeCAD.Units.Quantity):
+                    # A bare number went in FreeCAD's internal units (force in
+                    # mN, pressure in kPa): 1000 x off with nothing said. A
+                    # quantity takes its unit with it.
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        if not cur.Unit.Signature or float(v) == 0:
+                            v = FreeCAD.Units.Quantity(float(v), cur.Unit)
+                        else:
+                            raise bad(f"props.{k}: a value with its unit, as text — e.g. \"{v} {cur.getUserPreferred()[2] if hasattr(cur, 'getUserPreferred') else ''}\" (now {cur.UserString}).")
+                    elif isinstance(v, str):
+                        q = FreeCAD.Units.Quantity(v)
+                        if q.Unit != cur.Unit and q.Unit.Signature:
+                            raise bad(f"props.{k}: {v!r} is not in a unit of {cur.UserString!r}.")
+                        v = q if q.Unit.Signature else FreeCAD.Units.Quantity(q.Value, cur.Unit)
                 elif isinstance(cur, FreeCAD.Vector) and isinstance(v, (list, tuple)):
                     v = FreeCAD.Vector(*v)
                 setattr(o, k, v)
@@ -264,8 +276,11 @@ def tools(s):
         raise bad("action: netgen { body, props } | to_mesh { mesh, result } | clear_groups { mesh }.")
 
     def fem_linearize(a):
-        """Membrane and bending stress through a wall, ASME VIII-2 style: von
-        Mises (or a component) along a line from one face to the other."""
+        """Membrane and bending stress through a wall: von Mises (or a
+        component) along a line from one face to the other, linearized as
+        it stands. ASME VIII-2 linearizes each stress component and takes
+        the equivalent after; linearizing von Mises itself is the quicker,
+        rougher reading, and the answer says so."""
         src = picks.find(d(), a.get("result"), "result")
         p0 = FreeCAD.Vector(*picks.vec3(a.get("from"), "from"))
         p1 = FreeCAD.Vector(*picks.vec3(a.get("to"), "to"))
@@ -290,13 +305,19 @@ def tools(s):
             vals = list(src.vonMises) if field.lower().startswith("von") else list(getattr(src, field))
             ids = list(src.NodeNumbers)
             pos = {i: fm.getNodeById(i) for i in ids}
-            xs, ys = [], []
+            xs, ys, far = [], [], 0.0
             for k in range(n):
                 t = k / (n - 1)
                 q = p0 + (p1 - p0) * t
                 j = min(range(len(ids)), key=lambda m: (pos[ids[m]] - q).Length)
+                far = max(far, (pos[ids[j]] - q).Length)
                 xs.append(t * L)
                 ys.append(vals[j])
+            # Nearest node with no limit read stresses for a line that left
+            # the part: refuse once a sample is further from any node than a
+            # fair share of the wall.
+            if far > max(0.5, 0.25 * L):
+                raise ToolError("invalid_input", f"The line runs {far:.2f} mm from any node of the mesh: it leaves the part. from and to go across the wall, on its two faces.")
         else:
             raise bad(f"{src.Label}: a FEM result (CalculiX result or a post pipeline).")
         # Membrane: the mean; bending: the linear part, at the surfaces.
@@ -311,16 +332,16 @@ def tools(s):
         peak = max(abs(y) for y in ys)
         return {"result": src.Label, "field": field, "thickness": round(T, 4), "membrane": round(mem, 4), "bending": round(abs(bend), 4),
                 "membranePlusBending": round(abs(mem) + abs(bend), 4), "peak": round(peak, 4), "points": len(ys),
-                "note": "Stress linearization along the line (membrane = mean, bending from the first moment): compare with the code's allowables; FEA is a feasibility check, not a sign-off."}
+                "note": "Stress linearization along the line (membrane = mean, bending from the first moment) of the field as given — for von Mises a rough reading: ASME VIII-2 linearizes each component and takes the equivalent after (field: a component, then combine). Compare with the code's allowables; FEA is a feasibility check, not a sign-off."}
 
     st = {"type": "string"}
     return [
-        Tool("fem_add", "Add anything FEM has to an analysis: kind (" + ", ".join(KINDS) + "); refs [\"Body.Face3\", …] or { body, faces: [queries] }; props { its FreeCAD properties (numbers in its units) } — the answer lists them; mesh / solver where a refinement or equation needs one; new: true makes a new analysis for a solver.",
+        Tool("fem_add", "Add anything FEM has to an analysis: kind (" + ", ".join(KINDS) + "); refs [\"Body.Face3\", …] or { body, faces: [queries] }; props { its FreeCAD properties: a quantity as text with its unit, \"2 MPa\", \"100 N\", \"1000 N/mm\" — a bare number is refused for a quantity, since FreeCAD keeps them in mN and kPa } — the answer lists them; mesh / solver where a refinement or equation needs one; new: true makes a new analysis for a solver.",
              obj({"kind": {"type": "string", "enum": list(KINDS)}, "analysis": st, "refs": {}, "props": {"type": "object"}, "mesh": st, "solver": st, "material": st, "new": {"type": "boolean"}, "name": st}, ["kind"]), fem_add, changes=True),
         Tool("fem_mesh", "FEM meshes: action netgen { body, props } (Netgen's mesh) | to_mesh { mesh, result } (the FEM mesh's outside as a plain mesh, deformed by a result) | clear_groups { mesh }.",
              obj({"action": {"type": "string", "enum": ["netgen", "to_mesh", "clear_groups"]}, "body": st, "mesh": st, "result": st, "analysis": st, "props": {"type": "object"}, "name": st}, ["action"]), fem_mesh, changes=True),
         Tool("fem_linearize", "Stress linearization through a wall from a FEM result (CalculiX result or post pipeline): from and to [x,y,z] across the wall, points, field (von Mises by default) → membrane, bending, membrane + bending, peak.",
-             obj({"result": st, "from": {"type": "array", "items": {"type": "number"}}, "to": {"type": "array", "items": {"type": "number"}}, "points": {"type": "integer"}, "field": st}, ["result", "from", "to"]), fem_linearize),
+             obj({"result": st, "from": {"type": "array", "items": {"type": "number"}}, "to": {"type": "array", "items": {"type": "number"}}, "points": {"type": "integer"}, "field": st}, ["result", "from", "to"]), fem_linearize, changes=True),
     ]
 
 

@@ -30,6 +30,7 @@ class Window:
         self.write = write
         self.f = None
         self.off = os.environ.get("AGENTLINK_WINDOW", "1") == "0"
+        self.seen = False  # the window has answered this session
 
     def _open(self):
         import socket
@@ -66,6 +67,7 @@ class Window:
                 self.write(got)
                 try:
                     if json.loads(got).get("id") == mid:
+                        self.seen = True
                         return True
                 except ValueError:
                     pass
@@ -73,14 +75,40 @@ class Window:
             self.f = None
             return False
 
+    def _refuse(self, line, why):
+        try:
+            mid = json.loads(line).get("id")
+        except ValueError:
+            mid = None
+        text = json.dumps({"error": {"code": "invalid_state", "message": why}})
+        self.write(json.dumps({"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": text}], "isError": True}}))
+        return True
+
     def call(self, line):
         """Send one call to the window and pass its answer on. False when the
-        window isn't there: the hidden FreeCAD takes the call. A connection
-        the window dropped (it quit to restart) is made again, once."""
-        if self.off or not self._ready():
+        window isn't there: the hidden FreeCAD takes the call.
+
+        A connection the window dropped while restarting on purpose
+        (app_restart leaves a mark; the calls it had not started were never
+        run) is made again and the call sent once more. Dropped with no mark
+        — a crash, or the person quit — the call may have run or not, so it
+        is answered, not sent again. And once the window has answered this
+        session, its going away is said once rather than the hidden FreeCAD
+        quietly answering from its own empty document (a doc_save there
+        would write that over the person's file)."""
+        if self.off:
+            return False
+        if not self._ready():
+            if self.seen:
+                self.seen = False
+                return self._refuse(line, "The FreeCAD window this session was working in has gone (closed or crashed): this call was not run. What was open there is not in the hidden FreeCAD, which has an empty document of its own. Ask the person to open FreeCAD again (its link starts with it), or carry on headless: the next call runs there.")
             return False
         if self._send(line):
             return True
+        restarting = restart_mark is not None and restart_mark.read() is not None
+        if not restarting:
+            self.seen = False
+            return self._refuse(line, "The FreeCAD window went away during this call: it may or may not have run. session_state shows where things stand; then call again if it is needed.")
         return self._ready() and self._send(line)
 
 

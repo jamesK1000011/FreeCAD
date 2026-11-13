@@ -222,7 +222,16 @@ def tools(session):
         active()
         o = picks.find(doc(), a.get("object"))
         sc = a.get("scale")
-        c = Draft.make_clone(o, V(*sc) if isinstance(sc, list) else (V(sc, sc, sc) if isinstance(sc, (int, float)) else None))
+        # make_clone's second argument is a displacement, not a scale: the
+        # scale goes on the clone's own Scale property.
+        c = Draft.make_clone(o)
+        if sc is not None:
+            if isinstance(sc, (int, float)) and not isinstance(sc, bool):
+                sc = [sc, sc, sc]
+            if not (isinstance(sc, list) and len(sc) == 3 and all(isinstance(x, (int, float)) and x > 0 for x in sc)):
+                raise ToolError("invalid_input", "scale: a factor above 0, or [sx, sy, sz].")
+            c.Scale = V(*[float(x) for x in sc])
+            doc().recompute()
         if a.get("move"):
             c.Placement = FreeCAD.Placement(v3(a["move"], "move"), FreeCAD.Rotation()).multiply(c.Placement)
         return finish(named(c, a.get("name"), f"{o.Label} clone"), "draft_clone", {"of": o.Label})

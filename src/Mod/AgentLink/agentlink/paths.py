@@ -20,7 +20,7 @@ GEOMETRIC = {"part_sweep", "pd_pipe", "draft_link_array", "draft_array", "bim_fr
 # Tools that write their path (the rest read theirs).
 WRITERS = {"export", "export_file", "bim_export", "doc_save", "robot_export", "meshobj_unwrap", "meshobj_export", "cam_sim", "cam_post",
            "sheet_export", "sheet_chart", "scad_export", "texture_prepare", "view_render", "view_snapshot", "points_export", "drawing_make",
-           "td_export", "fea_export", "insp_export", "mill_export", "code_packet", "ifc_save", "asm_export", "asm_motion", "steps_render", "window_snapshot"}
+           "td_export", "fea_export", "cam_template_export", "fea_chart", "insp_export", "mill_export", "code_packet", "ifc_save", "asm_export", "asm_motion", "steps_render", "window_snapshot"}
 SECRET_PARTS = {".ssh", ".aws", ".gnupg", ".kube", ".docker", ".config", ".netrc", ".git", ".password-store", "keychains", "Keychains",
                 ".zshrc", ".bashrc", ".profile", ".bash_profile", ".zprofile", ".env"}
 NEVER_WRITE_EXT = {".sh", ".bash", ".zsh", ".command", ".tool", ".py", ".pyc", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".php",
@@ -49,16 +49,24 @@ def check(tool, key, value, out_dir, write):
         raise ToolError("invalid_input", f"{key}: {raw} is in {secret[0]} — credentials and shell settings are off limits to the agent.")
     if write:
         home = _real("~")
-        roots = [r for r in (_real(out_dir) if out_dir else None, home, _real("/tmp"), _real(os.environ.get("TMPDIR", "/tmp"))) if r]
+        # A session folder at the disk's root (a server started from / with
+        # no --out) is not taken as leave to write anywhere.
+        roots = [r for r in (_real(out_dir) if out_dir else None, home, _real("/tmp"), _real(os.environ.get("TMPDIR", "/tmp"))) if r and r != "/"]
         inside = any(real == r or real.startswith(r.rstrip("/") + "/") for r in roots)
         if not inside:
             raise ToolError("invalid_input", f"{key}: {raw} — files are written in the session's folder or under your home folder, not there.")
         rel = os.path.relpath(real, home) if real.startswith(home) else ""
         hidden = [x for x in _parts(rel) if x.startswith(".")]
-        out_real = _real(out_dir) if out_dir else None
+        out_real = _real(out_dir) if out_dir and _real(out_dir) != "/" else None
         if hidden and not (out_real and real.startswith(out_real.rstrip("/") + "/")):
             raise ToolError("invalid_input", f"{key}: {raw} is in a hidden folder ({hidden[0]}) — write it somewhere visible.")
+        in_out = bool(out_real and (real == out_real or real.startswith(out_real.rstrip("/") + "/")))
+        top = _parts(rel)[:1]
+        if top == ["Library"] and not in_out:
+            raise ToolError("invalid_input", f"{key}: {raw} is in ~/Library, where apps keep their settings — write it somewhere you'd look for it.")
         ext = os.path.splitext(real)[1]
+        if ext.lower() == ".fcstd" and os.path.exists(real) and tool != "doc_save":
+            raise ToolError("invalid_input", f"{key}: {raw} is a FreeCAD document already there — {tool} would write over it. Another name, or doc_save for the document itself.")
         if ext.lower() in {e.lower() for e in NEVER_WRITE_EXT}:
             raise ToolError("invalid_input", f"{key}: {raw} — the add-on writes models, drawings, data and G-code, never {ext} files (scripts, programs, settings).")
     return value
@@ -67,6 +75,11 @@ def check(tool, key, value, out_dir, write):
 def guard(tool, args, out_dir):
     """Every path-like field of a call checked; raises on the first refusal."""
     name = tool.name
+    # Some tools make their files' names from name (slice, td_export, cut
+    # and mill exports): a name with a path in it wrote anywhere.
+    nm = (args or {}).get("name")
+    if isinstance(nm, str) and ("/" in nm or "\\" in nm or nm.startswith("~") or nm.strip(". ") == "" and nm):
+        raise ToolError("invalid_input", f"name: {nm!r} — a name, not a path (files go to the session's folder; path where a tool takes one).")
     writes = name in WRITERS or (args or {}).get("action") == "export"
     for k, v in (args or {}).items():
         if (k not in PATH_KEYS and k not in PATH_KEYS_FOR.get(name, ())) or (k == "path" and name in GEOMETRIC):

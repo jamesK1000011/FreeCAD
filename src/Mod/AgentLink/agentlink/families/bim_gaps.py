@@ -68,7 +68,7 @@ def tools(s):
         elif kind == "clone":
             src = picks.find(d(), a.get("from"), "from")
             o = headless_call(Arch.cloneComponent, src)
-            if a.get("at") is not None:
+            if picks.placed(a):
                 o.Placement = picks.placement(a)
         elif kind == "unclone":
             o = picks.find(d(), a.get("from"), "from")
@@ -219,7 +219,7 @@ def tools(s):
                 ratio = None
             o.XSize = float(w or (float(h) / ratio if ratio else h))
             o.YSize = float(h or (float(w) * ratio if ratio else w))
-        if a.get("at") is not None:
+        if picks.placed(a):
             o.Placement = picks.placement(a)
         named(o, a.get("name") or os.path.splitext(os.path.basename(p))[0])
         return done("bim_image_plane", {"image": o.Label, "size": [float(o.XSize), float(o.YSize)], "note": "A picture to trace over: a plan, an elevation, a photo with a known length."})
