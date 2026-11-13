@@ -124,6 +124,7 @@ agentlink/iso286.py
 agentlink/keep.py
 agentlink/kicad.py
 agentlink/launcher_check.py
+agentlink/macros.py
 agentlink/meshdist.py
 agentlink/meshformats.py
 agentlink/millsim.py

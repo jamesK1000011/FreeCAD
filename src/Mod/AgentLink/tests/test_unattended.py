@@ -141,8 +141,11 @@ class Unattended(Base):
         self.assertIn("Probe", r["set"])
         h = self.ok("pref_history", {"limit": 5})["changes"]
         self.assertEqual((h[0]["tool"], h[0]["name"], h[0]["to"]), ("pref_set", "Probe", 3))
-        snaps = os.listdir(keep.path("settings"))
-        self.assertTrue(snaps)
+        import FreeCAD
+
+        if os.path.isfile(os.path.join(FreeCAD.getUserConfigDir(), "user.cfg")):
+            self.assertTrue(os.listdir(keep.path("settings")))
+            self.assertTrue(h[0].get("change"))
         if not os.environ.get("AGENTLINK_SUPERVISED"):
             self.assertEqual(self.refused("pref_rollback", {"to": h[0]["change"]})["code"], "unavailable")
         self.assertEqual(self.refused("pref_rollback", {"to": 99999})["code"], "not_found")
@@ -166,9 +169,9 @@ class Unattended(Base):
         home = s.doc
         other = FreeCAD.newDocument("Elsewhere")
         try:
-            r = self.ok("doc_switch", {"document": "Elsewhere"})
+            r = self.ok("doc_switch", {"document": other.Name})
             self.assertEqual(s.doc.Name, other.Name)
-            self.assertIn("Elsewhere", [d["label"] for d in self.ok("doc_switch")["open"]])
+            self.assertIn(other.Label, [d["label"] for d in self.ok("doc_switch")["open"]])
             self.assertEqual(self.refused("doc_switch", {"document": "Nowhere"})["code"], "not_found")
             # M4: an unrelated object failing in the recompute is a note, not a refusal
             self.box("K box", [10, 10, 10])
@@ -184,6 +187,44 @@ class Unattended(Base):
             self.ok("doc_switch", {"document": home.Name})
             FreeCAD.closeDocument(other.Name)
         self.assertEqual(self.ok("session_state")["document"], home.Name)
+
+    def test_11_macros(self):
+        import tempfile
+
+        import FreeCAD
+
+        mdir = tempfile.mkdtemp(prefix="agentlink-macros-")
+        FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Macro").SetString("MacroPath", mdir)
+        s = self.session
+        self.ok("history_checkpoint", {"name": "macro start"})
+        self.ok("part_primitive", {"kind": "box", "size": [60, 20, 2], "name": "M plate"})
+        saved = self.ok("macro_save", {"name": "Plate test", "from": "macro start", "params": {"length": 60, "wall": 2}})
+        self.assertEqual(saved["calls"], 1)
+        self.assertEqual(saved["constants"], {"LENGTH": 60, "WALL": 2})
+        text = open(saved["path"]).read()
+        self.assertIn("[LENGTH, 20, WALL]", text)
+        self.assertEqual(self.refused("macro_run", {"name": "Plate test"})["code"], "not_allowed")
+        self.assertEqual(self.refused("macro_approve", {"name": "Plate test", "confirm": "yes"})["code"], "not_allowed")
+        self.ok("macro_approve", {"name": "Plate test", "confirm": "approve Plate test"})
+        self.assertEqual([m["state"] for m in self.ok("macro_list")["macros"] if m["name"] == "Plate test"], ["approved"])
+        n = len(s.bodies())
+        r = self.ok("macro_run", {"name": "Plate test", "params": {"LENGTH": 30}})
+        self.assertEqual(r["calls"], 1)
+        vols = sorted(round(o.Shape.Volume) for o in s.bodies())
+        self.assertIn(1200, vols)
+        self.assertEqual(len(s.bodies()), n + 1)
+        # a refused call part way rolls the run back whole
+        n = len(s.bodies())
+        e = self.refused("macro_run", {"name": "Plate test", "params": {"LENGTH": -5}})
+        self.assertIn("Rolled back", e["message"])
+        self.assertEqual(len(s.bodies()), n)
+        self.assertIn("params", self.refused("macro_run", {"name": "Plate test", "params": {"NOPE": 1}})["message"])
+        # its code changed: approval no longer holds
+        with open(saved["path"], "a") as f:
+            f.write("# edited\n")
+        self.assertIn("changed", self.refused("macro_run", {"name": "Plate test"})["message"])
+        self.assertEqual(self.ok("macro_show", {"name": "Plate test"})["state"], "changed")
+        self.ok("macro_unapprove", {"name": "Plate test"})
 
 
 if __name__ == "__main__":

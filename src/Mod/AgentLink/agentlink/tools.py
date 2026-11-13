@@ -1095,6 +1095,7 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
     server = Server(name, version, tools, instructions(lean, window), run=session.execute, groups=set(LEAN) if lean else None, resources=Resources(session),
                     guard=lambda tool, args: paths.guard(tool, args, session.out_dir))
     server.on_call = session.record_call
+    session.server = server
     from . import usage
 
     if os.environ.get("AGENTLINK_USAGE", "on") != "off":
