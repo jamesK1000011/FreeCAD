@@ -63,6 +63,16 @@ def _bundle_python(app=None):
     return None
 
 
+def _clean_env():
+    """This FreeCAD's environment without what its bundle set for its own
+    Python and Qt: another release started from here must find its own."""
+    env = dict(os.environ)
+    for k in list(env):
+        if k.startswith(("PYTHON", "DYLD_", "QT_", "FREECAD", "CONDA", "__PYVENV")) or k in ("LD_LIBRARY_PATH", "GMSH_PATH"):
+            env.pop(k)
+    return env
+
+
 def _carry_settings(app):
     """Run the other release headless once to copy this one's settings and
     add-ons into its versioned folders; says what it did."""
@@ -73,7 +83,7 @@ def _carry_settings(app):
     if cmd is None:
         return "no FreeCADCmd in " + app + ": its first start asks about settings itself"
     try:
-        r = subprocess.run([cmd, "-c", _MIGRATE], capture_output=True, text=True, timeout=300)
+        r = subprocess.run([cmd, "-c", _MIGRATE], capture_output=True, text=True, timeout=300, env=_clean_env())
     except Exception as e:
         return "not carried over (%s): its first start asks" % e
     m = re.search(r"@@(\w+)@@(.*)", (r.stdout or "") + (r.stderr or ""))
@@ -547,7 +557,7 @@ def tools(session):
             cmd = f"sleep 3; open -a '{bundle}' {files}"
         else:
             cmd = f"sleep 3; '{exe}' {files} &"
-        subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_clean_env() if target else None)
         for d in list(FreeCAD.listDocuments().values()):
             FreeCAD.closeDocument(d.Name)
         from PySide import QtCore, QtGui
