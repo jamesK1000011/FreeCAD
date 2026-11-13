@@ -147,6 +147,18 @@ class Unattended(Base):
             self.assertEqual(self.refused("pref_rollback", {"to": h[0]["change"]})["code"], "unavailable")
         self.assertEqual(self.refused("pref_rollback", {"to": 99999})["code"], "not_found")
 
+    def test_9_smoke_test_passes_here(self):
+        import sys
+
+        from agentlink import smoke
+
+        r = smoke.run()
+        self.assertTrue(r["ok"], r["failures"])
+        self.assertGreater(r["families"]["loaded"], 30)
+        lib = os.environ.get("FREECAD_LIB")
+        out = smoke.against(python=sys.executable, lib=lib, addon_dirs=[os.path.dirname(os.path.dirname(os.path.abspath(__file__)))], timeout=300)
+        self.assertTrue(out["ok"], out["failures"])
+
 
 if __name__ == "__main__":
     unittest.main()

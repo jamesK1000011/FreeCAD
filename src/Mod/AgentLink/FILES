@@ -144,6 +144,7 @@ agentlink/shots.py
 agentlink/slicer.py
 agentlink/slicer_presets.py
 agentlink/slicers.py
+agentlink/smoke.py
 agentlink/store.py
 agentlink/supervise.py
 agentlink/threads_table.py

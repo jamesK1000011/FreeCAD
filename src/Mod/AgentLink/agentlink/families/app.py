@@ -769,6 +769,20 @@ def tools(session):
         target = a.get("app")
         if target:
             target = _freecad_bundle(target)
+            # The other release must pass the smoke test with these add-ons
+            # before the window moves onto it (unattended use, G); the
+            # window stays where it is otherwise, and the new app stays on
+            # disk for a look.
+            from .. import keep, smoke
+
+            here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            mods = os.path.dirname(here)
+            res = smoke.against(app=target, addon_dirs=[mods])
+            cur = sys.executable
+            before = {"app": cur.split(".app/")[0] + ".app" if ".app/" in cur else cur, "freecad": ".".join(FreeCAD.Version()[:3])}
+            keep.record_versions(before, {"app": target, "freecad": res.get("freecad")}, "smoke passed" if res.get("ok") else "smoke failed: refused")
+            if not res.get("ok"):
+                raise ToolError("failed", f"{os.path.basename(target)} failed the smoke test with these add-ons, so the window stays on {before['freecad']}: " + "; ".join(res.get("failures") or [])[:600] + f". It stays at {target} for a look.")
 
         # A step playing hides the body: show it again before anything is saved.
         try:

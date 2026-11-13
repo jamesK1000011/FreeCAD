@@ -116,8 +116,15 @@ class Job:
                 raise RuntimeError("no FreeCAD .app in the disk image")
             src = os.path.join(mnt, apps[0])
             new_ver = app_version(src)
-            sig = subprocess.run(["codesign", "--verify", "--strict", src], capture_output=True, timeout=600)
-            self.put(state="copying", new_version=new_ver, signed=sig.returncode == 0)
+            # Signed and accepted by Gatekeeper, or it never runs (M6): a
+            # release that fails either is not put in place at all.
+            sig = subprocess.run(["codesign", "--verify", "--deep", "--strict", src], capture_output=True, timeout=900)
+            if sig.returncode:
+                raise RuntimeError("codesign --verify --deep --strict refused %s: %s — not installed" % (os.path.basename(src), sig.stderr.decode(errors="replace")[:300]))
+            gk = subprocess.run(["spctl", "--assess", "--type", "execute", src], capture_output=True, timeout=300)
+            if gk.returncode:
+                raise RuntimeError("Gatekeeper (spctl --assess) refused %s: %s — not installed" % (os.path.basename(src), gk.stderr.decode(errors="replace")[:300]))
+            self.put(state="copying", new_version=new_ver, signed=True, gatekeeper=True)
             dest, kept = self._place(src, new_ver)
         finally:
             subprocess.run(["hdiutil", "detach", mnt, "-force"], capture_output=True, timeout=120)
