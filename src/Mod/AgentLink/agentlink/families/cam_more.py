@@ -116,7 +116,7 @@ def tools(s):
         else:
             raise bad("kind: area { sources, workplane, props } | from_shape { sources } | edges { sources, job } | compound { ops } | array { ops, props: { Type, Copies, Offset … } } | stop { mandatory } | fixture { fixture: G54…G59.9 }.")
         if name:
-            o.Label = s.unique(name)
+            o.Label = s.unique(name, o)
         d().recompute()
         s.snapshot("cam_path")
         out = {"object": o.Label, "kind": kind, **({"job": job.Label} if job is not None else {})}
@@ -206,7 +206,7 @@ def tools(s):
         rg = _joints(asm).newObject("App::FeaturePython", "RigidGroupJoint")
         JointObject.RigidGroupJoint(rg, parts)
         if a.get("name"):
-            rg.Label = s.unique(a["name"])
+            rg.Label = s.unique(a["name"], rg)
         d().recompute()
         s.snapshot("asm_rigid_group")
         return {"joint": rg.Label, "parts": [p.Label for p in parts]}
@@ -217,12 +217,12 @@ def tools(s):
         asm = _assembly(d(), a.get("assembly"))
         name = a.get("name") or "Part"
         part = d().addObject("App::Part", "Part")
-        part.Label = s.unique(name)
+        part.Label = s.unique(name, part)
         body = part.newObject("PartDesign::Body", "Body")
-        body.Label = s.unique(f"{part.Label} body")
+        body.Label = s.unique(f"{part.Label} body", body)
         lk = asm.newObject("App::Link", "Link")
         lk.LinkedObject = part
-        lk.Label = s.unique(part.Label)
+        lk.Label = s.unique(part.Label, lk)
         if a.get("at") is not None:
             lk.Placement = picks.placement(a)
         d().recompute()

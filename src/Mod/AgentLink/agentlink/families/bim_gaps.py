@@ -48,7 +48,7 @@ def tools(s):
 
     def named(o, name):
         if name:
-            o.Label = s.unique(name)
+            o.Label = s.unique(name, o)
         return o
 
     def reading(o):
@@ -193,11 +193,11 @@ def tools(s):
             z = lv.Placement.Base.z + cut
             sp = headless_call(Arch.makeSectionPlane, [lv])
             sp.Placement = FreeCAD.Placement(V(0, 0, z), FreeCAD.Rotation())
-            sp.Label = s.unique(f"{lv.Label} plan cut")
+            sp.Label = s.unique(f"{lv.Label} plan cut", sp)
             v = Draft.make_shape2dview(sp)
             if hasattr(v, "ProjectionMode"):
                 v.ProjectionMode = "Cutfaces" if a.get("cutOnly") else "Solid"
-            v.Label = s.unique(f"{lv.Label} plan")
+            v.Label = s.unique(f"{lv.Label} plan", v)
             out.append({"level": lv.Label, "section": sp.Label, "view": v.Label, "at": z})
         return done("bim_views", {"views": out, "note": "2D plan views at the cut height; techdraw_page puts them on a sheet."})
 
@@ -286,7 +286,7 @@ def tools(s):
         for p in ("Material", "IfcType", "StandardCode"):
             if hasattr(o, p) and hasattr(new, p):
                 setattr(new, p, getattr(o, p))
-        new.Label = s.unique(a.get("name") or o.Label)
+        new.Label = s.unique(a.get("name") or o.Label, new)
         if a.get("delete", True):
             for parent in o.InList:
                 if hasattr(parent, "Group") and o in parent.Group:
@@ -320,7 +320,7 @@ def tools(s):
             raise bad("objects: two or more shapes to glue into one.")
         c = d().addObject("Part::Feature", "Glue")
         c.Shape = Part.makeCompound([o.Shape for o in targets])
-        c.Label = s.unique(a.get("name") or "Glue")
+        c.Label = s.unique(a.get("name") or "Glue", c)
         for o in targets:
             d().removeObject(o.Name)
         return done("bim_glue", {"object": c.Label, "of": len(targets), "note": "One plain shape of them all, no longer parametric."})

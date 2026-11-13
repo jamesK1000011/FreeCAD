@@ -2278,7 +2278,7 @@ def tools(session):
             raise bad("kind: broken { view, breaks, gap } | draft { object } | clip { width, height } | clip_add / clip_remove { clip, view } | image { path, width, height } | symbol { path (SVG), scale } | share { view } — with page.")
         page.addView(o)
         if a.get("name"):
-            o.Label = s.unique(a["name"])
+            o.Label = s.unique(a["name"], o)
         o.X, o.Y = place_xy(page, a.get("at"), (100.0, 100.0))
         recompute()
         return done("td_view_more", {"kind": kind, **view_reading(o)})

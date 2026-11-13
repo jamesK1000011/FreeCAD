@@ -57,7 +57,7 @@ def tools(s):
         kind = a.get("kind", "link")
         if kind == "group":
             g = d().addObject("App::LinkGroup", "LinkGroup")
-            g.Label = s.unique(a.get("name") or "Link group")
+            g.Label = s.unique(a.get("name") or "Link group", g)
             members = objs(a.get("objects") or [], "objects") if a.get("objects") else []
             g.setLink(members) if members else None
             return done("link_make", {"link": g.Label, "kind": "group", "elements": [m.Label for m in members]})
@@ -71,7 +71,7 @@ def tools(s):
             lk.LinkedObject = (src, [sub])
         else:
             lk.LinkedObject = src
-        lk.Label = s.unique(a.get("name") or f"{src.Label} link")
+        lk.Label = s.unique(a.get("name") or f"{src.Label} link", lk)
         if a.get("at") is not None:
             lk.Placement = picks.placement(a)
         if a.get("count"):
@@ -111,7 +111,7 @@ def tools(s):
             o = d().addObject("Part::Feature", "Body")
             sh = Part.getShape(lk)
             o.Shape = sh
-            o.Label = s.unique(a.get("name") or src.Label)
+            o.Label = s.unique(a.get("name") or src.Label, o)
             for p in lk.InList:
                 if hasattr(p, "Group") and lk in p.Group:
                     p.Group = [o if x is lk else x for x in p.Group]
@@ -121,7 +121,7 @@ def tools(s):
 
     def part_container(a):
         p = d().addObject("App::Part", "Part")
-        p.Label = s.unique(a.get("name") or "Part")
+        p.Label = s.unique(a.get("name") or "Part", p)
         members = objs(a["objects"]) if a.get("objects") else []
         for m in members:
             for g in [x for x in m.InList if x.TypeId == "App::Part"]:
@@ -138,11 +138,11 @@ def tools(s):
                 # Part's Simple copy: the shape alone, no history.
                 c = d().addObject("Part::Feature", "Copy")
                 c.Shape = Part.getShape(o)
-                c.Label = s.unique(a.get("name") or f"{o.Label} copy")
+                c.Label = s.unique(a.get("name") or f"{o.Label} copy", c)
                 out.append({"from": o.Label, "copy": c.Label, "simple": True})
                 continue
             c = d().copyObject(o, bool(a.get("dependencies")))
-            c.Label = s.unique(a.get("name") or f"{o.Label} copy")
+            c.Label = s.unique(a.get("name") or f"{o.Label} copy", c)
             out.append({"from": o.Label, "copy": c.Label})
         return done("object_duplicate", {"duplicated": out})
 
@@ -195,7 +195,7 @@ def tools(s):
         t = next((o for o in d().Objects if o.TypeId == "App::TextDocument" and o.Label == name), None)
         if t is None:
             t = d().addObject("App::TextDocument", "Text")
-            t.Label = s.unique(name)
+            t.Label = s.unique(name, t)
         if "text" in a:
             t.Text = (t.Text + "\n" if a.get("append") and t.Text else "") + str(a["text"])
         return done("text_document", {"text": t.Label, "chars": len(t.Text), "lines": t.Text.count("\n") + 1 if t.Text else 0})
@@ -317,7 +317,7 @@ def tools(s):
             raise ToolError("invalid_input", f"{os.path.basename(p)} has no curves.")
         o = d().addObject("Part::Feature", "CurveNet")
         o.Shape = Part.Compound(edges)
-        o.Label = s.unique(a.get("name") or os.path.splitext(os.path.basename(p))[0])
+        o.Label = s.unique(a.get("name") or os.path.splitext(os.path.basename(p))[0], o)
         return done("part_import_curves", {"curves": o.Label, "edges": len(edges), "note": "Edges only, as Part's curve-network import: surface_filling or surface_sections builds faces from them."})
 
     # ---- PartDesign ------------------------------------------------------------------------
@@ -325,7 +325,7 @@ def tools(s):
     def pd_clone(a):
         src = picks.shaped(d(), a.get("from"), "from")
         b = d().addObject("PartDesign::Body", "Body")
-        b.Label = s.unique(a.get("name") or f"{src.Label} clone")
+        b.Label = s.unique(a.get("name") or f"{src.Label} clone", b)
         b.BaseFeature = src
         if a.get("at") is not None:
             b.Placement = picks.placement(a)
@@ -415,7 +415,7 @@ def tools(s):
             solid.rotate(V(0, 0, 0), V(0, 1, 0), -90) if a["axis"] == "z" else solid.rotate(V(0, 0, 0), V(0, 0, 1), 90)
         o = d().addObject("Part::Feature", "Shaft")
         o.Shape = solid.removeSplitter()
-        o.Label = s.unique(a.get("name") or "Shaft")
+        o.Label = s.unique(a.get("name") or "Shaft", o)
         if a.get("at") is not None:
             o.Placement = picks.placement(a)
         return done("pd_shaft", {"shaft": o.Label, "length": round(x, 3), "segments": len(segs), "volume": round(o.Shape.Volume, 3),
@@ -472,7 +472,7 @@ def tools(s):
                 for k in ("vertex", "edge", "face"):
                     if a.get(k) is not None:
                         setattr(n, k.title(), float(a[k]))
-                n.Label = s.unique(f"tolerance_{o.Label}")
+                n.Label = s.unique(f"tolerance_{o.Label}", n)
                 if getattr(o, "ViewObject", None) is not None:
                     o.ViewObject.Visibility = False
                 out.append(n.Label)
@@ -503,7 +503,7 @@ def tools(s):
         st_ = d().addObject("Points::Structured", "Structured")
         st_.Points = o.Points
         st_.Width, st_.Height = w, h
-        st_.Label = s.unique(a.get("name") or f"{o.Label} structured")
+        st_.Label = s.unique(a.get("name") or f"{o.Label} structured", st_)
         return done("points_structure", {"points": st_.Label, "width": w, "height": h})
 
     def surface_polynomial(a):
@@ -555,7 +555,7 @@ def tools(s):
                 bz.setPole(i + 1, j + 1, poles[i][j])
         sp = d().addObject("Part::Spline", "Bezier")
         sp.Shape = bz.toShape()
-        sp.Label = s.unique(a.get("name") or f"{o.Label} polynomial")
+        sp.Label = s.unique(a.get("name") or f"{o.Label} polynomial", sp)
         res = z - f(u, v)
         return done("surface_polynomial", {"surface": sp.Label, "points": len(P), "rms": round(float(np.sqrt((res ** 2).mean())), 4), "max": round(float(np.abs(res).max()), 4)})
 

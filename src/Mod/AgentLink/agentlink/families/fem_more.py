@@ -163,7 +163,7 @@ def tools(s):
             raise ToolError("unavailable", f"{kind} is not in FreeCAD {'.'.join(FreeCAD.Version()[:3])}'s FEM.")
         if a.get("new") and kind.startswith("solver_"):
             an = F.makeAnalysis(d(), "Analysis")
-            an.Label = s.unique(a.get("name") or "Analysis")
+            an.Label = s.unique(a.get("name") or "Analysis", an)
         else:
             an = analysis(a.get("analysis"))
         if need == "mesh":
@@ -194,7 +194,7 @@ def tools(s):
             o.References = rf
         set_props(o, a.get("props"))
         if a.get("name"):
-            o.Label = s.unique(a["name"])
+            o.Label = s.unique(a["name"], o)
         d().recompute()
         s.snapshot("fem_add")
         out = {"added": o.Label, "kind": kind, "analysis": an.Label, "type": o.TypeId}
@@ -248,7 +248,7 @@ def tools(s):
 
             o = d().addObject("Mesh::Feature", "Mesh")
             o.Mesh = Mesh.Mesh(out_mesh)
-            o.Label = s.unique(a.get("name") or f"{m.Label} surface")
+            o.Label = s.unique(a.get("name") or f"{m.Label} surface", o)
             d().recompute()
             s.snapshot("fem_mesh")
             return {"mesh": o.Label, "facets": o.Mesh.CountFacets, **({"deformed": res.Label} if res is not None else {})}
