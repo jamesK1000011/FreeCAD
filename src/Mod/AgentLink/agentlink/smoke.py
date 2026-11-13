@@ -15,6 +15,14 @@ import time
 
 
 def run():
+    # Imported here: FreeCAD's start-up, run from a script as __main__, can
+    # take module names out of its globals (seen on 26.x).
+    import json
+    import os
+    import sys
+    import tempfile
+    import time
+
     t0 = time.time()
     fails = []
     out = {"ok": False, "failures": fails}
@@ -124,6 +132,10 @@ def against(app=None, addon_dirs=(), python=None, lib=None, timeout=600):
 
 if __name__ == "__main__":
     res = run()
-    sys.stdout.write("\n" + json.dumps(res) + "\n")
-    sys.stdout.flush()
-    os._exit(0 if res["ok"] else 1)
+    import json as _json
+    import os as _os
+    import sys as _sys
+
+    _sys.stdout.write("\n" + _json.dumps(res) + "\n")
+    _sys.stdout.flush()
+    _os._exit(0 if res["ok"] else 1)

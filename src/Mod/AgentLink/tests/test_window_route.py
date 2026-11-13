@@ -183,12 +183,20 @@ class WindowRoute(unittest.TestCase):
             os.environ.pop("AGENTLINK_RESTART_MARK", None)
 
 
+_USED = set()
+
+
 def _free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
+    """A port no test here has had yet: a server thread of an earlier test
+    can still hold the one the system offers again."""
+    while True:
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        p = s.getsockname()[1]
+        s.close()
+        if p not in _USED:
+            _USED.add(p)
+            return p
 
 
 if __name__ == "__main__":

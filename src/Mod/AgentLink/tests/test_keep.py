@@ -16,10 +16,15 @@ from agentlink import keep  # noqa: E402
 class Home(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self._was = os.environ.get("AGENTLINK_HOME")
         os.environ["AGENTLINK_HOME"] = self.tmp.name
 
     def tearDown(self):
-        os.environ.pop("AGENTLINK_HOME", None)
+        # Put back what was there: other test modules set it for theirs.
+        if self._was is None:
+            os.environ.pop("AGENTLINK_HOME", None)
+        else:
+            os.environ["AGENTLINK_HOME"] = self._was
         self.tmp.cleanup()
 
 

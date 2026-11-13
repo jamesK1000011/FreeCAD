@@ -8,13 +8,26 @@ import tempfile
 import unittest
 
 _HOME = tempfile.mkdtemp(prefix="agentlink-home-")
-os.environ["AGENTLINK_HOME"] = _HOME
 
 from _pd_base import HAVE, Base  # noqa: E402
 
 
 @unittest.skipUnless(HAVE, "FreeCAD with PartDesign and Sketcher is not importable here")
 class Unattended(Base):
+    @classmethod
+    def setUpClass(cls):
+        # Its own home for this class, whatever other modules did to the env.
+        cls._was_home = os.environ.get("AGENTLINK_HOME")
+        os.environ["AGENTLINK_HOME"] = _HOME
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if cls._was_home is None:
+            os.environ.pop("AGENTLINK_HOME", None)
+        else:
+            os.environ["AGENTLINK_HOME"] = cls._was_home
     def box(self, name, size):
         return self.ok("part_primitive", {"kind": "box", "size": size, "name": name})
 
