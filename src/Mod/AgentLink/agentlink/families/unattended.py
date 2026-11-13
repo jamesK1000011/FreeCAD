@@ -178,8 +178,36 @@ def tools(s):
         keep.log_watchdog({"event": "dialog", "title": d["title"], "pressed": btn, "by": "dialog_answer"})
         return {"pressed": btn, "dialog": info}
 
+    def doc_switch(a):
+        ref = a.get("document")
+        if not ref:
+            return {"document": s.doc.Name if s.doc else None, "label": s.doc.Label if s.doc else None,
+                    "open": [{"name": d.Name, "label": d.Label, "file": d.FileName or None} for d in FreeCAD.listDocuments().values()]}
+        want = os.path.abspath(os.path.expanduser(ref)) if (os.sep in ref or ref.lower().endswith(".fcstd")) else None
+        nd = next((d for d in FreeCAD.listDocuments().values() if ref in (d.Name, d.Label) or (want and d.FileName and os.path.abspath(d.FileName) == want)), None)
+        if nd is None:
+            raise ToolError("not_found", f"{ref}: not open — " + (", ".join(d.Label for d in FreeCAD.listDocuments().values()) or "no documents are open") + ". doc_open opens a file.")
+        if s.doc is not None and nd.Name == s.doc.Name:
+            return {"document": nd.Name, "label": nd.Label, "note": "Already on it."}
+        s.switch(nd)
+        try:
+            s.pinned_label = nd.Label
+        except Exception:
+            pass
+        front = False
+        if a.get("front") and getattr(FreeCAD, "GuiUp", False):
+            import FreeCADGui
+
+            FreeCAD.setActiveDocument(nd.Name)
+            FreeCADGui.setActiveDocument(nd.Name)
+            front = True
+        return {"document": nd.Name, "label": nd.Label, "front": front, "bodies": [o.Label for o in s.bodies()],
+                "note": "The agent works here from now on, whatever is in front of the window." + ("" if front else " front: true also brings it to the front.")}
+
     st = {"type": "string"}
     return [
+        Tool("doc_switch", "Which open document the agent works in: document (name, label or file) switches to it — the session stays on it whatever the person brings to the front of the window; front: true also brings it to the front. No document: the agent's one and those open.",
+             obj({"document": st, "front": {"type": "boolean"}}), doc_switch),
         Tool("app_recover", "Documents back after a crash or a hang: action list (each document's saved copies: auto-saves, checkpoints, FreeCAD's recovery files, newest first) | auto { documents [{ name, label, file }], since } (the newest copy that opens, beside the file as \"<label> (recovered HH:MM)\") | accept { document, confirm: \"save over <file name>\" typed by the person } (the recovered copy saved over their file, the old one kept).",
              obj({"action": {"type": "string", "enum": ["list", "auto", "accept"]}, "documents": {"type": "array", "items": {"type": "object"}}, "since": {"type": "number"}, "document": st, "confirm": st}), app_recover),
         Tool("dialog_answer", "The modal dialog in the FreeCAD window, if any (title, text, buttons); button presses one — only on a plain information box (OK). Any other dialog is the person's: quote it to them in chat.",

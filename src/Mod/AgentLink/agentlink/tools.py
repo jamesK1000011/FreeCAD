@@ -307,6 +307,7 @@ class Session:
     def session_state(self, a):
         return {
             "document": self.doc.Name,
+            "label": self.doc.Label,
             "freecad": ".".join(FreeCAD.Version()[:3]),
             "bodies": [{"name": o.Label, **geo.stats(o.Shape), **({"encased": self.meta[o.Label]["encased"]["what"]} if self.meta.get(o.Label, {}).get("encased") else {})} for o in self.bodies()],
             "step": len(self.steps),

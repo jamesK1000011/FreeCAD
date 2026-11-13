@@ -130,14 +130,38 @@ def _qt():
     return QtCore, QtGui, QtW
 
 
+def _paint_flags(QtCore):
+    f = getattr(QtCore.QEventLoop, "ExcludeUserInputEvents", None)
+    if f is None:
+        f = QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+    return f
+
+
+def _paint(ms=0):
+    """Let the window paint (and timers run) for ms, without taking the
+    person's clicks and keys while a call is in hand (M7): no nested event
+    loop that would let input change the document mid-call. The link's own
+    timer will not start another call meanwhile (gui_link's in_call)."""
+    import time as _t
+
+    QtCore, _QtGui, _QtW = _qt()
+    flags = _paint_flags(QtCore)
+    end = _t.time() + max(0, ms) / 1000.0
+    while True:
+        try:
+            QtCore.QCoreApplication.processEvents(flags, 30)
+        except TypeError:
+            QtCore.QCoreApplication.processEvents(flags)
+        if _t.time() >= end:
+            return
+        _t.sleep(0.01)
+
+
 def _wait(ms):
     """Let the window paint for ms without blocking it."""
     if ms <= 0:
         return
-    QtCore, _QtGui, _QtW = _qt()
-    loop = QtCore.QEventLoop()
-    QtCore.QTimer.singleShot(int(ms), loop.quit)
-    loop.exec_() if hasattr(loop, "exec_") else loop.exec()
+    _paint(ms)
 
 
 PREFIX_NAME = {"pd": "Part Design", "part": "Part", "sketch": "Sketch", "bim": "BIM", "ifc": "IFC", "fea": "FEM",
@@ -305,13 +329,20 @@ class Echo:
                 FreeCADGui.activateWorkbench(wb)
             self._mode(tool.name, args)
             caption(_describe(tool.name, args))
-            FreeCADGui.getMainWindow().statusBar().showMessage("Agent: " + _describe(tool.name, args), 4000)
+            # Which document the agent is on (K), when it is not the one in front.
+            where = ""
+            try:
+                if FreeCAD.ActiveDocument is not None and self.s.doc is not None and FreeCAD.ActiveDocument.Name != self.s.doc.Name:
+                    where = f" (in {self.s.doc.Label})"
+            except Exception:
+                pass
+            FreeCADGui.getMainWindow().statusBar().showMessage("Agent" + where + ": " + _describe(tool.name, args), 4000)
             cmd = command_for(tool.name, args)
             if cmd:
                 flash_command(cmd)
             doc = self.s.doc
             _select(_objects(doc, [args.get(k) for k in ARG_KEYS if args.get(k)]))
-            FreeCADGui.updateGui()
+            _paint()
             _wait(delay_ms())
         except Exception as e:
             FreeCAD.Console.PrintLog(f"Agent Link echo (before {tool.name}): {e}\n")
@@ -473,6 +504,11 @@ class Echo:
 
             doc = self.s.doc
             made = _objects(doc, [body.get(k) for k in OUT_KEYS if isinstance(body.get(k), str)])
+            # The window's view effects only where the agent's document is
+            # the one in front (K): the person's own document is left alone.
+            if FreeCAD.ActiveDocument is None or doc is None or FreeCAD.ActiveDocument.Name != doc.Name:
+                _paint()
+                return
             self._views(name, args, body)
             if name == "sketch_new" and made and FreeCADGui.ActiveDocument:
                 FreeCADGui.ActiveDocument.setEdit(made[0].Name)
@@ -491,7 +527,7 @@ class Echo:
             # (Mod/AgentLink Follow; the Activity tab's check box).
             if FreeCAD.ParamGet(PREFS).GetBool("Follow", True) and not name.startswith(("td_", "drawing_")):
                 fit()
-            FreeCADGui.updateGui()
+            _paint()
         except Exception as e:
             FreeCAD.Console.PrintLog(f"Agent Link echo (after {name}): {e}\n")
 

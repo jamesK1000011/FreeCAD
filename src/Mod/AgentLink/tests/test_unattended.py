@@ -159,6 +159,32 @@ class Unattended(Base):
         out = smoke.against(python=sys.executable, lib=lib, addon_dirs=[os.path.dirname(os.path.dirname(os.path.abspath(__file__)))], timeout=300)
         self.assertTrue(out["ok"], out["failures"])
 
+    def test_10_doc_switch_and_own_errors(self):
+        import FreeCAD
+
+        s = self.session
+        home = s.doc
+        other = FreeCAD.newDocument("Elsewhere")
+        try:
+            r = self.ok("doc_switch", {"document": "Elsewhere"})
+            self.assertEqual(s.doc.Name, other.Name)
+            self.assertIn("Elsewhere", [d["label"] for d in self.ok("doc_switch")["open"]])
+            self.assertEqual(self.refused("doc_switch", {"document": "Nowhere"})["code"], "not_found")
+            # M4: an unrelated object failing in the recompute is a note, not a refusal
+            self.box("K box", [10, 10, 10])
+            bad = s.doc.addObject("Part::Extrusion", "BadExtrusion")
+            s.doc.recompute()
+            broke = "Invalid" in bad.State or "Error" in bad.State or not bad.isValid()
+            out = self.ok("object_set", {"object": "K box", "values": {"Length": 12}})
+            if broke:
+                self.assertIn("BadExtrusion", out.get("note", ""))
+            self.assertAlmostEqual(s.doc.getObjectsByLabel("K box")[0].Shape.Volume, 1200, places=3)
+            del bad, r
+        finally:
+            self.ok("doc_switch", {"document": home.Name})
+            FreeCAD.closeDocument(other.Name)
+        self.assertEqual(self.ok("session_state")["document"], home.Name)
+
 
 if __name__ == "__main__":
     unittest.main()

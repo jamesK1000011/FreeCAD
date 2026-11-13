@@ -438,6 +438,10 @@ def tools(session):
             if readonly(o, p):
                 raise ToolError("invalid_input", f"values.{p}: read-only on {o.Label} (FreeCAD computes it).")
         before = {p: picks.json_safe(getattr(o, p)) for p in vals}
+        # Refused only for what this change broke (M4): the object and what
+        # is built from it, not already broken before. Other objects failing
+        # in the same recompute are said as a note.
+        was_broken = {e["object"] for e in errors(s.doc)}
         for p, v in vals.items():
             try:
                 setattr(o, p, to_value(o, p, v))
@@ -447,10 +451,18 @@ def tools(session):
                 raise ToolError("invalid_input", f"values.{p}: FreeCAD refused {v!r} — {e}")
         s.doc.recompute()
         errs = errors(s.doc)
-        if errs:
-            raise ToolError("failed", f"The recompute failed after setting it: {errs[0]['object']}: {errs[0]['error']} — nothing was kept.")
+        try:
+            mine = {o.Label} | {x.Label for x in o.InListRecursive}
+        except Exception:
+            mine = {o.Label}
+        own = [e for e in errs if e["object"] in mine and e["object"] not in was_broken]
+        if own:
+            raise ToolError("failed", f"The recompute failed after setting it: {own[0]['object']}: {own[0]['error']} — nothing was kept.")
         s.snapshot("object_set")
-        return {"object": o.Label, "set": {p: {"from": before[p], "to": picks.json_safe(getattr(o, p))} for p in vals}, "step": len(s.steps)}
+        out = {"object": o.Label, "set": {p: {"from": before[p], "to": picks.json_safe(getattr(o, p))} for p in vals}, "step": len(s.steps)}
+        if errs:
+            out["note"] = "Set. Other objects failed in the same recompute, not from this change: " + "; ".join(f"{e['object']}: {e['error']}" for e in errs[:4])
+        return out
 
     def object_delete(a):
         names = a.get("objects")

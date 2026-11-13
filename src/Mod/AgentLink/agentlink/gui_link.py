@@ -20,6 +20,13 @@ from .protocol import compact
 from .tools import Session, build_server
 
 PORT = 7318
+# Calls that go on when the agent's pinned document was closed: they choose
+# another, or read where things stand.
+# Tools that act on the document in front of the window, not the agent's
+# own: refused when the person has another in front (K), rather than acting
+# on theirs.
+FRONT_TOOLS = {"cmd_run", "menu_run", "view_snapshot"}
+PINNED_FREE = {"doc_open", "doc_new", "doc_switch", "session_state", "tool_groups", "guide_read", "app_recover", "dialog_answer", "usage_report", "doc_close"}
 
 
 def _tool_name(line):
@@ -143,8 +150,9 @@ class Link:
 
     def _ready(self):
         """The session, made at the first call (so a link turned on as the
-        window opens leaves the start page alone), and kept on the document
-        the person has in front: switching documents moves the agent too."""
+        window opens leaves the start page alone) on the document in front
+        then, and kept on it: the person bringing another to the front does
+        not move the agent (doc_switch does)."""
         active = FreeCAD.ActiveDocument
         if self.session is None:
             out = os.path.expanduser("~/AgentLink")
@@ -165,13 +173,26 @@ class Link:
             if self.session.doc.Name not in FreeCAD.listDocuments():
                 self.session.keep_doc = False
                 self.session.doc = active or FreeCAD.newDocument("AgentLink")
-        elif active is not None and active is not self.session.doc:
+        else:
+            # Pinned (unattended use, K): the session keeps its document
+            # whatever the person brings to the front. Switching is the
+            # agent's own call: doc_new, doc_open, doc_switch. A pinned
+            # document that was closed is said at the next call.
             s = self.session
-            s.doc = active
-            s.doc.UndoMode = 1
-            s.checkpoints, s.steps, s.meta = {}, [], {}
-        elif self.session.doc not in FreeCAD.listDocuments().values():
-            self.session.doc = active or FreeCAD.newDocument("AgentLink")
+            try:
+                alive = s.doc is not None and s.doc.Name in FreeCAD.listDocuments()
+            except Exception:
+                alive = False
+            if not alive:
+                gone = getattr(s, "pinned_label", None) or "The agent's document"
+                s.closed_doc = gone
+                s.doc = active or FreeCAD.newDocument("AgentLink")
+                s.doc.UndoMode = 1
+                s.checkpoints, s.steps, s.meta = {}, [], {}
+        try:
+            self.session.pinned_label = self.session.doc.Label
+        except Exception:
+            pass
 
     def start(self):
         from PySide import QtCore
@@ -404,6 +425,31 @@ class Link:
         try:
             self._ready()
             name = _tool_name(line)
+            gone = getattr(self.session, "closed_doc", None) if self.session else None
+            if gone and name is not None and name not in PINNED_FREE:
+                self.session.closed_doc = None
+                try:
+                    mid = json.loads(line).get("id")
+                except ValueError:
+                    mid = None
+                text = compact({"error": {"code": "invalid_state", "message": f"{gone} was closed — doc_open it again, or doc_switch to another open document (doc_new for a fresh one). This call was not run."}})
+                f.write(compact({"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": text}], "isError": True}}) + "\n")
+                f.flush()
+                return
+            if self.session:
+                self.session.closed_doc = None
+            if name in FRONT_TOOLS and self.session is not None:
+                front = FreeCAD.ActiveDocument
+                mine = self.session.doc
+                if front is not None and mine is not None and front.Name != mine.Name:
+                    try:
+                        mid = json.loads(line).get("id")
+                    except ValueError:
+                        mid = None
+                    text = compact({"error": {"code": "invalid_state", "message": f"{name} acts on the window's front document, and the person has {front.Label} in front while the agent is on {mine.Label}: doc_switch {{ document: \"{mine.Label}\", front: true }} brings the agent's back (their view moves), or ask them. This call was not run."}})
+                    f.write(compact({"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": text}], "isError": True}}) + "\n")
+                    f.flush()
+                    return
             if name is not None and name != "dialog_answer":
                 self.busy, self.in_call = name, True
             try:
