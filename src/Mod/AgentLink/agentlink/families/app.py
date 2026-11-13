@@ -11,6 +11,7 @@
 
 import json
 import os
+import time
 import re
 import xml.etree.ElementTree as ET
 
@@ -699,20 +700,44 @@ def tools(session):
             gd = gui.getDocument(d.Name)
             return bool(getattr(gd, "Modified", False)) or d.isTouched()
 
-        unsaved = [d.Label for d in FreeCAD.listDocuments().values() if changed(d) and not d.FileName]
-        if unsaved and not a.get("discard"):
-            raise ToolError("invalid_state", "Never saved: " + ", ".join(unsaved) + " — doc_save { path } first, or discard: true to lose them.")
-        saved = []
+        # What is saved (unattended use, L): by default only the documents
+        # this session changed, each checkpointed first. Anything else that
+        # changed is copied and reopens beside its file from the copy — never
+        # saved over the person's file without their say-so.
+        rule = a.get("save", "agent")
+        if rule not in ("agent", "none", "all"):
+            raise ToolError("invalid_input", "save: agent (the documents this session changed; the default) | none | all (needs confirm: \"save all\" typed by the person).")
+        if rule == "all" and (a.get("confirm") or "").strip() != "save all":
+            raise ToolError("not_allowed", "save: all saves documents the person may not want saved: confirm: \"save all\", typed by them. Nothing was changed.")
+        s.restart_save = rule
+        from .. import keep
+
+        mine = set(getattr(s, "agent_docs", ()) or ())
+        saved, copied, dropped = [], [], []
         for d in list(FreeCAD.listDocuments().values()):
-            if changed(d) and d.FileName:
+            if not changed(d):
+                continue
+            save = d.FileName and (rule == "all" or (rule == "agent" and d.Name in mine))
+            if save:
+                try:
+                    s.checkpoint(f"before restart", auto=True, doc=d)
+                except Exception:
+                    pass
                 d.save()
                 saved.append(d.FileName)
+            elif a.get("discard") and not d.FileName:
+                dropped.append(d.Label)
+            else:
+                f = keep.autosave_file(d.Name)
+                os.makedirs(os.path.dirname(f), exist_ok=True)
+                d.saveCopy(f)
+                copied.append({"name": d.Name, "label": d.Label, "file": d.FileName or "", "copy": f, "t": time.time()})
         reopen = [d.FileName for d in FreeCAD.listDocuments().values() if d.FileName]
         # Calls wait for the window (and these documents) instead of going to
         # the hidden FreeCAD meanwhile; the one in front is in front again.
         from .. import restart_mark
 
-        restart_mark.write(reopen, active=getattr(s.doc, "FileName", None) or None)
+        restart_mark.write(reopen, active=getattr(s.doc, "FileName", None) or None, recover=copied)
         FreeCAD.saveParameter()
         exe = sys.executable
         bundle = exe.split(".app/")[0] + ".app" if ".app/" in exe else None
@@ -722,6 +747,9 @@ def tools(session):
             # into the other release's own folders before it first opens.
             migrated = _carry_settings(target)
             bundle = target
+            # A fresh time on the mark: the carrying-over took a while, and a
+            # stale mark is ignored (M5's second half).
+            restart_mark.write(reopen, active=getattr(s.doc, "FileName", None) or None, recover=copied)
         # The app and the files go to the shell as arguments, never into the
         # command's text: a path is not shell code, whatever it holds.
         if bundle:
@@ -739,7 +767,7 @@ def tools(session):
 
             app = QtWidgets.QApplication.instance()
         QtCore.QTimer.singleShot(300, app.quit)
-        return {"restarting": True, "saved": saved, "reopens": reopen, **({"app": bundle, "settings": migrated} if target else {}), "note": "FreeCAD quits and opens again in a few seconds with these documents, its link on by itself; calls meanwhile wait for it (up to 90 s)."}
+        return {"restarting": True, "saved": saved, "reopens": reopen, **({"fromCopies": [c["label"] for c in copied]} if copied else {}), **({"discarded": dropped} if dropped else {}), **({"app": bundle, "settings": migrated} if target else {}), "note": "FreeCAD quits and opens again in a few seconds with these documents, its link on by itself; calls meanwhile wait for it (up to 90 s)."}
 
     def app_install(a):
         """Install another FreeCAD release beside this one (a Mac): started
@@ -868,7 +896,7 @@ def tools(session):
         Tool("snapshot_latest", "The person's newest screenshot (index 2, 3 … older ones) as a picture with their marks (original: true without), with its note, numbered pins and their comments, workbench and time. Only the person takes them (camera button, Alt+Shift+S).",
              obj({"index": {"type": "integer"}, "original": {"type": "boolean"}}), snapshot_latest),
         Tool("snapshot_list", "The person's screenshots, newest first, without pictures: time, note, pins, saved path.", obj({}), snapshot_list),
-        Tool("app_restart", "Quit this FreeCAD window and open it again (new add-ons, a theme, settings that need a restart): settings written, changed documents saved and reopened; one never saved is refused unless discard: true; app: another FreeCAD .app (app_install's) opens that one instead, this one's settings and add-ons carried into its folders first. Window only.",
-             obj({"discard": {"type": "boolean"}, "app": {"type": "string"}}), app_restart),
+        Tool("app_restart", "Quit this FreeCAD window and open it again (new add-ons, a theme, settings that need a restart): settings written; save agent (default: the documents this session changed, each checkpointed first) | none | all (confirm: \"save all\" typed by the person) — any other changed document reopens from a copy beside its file, never saved over it (discard: true drops never-saved ones); app: another FreeCAD .app (app_install's) opens that one instead, this one's settings and add-ons carried into its folders first. Window only.",
+             obj({"discard": {"type": "boolean"}, "app": {"type": "string"}, "save": {"type": "string", "enum": ["agent", "none", "all"]}, "confirm": {"type": "string"}}), app_restart),
         Tool("workbench", "The workbenches, the active one, and activate: a name (Part Design, BIM, FEM …). Window only.", obj({"activate": {"type": "string"}}), workbench),
     ]

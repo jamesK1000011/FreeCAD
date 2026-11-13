@@ -57,6 +57,7 @@ NAMES = [
     "cam_more",
     "bim_gaps",
     "fem_more",
+    "unattended",
 ]
 
 

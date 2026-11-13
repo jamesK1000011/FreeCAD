@@ -17,12 +17,14 @@ def path():
     return os.environ.get("AGENTLINK_RESTART_MARK") or os.path.expanduser("~/AgentLink/.window-restarting")
 
 
-def write(reopens, active=None):
+def write(reopens, active=None, recover=()):
+    """recover: documents to reopen from copies beside their files
+    ([{ name, label, file, copy, t }]), those app_restart did not save."""
     p = path()
     try:
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
-            json.dump({"t": time.time(), "reopens": list(reopens), "active": active, "pid": os.getpid()}, f)
+            json.dump({"t": time.time(), "reopens": list(reopens), "active": active, "pid": os.getpid(), "recover": list(recover or [])}, f)
     except OSError:
         pass
 

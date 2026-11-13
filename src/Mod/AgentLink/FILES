@@ -75,6 +75,7 @@ agentlink/families/strength.py
 agentlink/families/surface.py
 agentlink/families/techdraw.py
 agentlink/families/thread.py
+agentlink/families/unattended.py
 agentlink/families/view.py
 agentlink/fits_hw.py
 agentlink/fitting.py
@@ -219,6 +220,7 @@ tests/test_slice.py
 tests/test_slicer_presets.py
 tests/test_std_more.py
 tests/test_strength.py
+tests/test_supervise_unattended.py
 tests/test_techdraw.py
 tests/test_techdraw_gaps.py
 tests/test_theme.py

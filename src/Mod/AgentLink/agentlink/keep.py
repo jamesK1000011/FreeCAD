@@ -282,8 +282,8 @@ def crash_reports(limit=1, folder=None):
 # ---- E. the watchdog ----------------------------------------------------------------------
 
 PING_EVERY = 2.0
-GRACE = 60.0
-DEADLINES = {"read": 30.0, "change": 120.0}
+GRACE = float(os.environ.get("AGENTLINK_GRACE", "60"))
+DEADLINES = {"read": 30.0, "change": float(os.environ.get("AGENTLINK_DEADLINE", "120"))}
 
 
 def deadline(kind, estimate=None):

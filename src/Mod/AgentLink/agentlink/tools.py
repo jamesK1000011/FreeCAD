@@ -115,17 +115,19 @@ class Session:
         except Exception:
             return 20
 
-    def checkpoint(self, name=None, auto=False):
+    def checkpoint(self, name=None, auto=False, doc=None):
         """A copy of the document as it is now, under ~/AgentLink/checkpoints:
         the person's own file is never touched. (entry, dropped)"""
-        d = self.doc
-        e = keep.cp_new(d.Name, name, step=len(self.steps), undo=d.UndoCount, tx=self.tx, auto=auto)
+        d = doc or self.doc
+        mine = d is self.doc
+        e = keep.cp_new(d.Name, name, step=len(self.steps) if mine else 0, undo=d.UndoCount, tx=self.tx if mine else -1, auto=auto)
         e.update({"label": d.Label, "fileName": d.FileName or "", "session": id(self)})
         os.makedirs(os.path.dirname(e["file"]), exist_ok=True)
         d.saveCopy(e["file"])
         cap_mb = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/AgentLink").GetInt("CheckpointCapMB", 0)
         dropped = keep.cp_add(d.Name, e, keep.cap_bytes(keep.free_bytes(keep.cp_dir(d.Name)), cap_mb))
-        self.checkpoints[e["id"]] = e
+        if mine:
+            self.checkpoints[e["id"]] = e
         return e, dropped
 
     def find_checkpoint(self, ref):

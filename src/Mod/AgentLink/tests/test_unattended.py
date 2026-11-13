@@ -106,6 +106,34 @@ class Unattended(Base):
         self.ok("history_checkpoint")
         self.assertEqual(len(self.session.calls), n + 1)
 
+    def test_7_recover_beside_the_file(self):
+        import time
+
+        import FreeCAD
+
+        s = self.session
+        self.box("U r", [8, 8, 8])
+        path = os.path.join(self.dir, "recover_me.FCStd")
+        self.ok("doc_save", {"path": path})
+        s.autosave_now()
+        name, label = s.doc.Name, s.doc.Label
+        listed = self.ok("app_recover")
+        self.assertIn(name, [d["document"] for d in listed["documents"]])
+        r = self.ok("app_recover", {"action": "auto", "documents": [{"name": name, "label": label, "file": path}], "since": time.time() + 120})
+        rec = r["recovered"][0]
+        self.assertIn("(recovered", rec["as"])
+        self.assertEqual(rec["file"], path)
+        self.assertIn("lost", rec)
+        nd = FreeCAD.getDocument(rec["document"])
+        self.assertNotEqual(os.path.abspath(nd.FileName), os.path.abspath(path))
+        self.assertEqual(self.refused("app_recover", {"action": "accept", "document": rec["document"]})["code"], "not_allowed")
+        self.assertIn("close it first", self.refused("app_recover", {"action": "accept", "document": rec["document"], "confirm": "save over recover_me.FCStd"})["message"])
+        FreeCAD.closeDocument(name)
+        ok = self.ok("app_recover", {"action": "accept", "document": rec["document"], "confirm": "save over recover_me.FCStd"})
+        self.assertEqual(ok["saved"], path)
+        self.assertTrue(os.path.isfile(ok["previousFile"]))
+        self.assertEqual(self.ok("dialog_answer")["dialog"], None)
+
 
 if __name__ == "__main__":
     unittest.main()

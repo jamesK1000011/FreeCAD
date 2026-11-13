@@ -89,9 +89,25 @@ def main(argv=None):
     session = Session(out_dir=out_dir)
     server = build_server(session, version=VERSION)
 
+    supervised = bool(os.environ.get("AGENTLINK_SUPERVISED"))
+
     def write(text):
         out.write(text)
         out.flush()
+        if supervised:
+            # Which documents this hidden FreeCAD holds, for the supervisor
+            # to recover if it dies (unattended use, D).
+            try:
+                import time
+
+                import FreeCAD
+
+                from . import keep
+
+                keep._save(keep.path("hidden.json"), {"pid": os.getpid(), "t": time.time(),
+                                                      "docs": [{"name": d.Name, "label": d.Label, "file": d.FileName or ""} for d in FreeCAD.listDocuments().values()]})
+            except Exception:
+                pass
 
     serve_lines(server, sys.stdin.readline, write)
     return 0
