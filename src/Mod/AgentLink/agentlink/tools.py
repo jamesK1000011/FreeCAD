@@ -12,6 +12,7 @@
 
 import math
 import os
+import sys
 
 import FreeCAD
 import Part
@@ -869,17 +870,32 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
     for t in tools:
         t.group = GROUP_OF.get(t.name, t.group)
     info = dict(GROUP_INFO)
-    for fam in families.load():
-        info[fam.GROUP] = fam.INFO
-        for t in fam.tools(session):
-            t.group = fam.GROUP
-            tools.append(t)
     # Two tools of one name: the second would hide the first without a word.
     seen = {}
     for t in tools:
         if t.name in seen:
             raise RuntimeError(f"Agent Link: two tools are named {t.name} ({seen[t.name]} and {t.group}) — rename one.")
         seen[t.name] = t.group
+    for fam in families.load():
+        external = getattr(fam, "EXTERNAL", False)
+        try:
+            made = list(fam.tools(session))
+        except Exception as e:
+            if not external:
+                raise
+            sys.stderr.write(f"Agent Link: the {getattr(fam, 'GROUP', fam)} tools of an extension are left out — {type(e).__name__}: {e}\n")
+            continue
+        info[fam.GROUP] = fam.INFO
+        for t in made:
+            t.group = fam.GROUP
+            if t.name in seen:
+                if not external:
+                    raise RuntimeError(f"Agent Link: two tools are named {t.name} ({seen[t.name]} and {t.group}) — rename one.")
+                # An extension's tool never hides one of Agent Link's.
+                sys.stderr.write(f"Agent Link: an extension's {t.name} ({t.group}) is left out — {seen[t.name]} has that name\n")
+                continue
+            seen[t.name] = t.group
+            tools.append(t)
     try:
         window = bool(FreeCAD.GuiUp)
     except Exception:
@@ -910,9 +926,17 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
             bad = [g for g in (a.get("enable") or []) + (a.get("disable") or []) if g not in groups]
             if bad:
                 raise ToolError("invalid_input", f"{bad[0]}: not a group — they are: {', '.join(groups)}.")
+            was = set(on)
             on |= set(a.get("enable") or [])
             on -= set(a.get("disable") or []) - {"core"}
             server.set_groups(on)
+            # The whole overview again (every group and what it is about)
+            # cost ~3,500 tokens per enable: the change is the answer, and
+            # the client lists the new tools on its own.
+            if not (a.get("group") or a.get("detail")):
+                added = sorted(t.name for t in server.tools.values() if t.group in on - was)
+                return {"on": sorted(on), "added": added, "removed": sorted(was - on), "listed": sum(1 for t in server.tools.values() if t.group in on),
+                        "note": "tool_groups with no arguments shows every group and what it holds."}
         # Names of every tool on every call cost ~6k tokens: a group's tools
         # only when asked (group, or detail: true for all); the client lists
         # what an enable added on its own.

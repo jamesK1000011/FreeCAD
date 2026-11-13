@@ -187,6 +187,7 @@ tests/test_guides.py
 tests/test_hull3d.py
 tests/test_inspection.py
 tests/test_iso286.py
+tests/test_licence_boundary.py
 tests/test_mass.py
 tests/test_material.py
 tests/test_mcp_contract.py

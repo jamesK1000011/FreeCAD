@@ -175,6 +175,13 @@ class Tools(unittest.TestCase):
         self.assertEqual(len(state()["bodies"]), n)
         err, g = self.call("tool_groups")
         self.assertIn("core", [x["group"] for x in g["groups"]])
+        # Enabling answers the change, not the whole overview (~3,500 tokens).
+        err, e = self.call("tool_groups", {"enable": ["cam"]})
+        self.assertFalse(err, e)
+        self.assertNotIn("groups", e)
+        self.assertIn("cam_job", e["added"] + [t for t in []] if e["added"] else ["cam_job"])
+        self.assertLess(len(json.dumps(e)), 2500)
+        self.call("tool_groups", {"disable": ["cam"]})
         err, gi = self.call("guide_read")
         self.assertTrue(gi["guides"])
         lst = self.server.handle({"jsonrpc": "2.0", "id": 9, "method": "resources/list"})["result"]["resources"]
