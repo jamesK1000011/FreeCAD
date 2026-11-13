@@ -77,6 +77,13 @@ class Parts(Base):
         box, lid = self.sound("Box"), self.sound("Box lid")
         self.assertEqual(box["box"], [80, 60, 30])
         self.assertAlmostEqual(lid["box"][2], 2 + 3, delta=0.01)
+        # No thin walls: the round lip notches left 0.7 mm wedges, and a
+        # mesher that left the boss tops open read 0.05 mm ones.
+        for body in ("Box", "Box lid"):
+            err, d = self.call("dfm_check", {"body": body})
+            self.assertFalse(err, d)
+            thin = [f for f in d["findings"] if f["rule"] == "thin-wall"]
+            self.assertEqual(thin, [], f"{body}: {thin} (read by {d.get('wall', {}).get('by', 'Agent Link')})")
         self.call("fit", {"action": "calibrate", "hole": 0.2, "shaft": 0.0})
 
     def test_4_project_box_round_corners_no_bosses(self):

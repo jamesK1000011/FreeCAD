@@ -39,6 +39,15 @@ class MeshObj(unittest.TestCase):
         self.assertAlmostEqual(d["volume"], 24000 - 7238.23 / 4, delta=40)
         t = self.ok("meshobj_trim", {"mesh": "Ball mesh", "at": [40, 15, 20], "normal": [0, 0, 1], "close": True, "copy": True})
         self.assertAlmostEqual(t["volume"], 7195.55 / 2, delta=20)
+        # One piece, one flat cap: hemisphere 904.8 + disc 452.4 (it came back
+        # with 2 components and three caps' worth of area).
+        self.assertEqual(t["components"], 1)
+        self.assertAlmostEqual(t["area"], 2 * 3.14159 * 144 + 3.14159 * 144, delta=15)
+        info = self.ok("meshobj_info", {"mesh": t["mesh"]})
+        self.assertEqual(info["problems"], [], info)
+        o = self.ok("meshobj_trim", {"mesh": "Ball mesh", "at": [40, 15, 20], "normal": [0, 0, 1], "copy": True})
+        self.assertEqual(o["components"], 1)
+        self.assertEqual(self.ok("meshobj_boundary", {"mesh": o["mesh"]})["loops"], 1)
         seg = self.ok("meshobj_segments", {"mesh": "Brick mesh"})
         self.assertEqual(seg["segments"], 6)
 

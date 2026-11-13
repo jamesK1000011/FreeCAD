@@ -123,7 +123,8 @@ def baseplate_shape(p, cal):
 def lid_shape(L, D, r, w, lid, lip, cl, notches=(), holes=(), at=(0.0, 0.0)):
     """A lid laid top down beside the box: a plate L x D x lid and a lip
     ring standing up from it that goes into the box at cl all round.
-    notches: [(x, y, radius)] cut from the lip (round bosses it clears);
+    notches: [(x, y, radius)] cut from the lip round corner bosses: square,
+    from radius beyond the boss out past the corner;
     holes: [(x, y, diameter)] through the plate. Both in the box's own
     X and Y: the lid turns over about X to go on, so y is mirrored here."""
     ax, ay = at
@@ -135,7 +136,17 @@ def lid_shape(L, D, r, w, lid, lip, cl, notches=(), holes=(), at=(0.0, 0.0)):
         ro = max(0.0, r - w - cl)
         ring = g.prism(ax, ay, ow, od, ro, lid - 0.5, lid + lip)
         ring = ring.cut(g.prism(ax, ay, ow - 2 * t, od - 2 * t, max(0.0, ro - t), lid - 0.5 - EPS, lid + lip + EPS))
-        cuts = [g.cylinder(rad, lip + 0.5 + 2 * EPS, ax + x, ay - y, lid - 0.5 - EPS) for (x, y, rad) in notches]
+        # A round notch crossed the lip at a slant and left a wedge 0.7 mm
+        # thin at each end. The lip is cut square instead: from the far side
+        # of the boss (radius rad) out past the corner, so its ends stand
+        # straight across and the boss still clears by rad.
+        h = lip + 0.5 + 2 * EPS
+        cuts = []
+        for (x, y, rad) in notches:
+            sx, sy = (1 if x >= 0 else -1), (1 if y >= 0 else -1)
+            x0, x1 = sorted((x - sx * rad, sx * (L / 2 + 1)))
+            y0, y1 = sorted((y - sy * rad, sy * (D / 2 + 1)))
+            cuts.append(g.prism(ax + (x0 + x1) / 2, ay - (y0 + y1) / 2, x1 - x0, y1 - y0, 0, lid - 0.5 - EPS, lid - 0.5 - EPS + h))
         ring = g.cut_all(ring, cuts)
         parts.append(ring)
     shape = g.fuse_all(parts)

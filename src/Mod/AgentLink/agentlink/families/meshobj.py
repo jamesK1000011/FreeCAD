@@ -217,7 +217,13 @@ def tools(session):
         n = new_mesh(m, a.get("name") or f"{src.Label} mesh")
         doc().recompute()
         s.snapshot("meshobj_from_shape")
-        return {"mesh": n.Label, "from": src.Label, "method": how, **reading(m), "step": len(s.steps)}
+        out = {"mesh": n.Label, "from": src.Label, "method": how, **reading(m), "step": len(s.steps)}
+        # Mefisto can leave a face with small holes (a screw boss's pilot)
+        # half-meshed: open and non-manifold from a sound solid. Say so rather
+        # than hand back a broken mesh as if it were the part.
+        if src.Shape.Solids and src.Shape.isClosed() and (not m.isSolid() or m.hasNonManifolds()):
+            out["warning"] = f"The solid meshed open or non-manifold with {how} ({out.get('components', '?')} components): method standard (or netgen) meshes it closed; meshobj_info shows the problems."
+        return out
 
     def meshobj_info(a):
         o = mesh_of(a.get("mesh"))
@@ -335,13 +341,27 @@ def tools(session):
             raise bad("normal: not zero — the side it points to is removed.")
         n0 = m.CountFacets
         m.trimByPlane(p, n)
+        # trimByPlane adds the split triangles with points of their own, so the
+        # strip along the cut came back as a second component, its seam as two
+        # extra open loops, and close then capped all three (self-intersecting,
+        # three caps of area). Merging the points first leaves the one cut loop.
+        m.removeDuplicatedPoints()
+        m.removeDuplicatedFacets()
+        m.fixIndices()
         if a.get("preview"):
             bb = m.BoundBox
             return {"mesh": o.Label, "preview": True, "wouldRemove": n0 - m.CountFacets, "wouldKeep": m.CountFacets,
                     "keptBox": [round(bb.XLength, 2), round(bb.YLength, 2), round(bb.ZLength, 2)], "note": "Nothing changed: the same call without preview cuts."}
+        extra = {"removed": n0 - m.CountFacets}
         if a.get("close") and not m.isSolid():
             m.fillupHoles(int(a.get("maxHoleEdges", 1000)))
-        return keep(o, m, "meshobj_trim", a, {"removed": n0 - m.CountFacets, "note": "Cut open where the plane passed; close: true fills the cut."})
+            m.harmonizeNormals()
+            if m.isSolid() and m.Volume < 0:
+                m.flipNormals()
+            if not m.isSolid():
+                extra["warning"] = "The cut is not fully closed: a loop longer than maxHoleEdges, or the mesh was open before the cut. meshobj_boundary shows the loops left."
+        extra["note"] = "Capped flat where the plane passed." if a.get("close") else "Cut open where the plane passed; close: true fills the cut."
+        return keep(o, m, "meshobj_trim", a, extra)
 
     def meshobj_transform(a):
         o = mesh_of(a.get("mesh"))
@@ -815,7 +835,7 @@ def tools(session):
     return [
         Tool("meshobj_unwrap", "Lay a curved surface flat (MeshPart's unwrap): of a body's face \"Body.Face3\" or a mesh — its flat outline (a pattern to cut from sheet, fabric, leather), the area before and after and how much it stretched (mean, max %); path .svg or .dxf writes the pattern; make: false keeps no object.",
              obj({"of": {"type": "string"}, "path": {"type": "string"}, "make": {"type": "boolean"}, "tolerance": {"type": "number"}, "iterations": {"type": "integer"}, "weight": {"type": "number"}, "name": {"type": "string"}}, ["of"]), meshobj_unwrap, changes=True),
-        Tool("meshobj_from_shape", "Mesh a body (MeshPart): method standard (deflection mm, angle deg) | mefisto (maxLength: even triangles) | netgen (fineness verycoarse … veryfine). Kept as a mesh object.",
+        Tool("meshobj_from_shape", "Mesh a body (MeshPart): method standard (deflection mm, angle deg) | mefisto (maxLength: even triangles, but it can leave faces with small holes open — the answer warns) | netgen (fineness verycoarse … veryfine). Kept as a mesh object.",
              obj({"body": {"type": "string"}, "method": {"type": "string"}, "deflection": {"type": "number"}, "angle": {"type": "number"}, "maxLength": {"type": "number"}, "fineness": {"type": "string"}, "name": {"type": "string"}}), meshobj_from_shape, changes=True),
         Tool("meshobj_info", "A mesh's size and the Mesh workbench's evaluation: closed or open, components, non-manifolds, self-intersections, flipped normals, corrupt facets. Changes nothing.", obj({"mesh": mref}), meshobj_info),
         Tool("meshobj_repair", "Repair a mesh as Evaluate & Repair does: fix any of normals, duplicates, nonmanifolds, selfintersections, degenerate, folds, indices (default those), holes (maxHoleEdges), islands (minFacets); answers what it fixed and what is left. copy: true leaves the original.",
