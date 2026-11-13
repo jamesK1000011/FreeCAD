@@ -165,11 +165,39 @@ def index_of(shape, sub_shape, kind):
 def bake(session, base, shape, name=None, consumed=(), keep=False):
     """Put a modelling result in the document as a plain shape: into the base
     when it is one (a Part::Feature) and no new name is asked, else as a new
-    Part::Feature under the base's label or the name. The inputs are then
-    removed, or hidden with keep. Returns the result's object."""
+    Part::Feature under the base's label or the name; a PartDesign Body
+    gives a new Body on the shape, the old one kept hidden. The inputs are
+    then removed, or hidden with keep. Returns the result's object."""
     doc = session.doc
     shape = geo.clean(shape)
     gone = [o for o in consumed if o is not None]
+    if base is not None and base.TypeId == "PartDesign::Body":
+        # A PartDesign Body is never replaced by a plain shape (nor deleted
+        # with its history): the result is a new Body built on the shape
+        # (its base feature), so modelling goes on in PartDesign, and the
+        # old Body stays, hidden, as the input.
+        label = name or base.Label
+        if name is None:
+            base.Label = base.Label + " (input)"
+        holder = doc.addObject("Part::Feature", "BaseShape")
+        holder.Shape = shape
+        holder.Label = session.unique(f"{label} base shape")
+        out = doc.addObject("PartDesign::Body", "Body")
+        out.BaseFeature = holder
+        out.Label = label if name is None else session.unique(label)
+        for o in (holder, base):
+            if hasattr(o, "Visibility"):
+                o.Visibility = False
+        for o in gone:
+            if o is base:
+                continue
+            if keep or o.InList:
+                if hasattr(o, "Visibility"):
+                    o.Visibility = False
+            else:
+                doc.removeObject(o.Name)
+        doc.recompute()
+        return out
     if name is None and base is not None and base.TypeId == "Part::Feature":
         base.Shape = shape
         out = base
@@ -190,6 +218,61 @@ def bake(session, base, shape, name=None, consumed=(), keep=False):
             doc.removeObject(o.Name)
     doc.recompute()
     return out
+
+
+def repoint(doc, old, new):
+    """Every link to old (links, link lists, sub-element links, groups,
+    expressions) pointed at new instead, so replacing an object leaves
+    nothing dangling. Returns the labels of the objects that changed."""
+    if old is None or new is None or old is new:
+        return []
+
+    def swap(v):
+        if v is old:
+            return new, True
+        if isinstance(v, (list, tuple)):
+            out, hit = [], False
+            for x in v:
+                y, h = swap(x)
+                out.append(y)
+                hit = hit or h
+            return (type(v)(out) if isinstance(v, tuple) else out), hit
+        return v, False
+
+    changed = []
+    for p in list(old.InList):
+        if p is new:
+            continue
+        hit_any = False
+        for prop in p.PropertiesList:
+            try:
+                t = p.getTypeIdOfProperty(prop)
+            except Exception:
+                continue
+            if not (t.startswith("App::PropertyLink") or t.startswith("App::PropertyXLink")):
+                continue
+            try:
+                v = p.getPropertyByName(prop)
+            except Exception:
+                continue
+            nv, hit = swap(v)
+            if hit:
+                try:
+                    setattr(p, prop, nv)
+                    hit_any = True
+                except Exception:
+                    pass
+        for path, expr in list(getattr(p, "ExpressionEngine", []) or []):
+            if re.search(r"(?<![\w<])" + re.escape(old.Name) + r"\.", expr) or ("<<" + old.Label + ">>") in expr:
+                e2 = re.sub(r"(?<![\w<])" + re.escape(old.Name) + r"\.", new.Name + ".", expr).replace("<<" + old.Label + ">>", new.Name)
+                try:
+                    p.setExpression(path, e2)
+                    hit_any = True
+                except Exception:
+                    pass
+        if hit_any:
+            changed.append(p.Label)
+    return changed
 
 
 def json_safe(v, depth=0):

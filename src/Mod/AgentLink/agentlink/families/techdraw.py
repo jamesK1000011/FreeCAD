@@ -538,6 +538,122 @@ MARKS_PROP = "AgentLinkCenterMarks"
 HATCH_PROP = "AgentLinkHatch"
 WELD_PROP = "AgentLinkWeld"
 COSMETIC_PROP = "AgentLinkCosmetic"
+# FreeCAD's line styles for cosmetic edges: (style, weight mm)
+NATIVE_STYLE = {"thin": (1, 0.18), "visible": (1, 0.35), "hidden": (2, 0.18), "center": (4, 0.18)}
+
+
+SPECIAL_PROP = "AgentLinkSpecial"
+
+
+def special_length(v, spec, cache):
+    """The true length a special dimension shows, read from the view as it
+    is now (not when the dimension was made): an arc's length, or the model
+    edge an axonometric view edge shows. None where the edge is gone."""
+    es = edges_of(v)
+    try:
+        e = es[int(spec["edge"][4:])]
+    except Exception:
+        return None
+    g = gscale(v, cache) or 1.0
+    if spec["kind"] == "arc_length":
+        if not hasattr(getattr(e, "Curve", None), "Radius"):
+            return None
+        return e.Length / g
+    # axo_length: the source's straight edge whose ends land on this one's
+    fr = frame_of(v, cache)
+    src = source_shapes(v)
+    if fr is None or not src:
+        return None
+    a, b = e.Vertexes[0].Point, e.Vertexes[-1].Point
+    tol = max(1e-3, 1e-3 * e.Length)
+    best = None
+    for sh in src:
+        for ed in sh.Edges:
+            if ed.Curve.__class__.__name__ not in ("Line", "LineSegment") or len(ed.Vertexes) < 2:
+                continue
+            p, q = (to_view(fr, v, x.Point) for x in (ed.Vertexes[0], ed.Vertexes[-1]))
+            d1 = math.hypot(p[0] - a.x, p[1] - a.y) + math.hypot(q[0] - b.x, q[1] - b.y)
+            d2 = math.hypot(p[0] - b.x, p[1] - b.y) + math.hypot(q[0] - a.x, q[1] - a.y)
+            d = min(d1, d2)
+            if d < 4 * tol and (best is None or d < best[0]):
+                best = (d, ed.Length)
+    return best[1] if best else None
+
+
+def refresh_special(doc, cache=None):
+    """Re-read every special dimension's length (arc, axonometric) from the
+    view as it is now, so a changed part or scale shows. Returns the
+    dimensions whose edge is gone (their text says so)."""
+    cache = {} if cache is None else cache
+    lost = []
+    for d in doc.Objects:
+        if SPECIAL_PROP not in getattr(d, "PropertiesList", []) or not getattr(d, SPECIAL_PROP):
+            continue
+        try:
+            spec = json.loads(getattr(d, SPECIAL_PROP))
+            v = doc.getObject(spec["view"])
+            L = special_length(v, spec, cache) if v is not None else None
+        except Exception:
+            L = None
+        nd = int(spec.get("decimals", 2)) if isinstance(spec, dict) else 2
+        pre = "◠ " if isinstance(spec, dict) and spec.get("kind") == "arc_length" else ""
+        text = f"{pre}{L:.{nd}f}" if L is not None else f"{pre}? (edge gone: td_dim_special again)"
+        if L is None:
+            lost.append(d.Label)
+        if d.FormatSpec != text:
+            d.Arbitrary = True
+            d.FormatSpec = text
+    return lost
+
+
+def _canon(v, x, y):
+    """A paper point (mm from the view's centre, y down, as the visible
+    edges hold it) as FreeCAD keeps cosmetic geometry: unscaled, unrotated,
+    y up."""
+    sc = view_scale(v) or 1.0
+    px, py = x / sc, -y / sc
+    rot = math.radians(float(getattr(v, "Rotation", 0) or 0))
+    if rot:
+        c, s_ = math.cos(-rot), math.sin(-rot)
+        px, py = px * c - py * s_, px * s_ + py * c
+    return FreeCAD.Vector(px, py, 0)
+
+
+def native_cosmetic(v, prim):
+    """FreeCAD's own cosmetic edges for one of td_cosmetic's figures, so it
+    shows in the window and in TechDraw's own PDF/SVG export too. Returns the
+    edges' tags ([] where this FreeCAD cannot make them)."""
+    tags = []
+    style, weight = NATIVE_STYLE.get(prim.get("style", "thin"), (1, 0.18))
+    try:
+        if prim.get("circle"):
+            cx, cy, r = prim["circle"]
+            tags.append(v.makeCosmeticCircle(_canon(v, cx, cy), r / (view_scale(v) or 1.0)))
+        else:
+            pts = list(prim["pts"])
+            if prim.get("closed") and len(pts) > 2:
+                pts.append(pts[0])
+            for p, q in zip(pts, pts[1:]):
+                tags.append(v.makeCosmeticLine(_canon(v, *p), _canon(v, *q)))
+    except Exception:
+        return tags
+    for t in tags:
+        try:
+            ce = v.getCosmeticEdge(t)
+            fm = list(ce.Format)
+            fm[0], fm[1] = style, weight
+            ce.Format = tuple(fm)
+        except Exception:
+            pass
+    return tags
+
+
+def drop_native(v, prim):
+    for t in prim.pop("tags", []) or []:
+        try:
+            v.removeCosmeticEdge(t)
+        except Exception:
+            pass
 
 
 def paper_polys(v, faces, X, Y, H):
@@ -644,6 +760,37 @@ def abs_xy(v):
     return x, y
 
 
+def edge_key(e):
+    """An edge by where it lies (paper mm, rounded): ends, or a circle."""
+    cu = getattr(e, "Curve", None)
+    if isinstance(cu, __import__("Part").Circle) and len(e.Vertexes) < 2:
+        return ("c", round(cu.Center.x, 2), round(cu.Center.y, 2), round(cu.Radius, 2))
+    a, b = (e.Vertexes[0].Point, e.Vertexes[-1].Point) if e.Vertexes else (None, None)
+    if a is None:
+        return None
+    k = sorted([(round(a.x, 2), round(a.y, 2)), (round(b.x, 2), round(b.y, 2))])
+    return ("l",) + tuple(k)
+
+
+def cosmetic_keys(v):
+    """Where td_cosmetic's native edges lie, to keep them out of the visible
+    lines (they are drawn from the JSON, in their own style)."""
+    if COSMETIC_PROP not in v.PropertiesList or not getattr(v, COSMETIC_PROP):
+        return set()
+    keys = set()
+    for c in json.loads(getattr(v, COSMETIC_PROP)):
+        if not c.get("tags"):
+            continue
+        if c.get("circle"):
+            cx, cy, r = c["circle"]
+            keys.add(("c", round(cx, 2), round(cy, 2), round(r, 2)))
+            continue
+        pts = list(c["pts"]) + ([c["pts"][0]] if c.get("closed") else [])
+        for p, q in zip(pts, pts[1:]):
+            keys.add(("l",) + tuple(sorted([(round(p[0], 2), round(p[1], 2)), (round(q[0], 2), round(q[1], 2))])))
+    return keys
+
+
 def draw_item(doc, sh, v, H):
     t = v.TypeId
     if v.isDerivedFrom("TechDraw::DrawProjGroup"):
@@ -654,7 +801,10 @@ def draw_item(doc, sh, v, H):
         for kind, getter in (("hidden", "getHiddenEdges"), ("visible", "getVisibleEdges")):
             if kind == "hidden" and not getattr(v, "HardHidden", False) and not getattr(v, "SmoothHidden", False):
                 continue
+            ours = cosmetic_keys(v) if kind == "visible" else set()
             for e in getattr(v, getter)() or []:
+                if ours and edge_key(e) in ours:
+                    continue  # one of td_cosmetic's, drawn below in its own style
                 pts = [(X + p.x, H - Y + p.y) for p in e.discretize(Deflection=0.05)] if e.Length > 1e-6 else []
                 if len(pts) >= 2:
                     sh.line(pts, kind)
@@ -947,6 +1097,11 @@ def tools(session):
             wait(objs)
             doc().recompute()
             settle()
+        try:
+            if refresh_special(doc(), frames):
+                pass
+        except Exception:
+            pass
 
     def settle(seconds=0.15):
         # TechDraw finishes a view's lines (and a section's faces) on worker
@@ -1850,7 +2005,12 @@ def tools(session):
         if not edges_of(v):
             recompute([v])
         items = a.get("items") or []
-        prims = json.loads(getattr(v, COSMETIC_PROP)) if COSMETIC_PROP in v.PropertiesList and getattr(v, COSMETIC_PROP) and not a.get("clear") else []
+        prims = json.loads(getattr(v, COSMETIC_PROP)) if COSMETIC_PROP in v.PropertiesList and getattr(v, COSMETIC_PROP) else []
+        if a.get("clear"):
+            for p_ in prims:
+                drop_native(v, p_)
+            prims = []
+        first_new = len(prims)
         made = []
         k = view_scale(v) / gscale(v, frames)
         for it in items:
@@ -1867,7 +2027,7 @@ def tools(session):
                 r = float(it.get("radius", 0)) * view_scale(v)
                 if r <= 0:
                     raise bad("circle: radius mm on the part.")
-                prims.append({"pts": [(c[0] + r * math.cos(2 * math.pi * i / 48), c[1] + r * math.sin(2 * math.pi * i / 48)) for i in range(48)], "style": style, "closed": True})
+                prims.append({"pts": [(c[0] + r * math.cos(2 * math.pi * i / 48), c[1] + r * math.sin(2 * math.pi * i / 48)) for i in range(48)], "style": style, "closed": True, "circle": [c[0], c[1], r]})
                 made.append({"kind": "circle", "radius": float(it["radius"])})
             elif kind == "centerline":
                 refs = it.get("edges") or []
@@ -1929,11 +2089,18 @@ def tools(session):
                     raise bad("thread: edges [two outline lines] (side view) or circle (end view).")
             else:
                 raise bad("kind: line { from, to } | circle { center, radius } | centerline { edges } | thread { edges | circle, internal, pitch, length }.")
+        native = 0
+        for p_ in prims[first_new:]:
+            p_["tags"] = native_cosmetic(v, p_)
+            native += len(p_["tags"])
         if COSMETIC_PROP not in v.PropertiesList:
-            v.addProperty("App::PropertyString", COSMETIC_PROP, "AgentLink", "Cosmetic lines drawn in the exported page (JSON, paper mm)")
+            v.addProperty("App::PropertyString", COSMETIC_PROP, "AgentLink", "Cosmetic lines (JSON, paper mm), each with the tags of FreeCAD's own cosmetic edges that show it")
         setattr(v, COSMETIC_PROP, json.dumps(prims))
         recompute()
-        return done("td_cosmetic", {"view": v.Label, "made": made, "total": len(prims)})
+        out = {"view": v.Label, "made": made, "total": len(prims), "native": native}
+        if not native and made:
+            out["note"] = "This FreeCAD made no cosmetic edges of its own: the lines show in td_export only."
+        return done("td_cosmetic", out)
 
     def td_leader(a):
         v = view_of(doc(), a.get("view"))
@@ -2098,62 +2265,56 @@ def tools(session):
             ang = round(math.degrees(abs(math.atan2(q.y - p.y, q.x - p.x))) if kind == "chamfer_h" else math.degrees(abs(math.atan2(q.x - p.x, q.y - p.y))))
             ang = ang if ang <= 90 else 180 - ang
             d.FormatSpec = f"{d.FormatSpec} x{ang}°"
-        elif kind == "arc_length":
-            if len(names) != 1 or not names[0].startswith("Edge"):
+        elif kind in ("arc_length", "axo_length"):
+            want_n = 1 if kind == "arc_length" else 2
+            if len(names) != want_n or not all(n.startswith("Edge") for n in names):
                 doc().removeObject(d.Name)
-                raise bad("refs: one curved edge.")
-            e = edges_of(v)[int(names[0][4:])]
-            vs = vertices_of(v)
-            ends = []
-            for pt in (e.Vertexes[0].Point, e.Vertexes[-1].Point):
-                k = min(range(len(vs)), key=lambda i: (vs[i] - pt).Length)
-                ends.append(f"Vertex{k}")
-            d.Type = "Distance"
-            d.References2D = [(v, n) for n in ends]
-            page.addView(d)
-            length = e.Length / view_scale(v)
-            d.Arbitrary = True
-            nd = int(a.get("decimals", 2))
-            d.FormatSpec = f"◠ {length:.{nd}f}"
-        elif kind == "axo_length":
-            # A length along one of the part's axes in an axonometric view,
-            # read true (not foreshortened): two edges, the measured one first,
-            # the one the extension lines run along second.
-            import math
-
-            if len(names) != 2 or not all(n.startswith("Edge") for n in names):
-                doc().removeObject(d.Name)
-                raise bad("refs: [the edge to measure, an edge the extension lines run along].")
+                raise bad("refs: one curved edge." if kind == "arc_length" else "refs: [the edge to measure, an edge the extension lines run along].")
             es = edges_of(v)
-            m, x = es[int(names[0][4:])], es[int(names[1][4:])]
-            dl = m.Vertexes[-1].Point - m.Vertexes[0].Point
-            el = x.Vertexes[-1].Point - x.Vertexes[0].Point
-            X = FreeCAD.Vector(1, 0, 0)
-            la, ea = math.degrees(dl.getAngle(X)), math.degrees(el.getAngle(X))
-            if dl.y < 0:
-                la = 180 - la
-            if el.y < 0:
-                ea = 180 - ea
-            d.Type = "Distance"
-            d.References2D = [(v, names[0])]
-            page.addView(d)
-            d.AngleOverride = True
-            d.LineAngle = la
-            d.ExtensionAngle = ea
-            # true length: the model edge this view edge shows
-            src = source_shapes(v)
-            true = None
-            if src:
-                want = dl.Length / view_scale(v)
-                cands = [ed.Length for sh in src for ed in sh.Edges if ed.Curve.__class__.__name__ in ("Line", "LineSegment")]
-                best = None
-                for L in cands:
-                    if L + 1e-6 >= want and (best is None or L - want < best - want):
-                        best = L
-                true = best
-            if true:
-                d.Arbitrary = True
-                d.FormatSpec = f"{true:.{int(a.get('decimals', 2))}f}"
+            e = es[int(names[0][4:])]
+            spec = {"kind": kind, "view": v.Name, "edge": names[0], "decimals": int(a.get("decimals", 2))}
+            if kind == "arc_length":
+                if not hasattr(getattr(e, "Curve", None), "Radius"):
+                    doc().removeObject(d.Name)
+                    raise bad(f"{names[0]} is not an arc: refs one curved edge.")
+                vs = vertices_of(v)
+                ends = []
+                for pt in (e.Vertexes[0].Point, e.Vertexes[-1].Point):
+                    k = min(range(len(vs)), key=lambda i: (vs[i] - pt).Length)
+                    ends.append(f"Vertex{k}")
+                d.Type = "Distance"
+                d.References2D = [(v, n) for n in ends]
+                page.addView(d)
+            else:
+                # A length along one of the part's axes in an axonometric
+                # view, read true (not foreshortened): the measured edge
+                # first, the one the extension lines run along second.
+                import math
+
+                x = es[int(names[1][4:])]
+                dl = e.Vertexes[-1].Point - e.Vertexes[0].Point
+                el = x.Vertexes[-1].Point - x.Vertexes[0].Point
+                X = FreeCAD.Vector(1, 0, 0)
+                la, ea = math.degrees(dl.getAngle(X)), math.degrees(el.getAngle(X))
+                if dl.y < 0:
+                    la = 180 - la
+                if el.y < 0:
+                    ea = 180 - ea
+                d.Type = "Distance"
+                d.References2D = [(v, names[0])]
+                page.addView(d)
+                d.AngleOverride = True
+                d.LineAngle = la
+                d.ExtensionAngle = ea
+            # kept on the dimension and re-read on every TechDraw change, so
+            # the text follows the part and the view's scale
+            d.addProperty("App::PropertyString", SPECIAL_PROP, "AgentLink", "What this special dimension measures (JSON), re-read when the drawing changes")
+            setattr(d, SPECIAL_PROP, json.dumps(spec))
+            L = special_length(v, spec, frames)
+            if L is None:
+                doc().removeObject(d.Name)
+                raise ToolError("invalid_state", f"{names[0]}: no model edge lands on it in this view (an axonometric length needs a straight edge of the part along one of its axes)." if kind == "axo_length" else f"{names[0]} could not be read.")
+            refresh_special(doc(), frames)
         else:
             doc().removeObject(d.Name)
             raise bad("kind: extent_h | extent_v { refs edges, none for the whole view } | chamfer_h | chamfer_v { refs two points } | arc_length { refs [an arc] } | axo_length { refs [edge, extension edge] }.")
@@ -2353,6 +2514,9 @@ def tools(session):
                 if L + 2 * by <= 0:
                     raise bad(f"item {i} is {L:.2f} mm long: it cannot shorten by {-by:g} at each end.")
                 prims[i]["pts"] = [[x0 - ux * by, y0 - uy * by], [x1 + ux * by, y1 + uy * by]]
+                if prims[i].get("tags"):
+                    drop_native(v, prims[i])
+                    prims[i]["tags"] = native_cosmetic(v, prims[i])
                 changed.append(i)
             setattr(v, COSMETIC_PROP, json.dumps(prims))
             # FreeCAD's own centerlines too, where the view has them.
@@ -2369,10 +2533,12 @@ def tools(session):
             idx = a.get("items")
             if idx is None:
                 gone = list(range(len(prims)))
-                prims = []
             else:
                 gone = sorted({int(i) for i in idx})
-                prims = [p for i, p in enumerate(prims) if i not in gone]
+            for i in gone:
+                if 0 <= i < len(prims):
+                    drop_native(v, prims[i])
+            prims = [p for i, p in enumerate(prims) if i not in gone]
             setattr(v, COSMETIC_PROP, json.dumps(prims))
             for t in a.get("tags") or []:
                 for fn in ("removeCosmeticEdge", "removeCenterLine", "removeCosmeticVertex"):

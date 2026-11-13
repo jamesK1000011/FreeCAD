@@ -313,6 +313,8 @@ def tools(session):
             label = o.Label
             made.append(n)
             if a.get("delete", True):
+                # what used the old one now uses the new one
+                picks.repoint(doc(), o, n)
                 doc().removeObject(o.Name)
             n.Label = s.unique(label, n)
         return made

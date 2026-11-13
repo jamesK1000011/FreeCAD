@@ -40,6 +40,56 @@ def vec(v):
     return [r4(v.x), r4(v.y), r4(v.z)]
 
 
+def joint_frames(j):
+    """The joint's two coordinate systems in the world (JCS1, JCS2), as the
+    Assembly workbench reads them, or None where it cannot."""
+    try:
+        import UtilsAssembly as U
+
+        return U.getJcsGlobalPlc(j.Placement1, j.Reference1), U.getJcsGlobalPlc(j.Placement2, j.Reference2)
+    except Exception:
+        return None
+
+
+def joint_value(j, turning):
+    """Where the joint is now, the way its limits are read: the turn of JCS2
+    about JCS1's z (degrees, -180 … 180) or JCS2's offset along it (mm).
+    None where the frames cannot be read."""
+    fr = joint_frames(j)
+    if fr is None:
+        return None
+    rel = fr[0].inverse().multiply(fr[1])
+    if turning:
+        x = rel.Rotation.multVec(V(1, 0, 0))
+        return math.degrees(math.atan2(x.y, x.x))
+    return float(rel.Base.z)
+
+
+def wrap180(a):
+    return (a + 180.0) % 360.0 - 180.0
+
+
+def is_exploded(asm):
+    return EXPLODED in asm.PropertiesList and bool(asm.getPropertyByName(EXPLODED))
+
+
+def _suppress(j, off):
+    """Joint j left out of the solve (off) or back in; the property differs
+    by release (Suppressed in 1.1, Activated in 1.0)."""
+    if "Suppressed" in j.PropertiesList:
+        j.Suppressed = bool(off)
+    elif "Activated" in j.PropertiesList:
+        j.Activated = not off
+
+
+def _is_suppressed(j):
+    if "Suppressed" in j.PropertiesList:
+        return bool(j.Suppressed)
+    if "Activated" in j.PropertiesList:
+        return not bool(j.Activated)
+    return False
+
+
 # ---- elements and axes ----
 
 
@@ -299,14 +349,23 @@ def tools(session):
 
     def asm_pose(a):
         asm = A._assembly(doc(), a.get("assembly"))
+        if is_exploded(asm):
+            raise ToolError("invalid_state", f"{asm.Label} is exploded (its joints are off while it is): asm_explode {{ collapse: true }} first.")
         j = joint_of(asm, a.get("joint"))
         kind = str(getattr(j, "JointType", "")).lower()
         if kind not in ("revolute", "slider", "cylindrical"):
             raise bad(f"{j.Label} is {kind}: a pose turns a revolute joint (degrees) or slides a slider or cylindrical one (mm).")
         turning = kind == "revolute" or (kind == "cylindrical" and a.get("turn"))
-        if POSE not in j.PropertiesList:
-            j.addProperty("App::PropertyFloat", POSE, "AgentLink", "How far asm_pose has moved this joint from where it was made (degrees or mm)")
-        now = float(getattr(j, POSE))
+        unit = "degrees" if turning else "mm"
+        # Where the joint is now, read off the parts (as the solver and its
+        # limits read it), not a counter of our own moves: the person or the
+        # solver may have moved it since.
+        now = joint_value(j, turning)
+        counted = False
+        if now is None:
+            if POSE not in j.PropertiesList:
+                j.addProperty("App::PropertyFloat", POSE, "AgentLink", "How far asm_pose has moved this joint (degrees or mm), where the joint's frames cannot be read")
+            now, counted = float(getattr(j, POSE)), True
         if a.get("home"):
             target = 0.0
         elif a.get("to") is not None:
@@ -314,34 +373,53 @@ def tools(session):
         elif a.get("by") is not None:
             target = now + float(a["by"])
         else:
-            raise bad("to (from where the joint was made), by (from where it is), or home: true.")
+            raise bad("to (the joint's own zero, where its frames line up — the zero its limits use), by (from where it is), or home: true.")
+        if turning and not counted:
+            target = wrap180(target)
         _, lim = limits_of(j)
         lo = lim.get("angleMin" if turning else "lengthMin")
         hi = lim.get("angleMax" if turning else "lengthMax")
         if (lo is not None and target < lo - 1e-9) or (hi is not None and target > hi + 1e-9):
-            raise bad(f"{target:g} is outside {j.Label}'s limits [{lo if lo is not None else '-'} … {hi if hi is not None else '-'}].")
+            raise bad(f"{target:g} is outside {j.Label}'s limits [{lo if lo is not None else '-'} … {hi if hi is not None else '-'}] (it is at {now:.4g} {unit} now).")
         group, (centre, axis) = moving_group(asm, j)
+        step = (wrap180(target - now) if turning and not counted else target - now)
+        fr = joint_frames(j)
+        sign = 1.0
+        if fr is not None:
+            # Along JCS1's z, the axis the value is read on; a part on the
+            # first reference's side moves the other way.
+            centre, axis = fr[0].Base, fr[0].Rotation.multVec(V(0, 0, 1))
+            p1, _, _ = ref_element(doc(), j.Reference1)
+            if p1 is not None and p1.Name in group:
+                sign = -1.0
         axis = V(axis)
         axis.normalize()
-        step = target - now
         if turning:
-            rot = FreeCAD.Rotation(axis, step)
+            rot = FreeCAD.Rotation(axis, sign * step)
             move = FreeCAD.Placement(centre - rot.multVec(centre), rot)
         else:
-            move = FreeCAD.Placement(axis * step, FreeCAD.Rotation())
+            move = FreeCAD.Placement(axis * (sign * step), FreeCAD.Rotation())
         for o in group.values():
             o.Placement = move.multiply(o.Placement)
-        setattr(j, POSE, target)
+        if counted:
+            setattr(j, POSE, target)
         doc().recompute()
         code, said = A._status(asm)
         if code != 0:
             raise ToolError("failed", f"Posed, {asm.Label} does not solve: {said} — nothing was kept.")
+        got = joint_value(j, turning)
+        if got is not None and not counted:
+            off = abs(wrap180(got - target)) if turning else abs(got - target)
+            if off > (0.05 if turning else 0.005):
+                raise ToolError("failed", f"{j.Label} ended at {got:.4g} {unit}, not {target:g} (the solver moved it) — nothing was kept.")
         hits, _ = A._overlaps(A._parts(asm))
         if hits and not a.get("allowOverlap"):
             raise ToolError("failed", f"At {target:g} {'°' if turning else 'mm'} parts overlap ({', '.join('/'.join(h['parts']) for h in hits)}) — nothing was kept. asm_sweep finds the clear range; allowOverlap: true keeps it anyway.")
         s.snapshot("asm_pose")
-        out = {"joint": j.Label, "pose": r4(target), "unit": "degrees" if turning else "mm", "along": vec(axis), "moved": sorted(o.Label for o in group.values()),
+        out = {"joint": j.Label, "pose": r4(got if got is not None and not counted else target), "was": r4(now), "unit": unit, "along": vec(axis), "moved": sorted(o.Label for o in group.values()),
                "parts": {o.Label: A._placement(o) for o in group.values()}, "solve": said, "step": len(s.steps)}
+        if counted:
+            out["note"] = "This FreeCAD's joint frames could not be read: the pose is counted from where asm_pose first found the joint."
         if hits:
             out["overlaps"] = hits
         return out
@@ -359,6 +437,10 @@ def tools(session):
                 if o.Name in kept:
                     m = kept[o.Name]
                     o.Placement = FreeCAD.Placement(V(*m["base"]), FreeCAD.Rotation(*m["q"]))
+            for jn in kept.get("__joints_off__", []):
+                jo = doc().getObject(jn)
+                if jo is not None:
+                    _suppress(jo, False)
             setattr(asm, EXPLODED, "")
             doc().recompute()
             code, said = A._status(asm)
@@ -404,13 +486,22 @@ def tools(session):
                 moves[o.Name] = v * (factor - 1)
         for o in which:
             o.Placement = FreeCAD.Placement(o.Placement.Base + moves[o.Name], o.Placement.Rotation)
+        # The joints are left out of the solve while exploded (and put back
+        # on collapse): otherwise the next solve, from any assembly tool,
+        # pulls the parts back together.
+        off = []
+        for jo in (A._joints(asm).Group if A._joints(asm) is not None else []):
+            if getattr(jo, "ObjectToGround", None) is None and hasattr(jo, "JointType") and not _is_suppressed(jo):
+                _suppress(jo, True)
+                off.append(jo.Name)
+        kept["__joints_off__"] = off
         if EXPLODED not in asm.PropertiesList:
             asm.addProperty("App::PropertyString", EXPLODED, "AgentLink", "Where the parts sat before asm_explode, to collapse to (JSON)")
         setattr(asm, EXPLODED, json.dumps(kept))
         doc().recompute()
         s.snapshot("asm_explode")
         return {"assembly": asm.Label, "exploded": {o.Label: vec(moves[o.Name]) for o in which}, "step": len(s.steps),
-                "note": "Not solved, so the joints do not pull the parts back: view_render to look, drawing_exploded for a manual, then asm_explode { collapse: true }. Kept in the file, so it collapses after reopening too."}
+                "jointsOff": len(off), "note": "Its joints are off while exploded, so no solve pulls the parts back: view_render to look, drawing_exploded for a manual, then asm_explode { collapse: true }. Kept in the file, so it collapses after reopening too."}
 
     # ---- bill of materials ----
 
@@ -531,7 +622,7 @@ def tools(session):
         if action == "save":
             keys = a.get("keys")
             if not isinstance(keys, list) or len(keys) < 2 or not all(isinstance(k, dict) for k in keys):
-                raise bad("keys: two or more key poses in order, each { joint: value, … } (degrees or mm from where each joint was made).")
+                raise bad("keys: two or more key poses in order, each { joint: value, … } (degrees or mm from each joint's own zero, as asm_pose).")
             asm = A._assembly(doc(), a.get("assembly"))
             for k in keys:
                 for jn in k:
@@ -557,7 +648,9 @@ def tools(session):
         start = {}
         for jn in {j for fr in frames for j in fr}:
             jo = joint_of(asm, jn)
-            start[jn] = float(getattr(jo, POSE, 0.0)) if POSE in jo.PropertiesList else 0.0
+            kind = str(getattr(jo, "JointType", "")).lower()
+            v = joint_value(jo, kind == "revolute")
+            start[jn] = v if v is not None else (float(getattr(jo, POSE, 0.0)) if POSE in jo.PropertiesList else 0.0)
         out_frames, clash_at = [], []
         try:
             for n, fr in enumerate(frames):
@@ -608,16 +701,16 @@ def tools(session):
         Tool("asm_fits", "Fits: for each joint (or joint, or pairs [{ a: { part, element }, b }]), the hole and the shaft it puts together — found as round faces on the joint's axis — their diameters, clearance (minus: interference), engagement length and axis offset; with fit \"H7/g6\" (size: the nominal, else read off the parts) each held to ISO 286: the fit's type and clearance range, each part in or out of its band. Flat faces: their gap and angle. Changes nothing.",
              obj({"assembly": asm_ref, "joint": {"type": "string"}, "pairs": {"type": "array", "items": {"type": "object", "properties": {"a": end, "b": end, "fit": {"type": "string"}, "size": {"type": "number"}}}},
                   "fit": {"type": "string"}, "size": {"type": "number"}}), asm_fits),
-        Tool("asm_motion", "Saved motions of an assembly (a simulation): action save (name, keys: [{ joint: value, … }, …] in order, degrees or mm from where each joint was made) | play (name: steps between keys, 6; clearance; keep: true leaves it at the end; placements: true adds every part's place per frame; path writes the frames as JSON) | list | delete. Play answers each frame's poses and any parts that overlap.",
+        Tool("asm_motion", "Saved motions of an assembly (a simulation): action save (name, keys: [{ joint: value, … }, …] in order, degrees or mm from each joint's own zero, as asm_pose) | play (name: steps between keys, 6; clearance; keep: true leaves it at the end; placements: true adds every part's place per frame; path writes the frames as JSON) | list | delete. Play answers each frame's poses and any parts that overlap.",
              obj({"assembly": asm_ref, "action": {"type": "string", "enum": ["save", "play", "list", "delete"]}, "name": {"type": "string"}, "keys": {"type": "array", "items": {"type": "object"}},
                   "steps": {"type": "integer"}, "clearance": {"type": "number"}, "keep": {"type": "boolean"}, "placements": {"type": "boolean"}, "path": {"type": "string"}, "limit": {"type": "integer"}}), asm_motion, changes=True),
         Tool("asm_export", "Write the assembly as its solver's own file (OndselSolver .asmt): path. For other solvers, and for reporting a solve problem.",
              obj({"assembly": asm_ref, "path": {"type": "string"}}), asm_export),
-        Tool("asm_pose", "Move a revolute joint (degrees) or slider / cylindrical one (mm; turn: true turns a cylindrical) and leave it there: to (from where the joint was made), by (from where it is), or home: true. Respects the joint's limits; refused if parts would overlap (allowOverlap: true keeps it).",
+        Tool("asm_pose", "Move a revolute joint (degrees) or slider / cylindrical one (mm; turn: true turns a cylindrical) and leave it there: to (the joint's own zero, where its two frames line up — the zero its limits use), by (from where it is now, read off the parts), or home: true. Respects the joint's limits; refused if parts would overlap (allowOverlap: true keeps it).",
              obj({"assembly": asm_ref, "joint": {"type": "string"}, "to": {"type": "number"}, "by": {"type": "number"}, "home": {"type": "boolean"}, "turn": {"type": "boolean"}, "allowOverlap": {"type": "boolean"}}, ["joint"]), asm_pose, changes=True),
         Tool("asm_limits", "A joint's limits, FreeCAD's own: min and max (degrees for revolute, mm for slider; turn: true for a cylindrical's angle); null clears one. asm_sweep sweeps between them when from/to are left out.",
              obj({"assembly": asm_ref, "joint": {"type": "string"}, "min": {"type": ["number", "null"]}, "max": {"type": ["number", "null"]}, "turn": {"type": "boolean"}}, ["joint"]), asm_limits, changes=True),
-        Tool("asm_explode", "Spread an assembly's parts out to see how it goes together: factor (1.6: 60% further from the middle), or along an axis \"z\" | [x,y,z] stacked in order with gap mm; parts (default every one not grounded). collapse: true puts them back (kept in the file). Not solved while exploded.",
+        Tool("asm_explode", "Spread an assembly's parts out to see how it goes together: factor (1.6: 60% further from the middle), or along an axis \"z\" | [x,y,z] stacked in order with gap mm; parts (default every one not grounded). collapse: true puts them back and turns the joints on again (kept in the file). Its joints are off while exploded.",
              obj({"assembly": asm_ref, "factor": {"type": "number"}, "axis": {"type": ["string", "array"]}, "gap": {"type": "number"}, "parts": {"type": "array", "items": {"type": "string"}}, "collapse": {"type": "boolean"}}), asm_explode, changes=True),
         Tool("asm_sub", "Put an assembly into another as a sub-assembly: sub (the assembly to put in), assembly (the one it goes into), rigid (true: one part; false: its own joints still move, where this FreeCAD allows), name.",
              obj({"assembly": asm_ref, "sub": {"type": "string"}, "rigid": {"type": "boolean"}, "name": {"type": "string"}}, ["assembly", "sub"]), asm_sub, changes=True),

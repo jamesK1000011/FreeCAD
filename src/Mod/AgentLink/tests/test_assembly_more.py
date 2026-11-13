@@ -5,6 +5,11 @@ import unittest
 from _pd_base import HAVE, Base
 
 try:
+    import FreeCAD
+except ImportError:
+    FreeCAD = None
+
+try:
     import JointObject  # noqa: F401
 
     HAVE_A = HAVE
@@ -14,6 +19,9 @@ except ImportError:
 
 @unittest.skipUnless(HAVE_A, "FreeCAD with the Assembly workbench is not importable here")
 class AssemblyMore(Base):
+    def obj(self, label):
+        return next(o for o in self.session.doc.Objects if o.Label == label)
+
     def test_1_build(self):
         self.ok("pd_body_new", {"name": "Plate"})
         self.ok("sketch_new", {"body": "Plate", "plane": "XY", "name": "P"})
@@ -42,10 +50,25 @@ class AssemblyMore(Base):
         self.assertEqual([sw["from"], sw["to"]], [-5.0, 10.0])
         self.assertEqual(self.ok("asm_pose", {"joint": "Cylindrical", "home": True})["pose"], 0.0)
 
+    def test_3b_pose_reads_the_joint_not_a_counter(self):
+        # Moved by hand (not by asm_pose): the pose is read off the parts.
+        pin = self.obj("Pin")
+        pl = pin.Placement
+        pin.Placement = FreeCAD.Placement(pl.Base + FreeCAD.Vector(0, 0, 3), pl.Rotation)
+        r = self.ok("asm_pose", {"joint": "Cylindrical", "by": 0})
+        self.assertAlmostEqual(abs(r["was"]), 3.0, places=3)
+        self.assertAlmostEqual(self.ok("asm_pose", {"joint": "Cylindrical", "home": True})["pose"], 0.0, places=3)
+        self.assertAlmostEqual(self.obj("Pin").Placement.Base.z, pl.Base.z, places=3)
+
     def test_4_explode_bom(self):
         e = self.ok("asm_explode", {"axis": "z"})
         self.assertIn("Pin", e["exploded"])
         self.refused("asm_explode", {"axis": "z"})
+        # a solve from another assembly tool leaves the exploded layout alone
+        z = self.obj("Pin").Placement.Base.z
+        self.ok("asm_limits", {"joint": "Cylindrical", "min": -5, "max": 10})
+        self.assertAlmostEqual(self.obj("Pin").Placement.Base.z, z, places=4)
+        self.refused("asm_pose", {"joint": "Cylindrical", "to": 1})
         self.ok("asm_explode", {"collapse": True})
         b = self.ok("asm_bom")
         self.assertEqual(sorted(p["name"] for p in b["parts"]), ["Pin", "Plate"])

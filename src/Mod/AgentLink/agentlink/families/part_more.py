@@ -19,14 +19,32 @@ V = FreeCAD.Vector
 
 
 def _sew(shape, tol):
-    """Faces joined where they meet within tol mm (the tolerance asked for
-    was quoted back but never given to the sewing)."""
-    if not hasattr(shape, "sewShape"):
-        return
+    """Faces joined where they meet within tol mm. Returns the joined shape.
+
+    sewShape ignores its tolerance on FreeCAD 1.1 (a 0.05 mm gap stays open
+    at 0.1), so when it leaves the shell open the faces are fused with a
+    fuzzy value of tol instead: edges within tol become one, wider gaps stay
+    open."""
+    faces = [f.copy() for f in shape.Faces]
+    if not faces:
+        return shape
+    sew = Part.makeCompound([f.copy() for f in faces])
     try:
-        shape.sewShape(float(tol))
-    except TypeError:
-        shape.sewShape()
+        sew.sewShape(float(tol))
+    except Exception:
+        pass
+    if sew.Shells and all(x.isClosed() for x in sew.Shells):
+        return sew
+    if len(faces) < 2:
+        return sew
+    try:
+        fused = faces[0].multiFuse(faces[1:], float(tol))
+        shell = Part.Shell(fused.Faces)
+        if shell.isClosed() or not sew.Shells:
+            return shell
+    except Exception:
+        pass
+    return sew
 
 
 def bad(msg):
@@ -194,8 +212,7 @@ def tools(s):
             if not sh.isClosed():
                 # Sewn from the loose faces (a compound), not from the shell
                 # makeShell already settled: that one kept its gaps.
-                sew = Part.makeCompound([f.copy() for f in faces])
-                _sew(sew, tol)
+                sew = _sew(Part.makeCompound(faces), tol)
                 if sew.Shells:
                     sh = max(sew.Shells, key=lambda x: len(x.Faces))
             if build == "solid":
@@ -270,7 +287,7 @@ def tools(s):
             sh = solids[0] if len(solids) == 1 else Part.makeCompound(solids)
         elif op == "sew":
             tol = float(a.get("tolerance", 0.01))
-            _sew(sh, tol)
+            sh = _sew(sh, tol)
             try:
                 sh = sh.copy()
                 sh.fix(tol, tol, tol)

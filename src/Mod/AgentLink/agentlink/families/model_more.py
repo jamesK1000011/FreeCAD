@@ -211,6 +211,17 @@ def tools(session):
 
     def part_refine(a):
         o = picks.solid_body(s, a.get("body"))
+        tip = getattr(o, "Tip", None) if o.TypeId == "PartDesign::Body" else None
+        if tip is not None and "Refine" in tip.PropertiesList and not a.get("fix") and not a.get("name"):
+            # A PartDesign Body refines itself: its tip feature's Refine,
+            # so the history stays and the body stays a Body.
+            before = len(o.Shape.Faces)
+            tip.Refine = True
+            doc().recompute()
+            snd = geo.soundness(o.Shape)
+            s.snapshot("part_refine")
+            return {"body": o.Label, "faces": {"before": before, "after": len(o.Shape.Faces)}, "done": [f"Refine turned on for {tip.Label}, the body's tip (it stays parametric)"],
+                    "sound": snd["ok"], **({"problems": snd["problems"]} if not snd["ok"] else {}), "step": len(s.steps)}
         sh = o.Shape
         before = len(sh.Faces)
         tol = float(a.get("tolerance", 0))

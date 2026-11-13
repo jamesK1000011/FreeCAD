@@ -157,7 +157,6 @@ class GapsRedTeam(unittest.TestCase):
             self.assertEqual(h.Mode, "height-turns-growth")
 
     # M10 ---------------------------------------------------------------------
-    @unittest.expectedFailure  # open: a 0.05 mm gap is still left at tolerance 0.1 — sewing to be looked at on a real FreeCAD
     def test_m10_sew_uses_tolerance(self):
         import FreeCAD
         import Part
@@ -168,6 +167,41 @@ class GapsRedTeam(unittest.TestCase):
         add_body(self.session, "M10 faces", Part.makeCompound(faces))
         r = self.ok("part_extract", {"refs": ["M10 faces"], "build": "solid", "tolerance": 0.1, "name": "M10 solid"})
         self.assertEqual(r["solids"], 1)
+        # a gap wider than the tolerance stays a gap
+        faces = [f.copy() for f in box.Faces]
+        faces[0].translate(FreeCAD.Vector(-0.2, 0, 0))
+        add_body(self.session, "M10 wide", Part.makeCompound(faces))
+        self.refused("part_extract", {"refs": ["M10 wide"], "build": "solid", "tolerance": 0.1, "name": "M10 no"})
+
+    # Bodies stay Bodies -------------------------------------------------------
+    def test_pd_body_survives_fix_and_refine(self):
+        self.ok("pd_body_new", {"name": "PB body"})
+        self.ok("pd_primitive", {"body": "PB body", "kind": "box", "size": {"length": 10, "width": 10, "height": 10}})
+        r = self.ok("part_refine", {"body": "PB body"})
+        self.assertEqual(self.obj("PB body").TypeId, "PartDesign::Body")
+        self.assertEqual(r["body"], "PB body")
+        r = self.ok("part_fix", {"body": "PB body", "op": "fix"})
+        out = self.obj(r["body"])
+        self.assertEqual(out.TypeId, "PartDesign::Body")
+        self.assertAlmostEqual(out.Shape.Volume, 1000.0, places=3)
+        old = self.obj("PB body (input)")
+        self.assertEqual(old.TypeId, "PartDesign::Body")
+        self.assertTrue(old.Group, "the old body keeps its features")
+
+    # Links left dangling -------------------------------------------------------
+    def test_unlink_repoints_users(self):
+        import Part
+
+        add_body(self.session, "UL src", Part.makeBox(4, 5, 6))
+        lk = self.session.doc.addObject("App::Link", "Link")
+        lk.LinkedObject = self.obj("UL src")
+        lk.Label = "UL link"
+        m = self.session.doc.addObject("Part::Mirroring", "Mirror")
+        m.Source = lk
+        self.session.doc.recompute()
+        r = self.ok("link_edit", {"action": "unlink", "link": "UL link"})
+        self.assertIs(m.Source, self.obj(r["copy"]))
+        self.assertIn(m.Label, r.get("repointed", []))
 
 if __name__ == "__main__":
     unittest.main()

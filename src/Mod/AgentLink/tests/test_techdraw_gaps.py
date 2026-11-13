@@ -63,15 +63,52 @@ class TechDrawGaps(Base):
 
     def test_3_lines(self):
         v = self.ok("td_view", {"page": "Gaps", "bodies": ["Plate"], "direction": "top", "scale": 1, "at": [80, 60], "name": "G lines"})["view"]
-        self.ok("td_cosmetic", {"view": v, "items": [{"kind": "line", "from": [0, 20, 8], "to": [60, 20, 8]}]})
+        from agentlink.families import techdraw as T
+
+        view = self.session.doc.getObjectsByLabel(v)[0]
+        # a slanted line, so a flipped y would show
+        c = self.ok("td_cosmetic", {"view": v, "items": [{"kind": "line", "from": [0, 10, 8], "to": [60, 30, 8]}]})
+        self.assertEqual(c["native"], 1, "FreeCAD's own cosmetic edge, not only our export's")
+        self.assertEqual(len(view.CosmeticEdges), 1)
+
+        def lands():
+            self.session.doc.recompute()
+            keys = T.cosmetic_keys(view)
+            return any(T.edge_key(e) in keys for e in view.getVisibleEdges())
+
+        self.assertTrue(lands(), "the native edge lies where the figure does")
         x = self.ok("td_lines", {"view": v, "action": "extend", "items": [0], "by": 3})
         self.assertEqual(x["extended"], [0])
+        self.assertEqual(len(view.CosmeticEdges), 1)
+        self.assertTrue(lands())
         self.ok("td_lines", {"view": v, "action": "style", "refs": [{"edge": {"through": [[0, 0, 8], [60, 0, 8]]}}], "style": "dashed", "weight": 0.5})
         t = self.ok("td_lines", {"view": v, "action": "align_v", "refs": [{"point": [0, 0, 8]}, {"point": [60, 40, 8]}]})
         self.assertNotEqual(t["turned"], 0)
         er = self.ok("td_lines", {"view": v, "action": "erase"})
         self.assertEqual(er["left"], 0)
+        self.assertEqual(len(view.CosmeticEdges), 0)
 
+    def test_4_special_lengths_stay_true(self):
+        from agentlink.families import techdraw as T
+
+        v = self.ok("td_view", {"page": "Gaps", "bodies": ["Plate"], "direction": "top", "scale": 1, "at": [200, 60], "name": "G arc"})["view"]
+        view = self.session.doc.getObjectsByLabel(v)[0]
+        arc = next(f"Edge{i}" for i, e in enumerate(T.edges_of(view)) if hasattr(getattr(e, "Curve", None), "Radius"))
+        r = self.ok("td_dim_special", {"view": v, "kind": "arc_length", "refs": [arc]})
+        self.assertIn("31.42", r["text"] if "text" in r else self.session.doc.getObject(r["dimension"]).FormatSpec)
+        # a new scale: the length on the part stays the same
+        view.ScaleType = "Custom"
+        view.Scale = 2
+        self.ok("td_dim_format", {"dims": [r["dimension"]], "decimals": 2})
+        self.assertIn("31.42", self.session.doc.getObject(r["dimension"]).FormatSpec)
+
+        iso = self.ok("td_view", {"page": "Gaps", "bodies": ["Plate"], "direction": "iso", "scale": 1, "at": [200, 200], "name": "G iso"})["view"]
+        iv = self.session.doc.getObjectsByLabel(iso)[0]
+        lines = [(i, e) for i, e in enumerate(T.edges_of(iv)) if e.Curve.__class__.__name__ in ("Line", "LineSegment")]
+        longest = max(lines, key=lambda t: t[1].Length)
+        other = next(t for t in lines if t[0] != longest[0])
+        r = self.ok("td_dim_special", {"view": iso, "kind": "axo_length", "refs": [f"Edge{longest[0]}", f"Edge{other[0]}"]})
+        self.assertIn(self.session.doc.getObject(r["dimension"]).FormatSpec, ("60.00", "40.00"))
 
 if __name__ == "__main__":
     unittest.main()

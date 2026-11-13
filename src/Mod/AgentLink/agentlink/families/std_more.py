@@ -112,11 +112,12 @@ def tools(s):
             sh = Part.getShape(lk)
             o.Shape = sh
             o.Label = s.unique(a.get("name") or src.Label, o)
-            for p in lk.InList:
-                if hasattr(p, "Group") and lk in p.Group:
-                    p.Group = [o if x is lk else x for x in p.Group]
+            # Everything that used the link (groups, features, joints,
+            # expressions) now uses the copy: nothing left dangling.
+            moved = picks.repoint(d(), lk, o)
             d().removeObject(lk.Name)
-            return done("link_edit", {"copy": o.Label, "from": src.Label, "volume": round(sh.Volume, 3) if sh.Solids else None})
+            d().recompute()
+            return done("link_edit", {"copy": o.Label, "from": src.Label, "volume": round(sh.Volume, 3) if sh.Solids else None, **({"repointed": moved} if moved else {})})
         raise bad("action: replace { link, to } | unlink { link } | import { links } | import_all.")
 
     def part_container(a):
