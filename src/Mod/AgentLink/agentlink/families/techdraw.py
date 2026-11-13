@@ -554,6 +554,13 @@ def special_length(v, spec, cache):
         e = es[int(spec["edge"][4:])]
     except Exception:
         return None
+    if spec["kind"] == "arc_length" and spec.get("src"):
+        # Anchored to the part's own arc when it was made: read from the
+        # model, so neither a new scale nor a release that splits the view's
+        # circle differently on the next rebuild (1.0) moves the index.
+        L = model_arc_length(v, spec["src"])
+        if L is not None:
+            return L
     g = gscale(v, cache) or 1.0
     if spec["kind"] == "arc_length":
         if not hasattr(getattr(e, "Curve", None), "Radius"):
@@ -577,6 +584,58 @@ def special_length(v, spec, cache):
         if d < 4 * tol and (best is None or d < best[0]):
             best = (d, ed.Length)
     return best[1] if best else None
+
+
+def _circular_edges(v):
+    src = source_shapes(v)
+    if src is None:
+        return []
+    return [ed for ed in src.Edges if hasattr(getattr(ed, "Curve", None), "Radius") and hasattr(ed.Curve, "Center")]
+
+
+def model_arc_anchor(v, e, cache):
+    """The part's arc a view's arc shows: its centre and radius in 3D and the
+    share of its length the view's arc covers. None when no source arc
+    lands on it."""
+    fr = frame_of(v, cache)
+    if fr is None:
+        return None
+    s = abs(fr[0]) or 1.0
+    try:
+        c2, r2 = e.Curve.Center, float(e.Curve.Radius)
+    except Exception:
+        return None
+    best = None
+    for ed in _circular_edges(v):
+        p = to_view(fr, v, ed.Curve.Center)
+        d = math.hypot(p[0] - c2.x, p[1] - c2.y) + abs(float(ed.Curve.Radius) * s - r2)
+        if best is None or d < best[0]:
+            best = (d, ed)
+    if best is None or best[0] > max(1e-2, 2e-2 * r2) or best[1].Length <= 0:
+        return None
+    ed = best[1]
+    share = (e.Length / s) / ed.Length
+    if not 0 < share <= 1.0 + 1e-3:
+        return None
+    c = ed.Curve.Center
+    return {"center": [c.x, c.y, c.z], "radius": float(ed.Curve.Radius), "share": min(1.0, share)}
+
+
+def model_arc_length(v, src):
+    """The anchored arc's length on the part as the model is now: the arc
+    nearest the anchor's centre (a resized hole keeps its centre), times the
+    share the view showed."""
+    import FreeCAD
+
+    want = FreeCAD.Vector(*src["center"])
+    best = None
+    for ed in _circular_edges(v):
+        d = (ed.Curve.Center - want).Length + 0.1 * abs(float(ed.Curve.Radius) - float(src["radius"]))
+        if best is None or d < best[0]:
+            best = (d, ed)
+    if best is None or best[0] > max(0.5, 0.5 * float(src["radius"])):
+        return None
+    return best[1].Length * float(src["share"])
 
 
 def refresh_special(doc, cache=None):
@@ -2294,6 +2353,9 @@ def tools(session):
                 if not hasattr(getattr(e, "Curve", None), "Radius"):
                     doc().removeObject(d.Name)
                     raise bad(f"{names[0]} is not an arc: refs one curved edge.")
+                anchor = model_arc_anchor(v, e, frames)
+                if anchor:
+                    spec["src"] = anchor
                 vs = vertices_of(v)
                 ends = []
                 for pt in (e.Vertexes[0].Point, e.Vertexes[-1].Point):
