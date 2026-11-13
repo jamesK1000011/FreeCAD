@@ -385,6 +385,8 @@ def tools(session):
         kind = (a.get("type") or "").lower()
         out = []
         for o in s.doc.Objects:
+            if o.Name == "AgentLinkRecords":
+                continue  # Agent Link's own records (setups, specs): bookkeeping, not a part
             if kind and kind not in o.TypeId.lower():
                 continue
             e = {"name": o.Name, "label": o.Label, "type": o.TypeId}
