@@ -67,20 +67,23 @@ class TechDrawGaps(Base):
 
         view = self.session.doc.getObjectsByLabel(v)[0]
         # a slanted line, so a flipped y would show
+        native = T.native_ok()
         c = self.ok("td_cosmetic", {"view": v, "items": [{"kind": "line", "from": [0, 10, 8], "to": [60, 30, 8]}]})
-        self.assertEqual(c["native"], 1, "FreeCAD's own cosmetic edge, not only our export's")
-        self.assertEqual(len(view.CosmeticEdges), 1)
+        self.assertEqual(c["native"], 1 if native else 0, "FreeCAD's own cosmetic edge, not only our export's")
+        self.assertEqual(len(view.CosmeticEdges), 1 if native else 0)
 
         def lands():
             self.session.doc.recompute()
             keys = T.cosmetic_keys(view)
             return any(T.edge_key(e) in keys for e in view.getVisibleEdges())
 
-        self.assertTrue(lands(), "the native edge lies where the figure does")
+        if native:
+            self.assertTrue(lands(), "the native edge lies where the figure does")
         x = self.ok("td_lines", {"view": v, "action": "extend", "items": [0], "by": 3})
         self.assertEqual(x["extended"], [0])
-        self.assertEqual(len(view.CosmeticEdges), 1)
-        self.assertTrue(lands())
+        if native:
+            self.assertEqual(len(view.CosmeticEdges), 1)
+            self.assertTrue(lands())
         self.ok("td_lines", {"view": v, "action": "style", "refs": [{"edge": {"through": [[0, 0, 8], [60, 0, 8]]}}], "style": "dashed", "weight": 0.5})
         t = self.ok("td_lines", {"view": v, "action": "align_v", "refs": [{"point": [0, 0, 8]}, {"point": [60, 40, 8]}]})
         self.assertNotEqual(t["turned"], 0)

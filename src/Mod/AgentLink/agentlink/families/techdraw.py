@@ -618,11 +618,24 @@ def _canon(v, x, y):
     return FreeCAD.Vector(px, py, 0)
 
 
+def native_ok():
+    """FreeCAD 1.0 keeps a removed cosmetic edge in the view's geometry and
+    aborts on the next edge lookup, so FreeCAD's own cosmetic edges are made
+    from 1.1 on only (before it the lines show in td_export only)."""
+    try:
+        major, minor = (int(x) for x in FreeCAD.Version()[:2])
+        return (major, minor) >= (1, 1)
+    except Exception:
+        return False
+
+
 def native_cosmetic(v, prim):
     """FreeCAD's own cosmetic edges for one of td_cosmetic's figures, so it
     shows in the window and in TechDraw's own PDF/SVG export too. Returns the
     edges' tags ([] where this FreeCAD cannot make them)."""
     tags = []
+    if not native_ok():
+        return tags
     style, weight = NATIVE_STYLE.get(prim.get("style", "thin"), (1, 0.18))
     try:
         if prim.get("circle"):
