@@ -227,7 +227,9 @@ class Session:
             return False
 
     def bodies(self):
-        return self.bodies_in(self.doc)
+        # Through the class: extensions call Session.bodies(x) with an object
+        # holding .doc (Collab's own copies of a session).
+        return Session.bodies_in(self.doc)
 
     @classmethod
     def bodies_in(cls, doc):
