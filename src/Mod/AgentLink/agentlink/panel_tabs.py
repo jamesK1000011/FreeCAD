@@ -117,6 +117,13 @@ class Tabs:
 
     # -- setups: how each part is made --
 
+    def _doc_now(self):
+        """The document in front: the tabs fill from it (Panel never had
+        this, so each tab's refresh raised in the window)."""
+        import FreeCAD
+
+        return FreeCAD.ActiveDocument
+
     def _setups_tab(self):
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
