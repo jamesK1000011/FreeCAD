@@ -62,5 +62,7 @@ def wait_until(ready, step=0.5):
         if ready():
             return True
         if read() is None:
-            return False
+            # The window may have come up and taken the mark away between
+            # the two looks: one more try before giving up.
+            return bool(ready())
         time.sleep(step)
