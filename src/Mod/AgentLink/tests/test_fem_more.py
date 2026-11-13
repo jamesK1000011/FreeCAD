@@ -41,7 +41,7 @@ class FemMore(unittest.TestCase):
                 continue
             args = {"kind": kind}
             if kind in ("spring", "rigid_body", "bearing", "gear", "pulley", "plane_rotation", "transform", "section_print", "displacement", "temperature", "heatflux", "fluid_boundary", "flow_velocity",
-                        "electromagnetic", "magnetization", "current_density", "electric_charge_density", "contact", "tie"):
+                        "electromagnetic", "electrostatic_potential", "magnetization", "current_density", "electric_charge_density", "contact", "tie"):
                 args["refs"] = ["Bar.Face2"] if kind not in ("contact", "tie") else ["Bar.Face1", "Bar.Face2"]
             if kind.startswith("mesh_") and kind not in ("mesh_advanced", "mesh_manipulate", "mesh_distance", "mesh_shape"):
                 args["refs"] = ["Bar.Face2"] if "volume" not in kind else ["Bar.Solid1"]

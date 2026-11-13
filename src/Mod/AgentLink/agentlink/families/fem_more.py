@@ -23,6 +23,7 @@ KINDS = {
     "current_density": ("makeConstraintCurrentDensity", None),
     "electric_charge_density": ("makeConstraintElectricChargeDensity", None),
     "electromagnetic": ("makeConstraintElectromagnetic", None),
+    "electrostatic_potential": ("makeConstraintElectrostaticPotential", None),
     "flow_velocity": ("makeConstraintFlowVelocity", None),
     "fluid_boundary": ("makeConstraintFluidBoundary", None),
     "gear": ("makeConstraintGear", None),

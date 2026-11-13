@@ -138,6 +138,23 @@ class MoreFamilies(Base):
         p = self.ok("fea_probe", {"points": [[50, 510, 10]]})
         # beam theory: 20 N × 50 mm × 5 mm / (20 × 10³ / 12) = 3.0 MPa at the top fibre
         self.assertAlmostEqual(p["points"][0]["vonMisesMPa"], 3.0, delta=0.4)
+        # FreeCAD 1.1's post-processing charts, headless.
+        h = self.ok("fea_chart", {"kind": "histogram", "bins": 10})
+        self.assertTrue(os.path.getsize(h["svg"]) > 500)
+        with open(h["csv"]) as f:
+            bins = [ln.split(",") for ln in f.read().strip().splitlines()[1:]]
+        self.assertEqual(len(bins), 10)
+        self.assertEqual(sum(int(b[2]) for b in bins), h["nodes"])
+        self.assertLessEqual(h["median"], h["p95"])
+        self.assertLessEqual(h["p95"], h["max"])
+        ln = self.ok("fea_chart", {"kind": "line", "line": {"from": [0, 510, 10], "to": [100, 510, 10], "samples": 11}})
+        self.assertEqual(ln["samples"], 11)
+        self.assertTrue(os.path.exists(ln["svg"]))
+        t = self.ok("fea_chart", {"kind": "table", "points": [[50, 510, 10], [90, 510, 10]], "field": "displacement"})
+        self.assertEqual(len(t["table"]), 3)
+        self.assertAlmostEqual(t["table"][1][3], p["points"][0]["vonMisesMPa"], delta=1e-6)
+        err, _ = self.call("fea_chart", {"kind": "line"})
+        self.assertTrue(err)
 
     def test_fea_thermal(self):
         self.have("fea_probe")

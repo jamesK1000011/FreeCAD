@@ -1192,6 +1192,73 @@ def tools(session):
         return {"body": r["body"], "files": files, "nodes": len(f["points"]), "elements": len(f.get("elements") or []),
                 "note": "The VTU opens in ParaView (and FreeCAD's FEM post-processing); the CSV has every node."}
 
+    def fea_chart(a):
+        """FreeCAD 1.1's post-processing visualisations (data visualisation,
+        histogram, line plot, table) for the last solve, headless: an SVG
+        chart and a CSV beside it."""
+        import numpy as np
+
+        from .. import charts
+
+        r = _results(s)
+        if not r or "field" not in r:
+            raise ToolError("not_found", "No solve to read: fea_solve first.")
+        kind = a.get("kind", "histogram")
+        field = a.get("field", "vonMises")
+        if field not in ("vonMises", "displacement"):
+            raise ToolError("invalid_input", "field: vonMises (MPa) or displacement (mm, its size).")
+        unit = "MPa" if field == "vonMises" else "mm"
+        f = r["field"]
+        vals = np.asarray(f["vonMises"], float) if field == "vonMises" else np.linalg.norm(np.asarray(f["displacement"], float), axis=1)
+        base = "".join(ch if ch.isalnum() else "_" for ch in (a.get("name") or f"{r['body']}-{field}-{kind}"))
+        os.makedirs(s.out_dir, exist_ok=True)
+        svg_path, csv_path = os.path.join(s.out_dir, base + ".svg"), os.path.join(s.out_dir, base + ".csv")
+        label = "von Mises stress (MPa)" if field == "vonMises" else "displacement (mm)"
+        out = {"body": r["body"], "kind": kind, "field": field, "unit": unit, "nodes": int(len(vals))}
+        if kind == "histogram":
+            bins = int(a.get("bins", 20))
+            if not 2 <= bins <= 200:
+                raise ToolError("invalid_input", "bins: 2 … 200.")
+            counts, edges = np.histogram(vals, bins=bins)
+            mids = [round(float((edges[i] + edges[i + 1]) / 2), 4) for i in range(bins)]
+            text = charts.svg([{"name": "nodes", "values": [int(c) for c in counts]}], x=mids, kind="bar", title=a.get("title") or f"{r['body']}: {label}",
+                              xlabel=label, ylabel="nodes")
+            rows = [["from", "to", "nodes"]] + [[round(float(edges[i]), 4), round(float(edges[i + 1]), 4), int(counts[i])] for i in range(bins)]
+            pct = np.percentile(vals, [50, 95, 99]) if len(vals) else [0, 0, 0]
+            out.update({"bins": bins, "min": round(float(vals.min()), 4), "max": round(float(vals.max()), 4),
+                        "median": round(float(pct[0]), 4), "p95": round(float(pct[1]), 4), "p99": round(float(pct[2]), 4)})
+        elif kind in ("line", "table"):
+            if kind == "line" and not a.get("line"):
+                raise ToolError("invalid_input", "line { from: [x,y,z], to: [x,y,z], samples }: the line to plot along, mm.")
+            if kind == "table" and not (a.get("line") or a.get("points")):
+                raise ToolError("invalid_input", "points [[x,y,z] …] or line { from, to, samples }: where to read the table.")
+            pr = fea_probe({k: a[k] for k in ("line", "points") if a.get(k)})
+            got = pr.get("line") or pr.get("points") or []
+            key = "vonMisesMPa" if field == "vonMises" else "displacementMm"
+            rows = [["x", "y", "z", "vonMisesMPa", "displacementMm", "nearestNodeMm"]] + [g["at"] + [g["vonMisesMPa"], g["displacementMm"], g["nearestNodeMm"]] for g in got]
+            text = None
+            if kind == "line" or a.get("line"):
+                p0 = np.asarray(a["line"]["from"], float) if a.get("line") else None
+                dist = [round(float(np.linalg.norm(np.asarray(g["at"], float) - p0)), 3) for g in got] if p0 is not None else list(range(len(got)))
+                text = charts.svg([{"name": label, "values": [g[key] for g in got]}], x=dist, kind="line", title=a.get("title") or f"{r['body']}: {label} along the line",
+                                  xlabel="distance along the line (mm)", ylabel=label)
+            out["samples"] = len(got)
+            out["max"] = max((g[key] for g in got), default=None)
+            if pr.get("warning"):
+                out["warning"] = pr["warning"]
+            if kind == "table" and len(got) <= 25:
+                out["table"] = rows
+        else:
+            raise ToolError("invalid_input", "kind: histogram (field over every node) | line (along line { from, to, samples }) | table (points or a line, as CSV).")
+        with open(csv_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(",".join(str(c) for c in row) for row in rows) + "\n")
+        out["csv"] = csv_path
+        if text:
+            with open(svg_path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            out["svg"] = svg_path
+        return out
+
     def fea_probe(a):
         """Values of the last solve where asked: points, along a line, or over faces."""
         import numpy as np
@@ -1564,6 +1631,9 @@ def tools(session):
              obj({"faces": {}, "size": {"type": "number"}, "clear": {"type": "boolean"}}), fea_refine, changes=True),
         Tool("fea_probe", "Read the last solve where asked: points [[x,y,z] …] (von Mises and displacement there), line { from, to, samples } (a profile along it), faces (a query as fea_hold takes: max, mean and where on them). Changes nothing.",
              obj({"points": {"type": "array", "items": {}}, "line": {"type": "object"}, "faces": {}}), fea_probe),
+        Tool("fea_chart", "The last solve as FreeCAD's FEM post-processing charts, headless: kind histogram (field over every node, bins 20: an SVG bar chart, the CSV of the bins, min, median, p95, p99, max) | line (along line { from, to, samples } mm: an SVG line plot and CSV) | table (points [[x,y,z] …] or a line: a CSV, and the rows in the answer when 25 or fewer). field vonMises (MPa, default) or displacement (mm). name, title. Files go to the out folder. Changes nothing in the document.",
+             obj({"kind": {"type": "string", "enum": ["histogram", "line", "table"]}, "field": {"type": "string", "enum": ["vonMises", "displacement"]}, "bins": {"type": "integer"},
+                  "line": {"type": "object"}, "points": {"type": "array", "items": {}}, "name": {"type": "string"}, "title": {"type": "string"}}), fea_chart),
         Tool("fea_export", "Write the last solve out: formats [vtu (ParaView, FreeCAD FEM post-processing), csv (every node: position, von Mises, displacement)], name.",
              obj({"formats": {"type": "array", "items": {"type": "string"}}, "name": {"type": "string"}}), fea_export),
         Tool("fea_native", "Build the study as FreeCAD's own FEM analysis (Analysis, solver, material, Gmsh mesh, fixed / force / pressure / self-weight constraints), to open and run in the FEM workbench. solver elmer (multiphysics) takes equations [elasticity, heat, flow, electrostatic, electricforce, flux, staticcurrent, magnetodynamic, deformation (nonlinear elasticity)] together, temperatures [{ faces, celsius }] and heat [{ faces, watts }] for heat, potentials [{ faces, volts }] for electrostatics; with flow the body is the fluid's space (fluid air | water; inlets and walls are set in the FEM workbench); write: true meshes it and writes Elmer's case (case.sif), run: true solves it where ElmerSolver is installed.",
