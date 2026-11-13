@@ -639,9 +639,14 @@ def native_cosmetic(v, prim):
     for t in tags:
         try:
             ce = v.getCosmeticEdge(t)
-            fm = list(ce.Format)
-            fm[0], fm[1] = style, weight
-            ce.Format = tuple(fm)
+            fm = ce.Format
+            if isinstance(fm, dict):  # 1.0: {style, weight, color, visible}
+                fm = dict(fm, style=style, weight=weight)
+            else:
+                fm = list(fm)
+                fm[0], fm[1] = style, weight
+                fm = tuple(fm)
+            ce.Format = fm
         except Exception:
             pass
     return tags
