@@ -156,6 +156,7 @@ tests/_pd_base.py
 tests/test_app_install.py
 tests/test_assembly.py
 tests/test_assembly_more.py
+tests/test_batch_rollback.py
 tests/test_bim_gaps.py
 tests/test_cam.py
 tests/test_cam_more.py

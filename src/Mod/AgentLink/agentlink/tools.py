@@ -984,26 +984,48 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
             raise ToolError("not_found", f"No tool named {'; '.join(hints)} — nothing was run. tool_groups lists them all.")
         rollback = a.get("rollback", True)
         stop = a.get("stopOnError", True)
-        mark = s.doc.UndoCount
+        for i, c in enumerate(calls):
+            if c["tool"] == "batch":
+                raise ToolError("invalid_input", f"calls.{i}: a batch does not run another batch. Nothing was run.")
+            if rollback and c["tool"] in ("history_undo", "history_redo", "history_restore"):
+                raise ToolError("invalid_input", f"calls.{i}: {c['tool']} inside a batch that rolls back can't be taken back by undo — call it on its own, or rollback: false. Nothing was run.")
+        # Rolled back by counting the undo steps the batch made, not by the
+        # undo count: FreeCAD keeps 20 steps by default, and once the stack
+        # is full each new step pushes the oldest off, so the count stops
+        # moving and a rollback by it undid nothing while saying it had.
+        limit = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Document").GetInt("MaxUndoSize", 20) if FreeCAD else 20
+        changing = sum(1 for c in calls if getattr(server.tools.get(c["tool"]), "changes", False))
+        if rollback and changing > limit:
+            raise ToolError("invalid_input", f"{changing} changing calls, but FreeCAD keeps only {limit} undo steps, so the batch could not be taken back whole: split it, or rollback: false. Nothing was run.")
+        start = s.doc
+        made = 0
         results = []
         for i, c in enumerate(calls):
-            if c.get("tool") == "batch":
-                raise ToolError("invalid_input", f"calls.{i}: a batch does not run another batch.")
+            doc = s.doc
+            u0 = doc.UndoCount if doc is not None else 0
             r = server.call({"name": c["tool"], "arguments": c["arguments"]})
 
             body = _json.loads(r["content"][0]["text"])
             ok = not r.get("isError")
+            if ok and doc is start and s.doc is start:
+                d = start.UndoCount - u0
+                made += d if d > 0 else (1 if u0 >= limit and getattr(server.tools.get(c["tool"]), "changes", False) else 0)
             results.append({"tool": c.get("tool"), "ok": ok, **({"result": body} if ok else {"error": body.get("error")})})
             if not ok and stop:
                 out = {"results": results, "stopped": i}
                 if rollback:
                     undone = 0
-                    while s.doc.UndoCount > mark:
-                        s.doc.undo()
+                    while undone < made and start.UndoCount > 0:
+                        start.undo()
                         undone += 1
-                    s.doc.recompute()
-                    s.snapshot("batch rolled back")
+                    start.recompute()
+                    if s.doc is start:
+                        s.snapshot("batch rolled back")
                     out["undone"] = undone
+                    if s.doc is not start:
+                        out["warning"] = f"The batch moved to another document ({s.doc.Label if s.doc else 'none'}): only {start.Label}'s steps were taken back; what was done there stays."
+                    elif undone < made:
+                        out["warning"] = f"Only {undone} of {made} steps could be taken back (FreeCAD's undo stack): the rest stay."
                 return out
         return {"results": results, "ran": len(results)}
 
