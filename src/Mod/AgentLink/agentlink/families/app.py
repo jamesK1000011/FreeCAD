@@ -121,6 +121,8 @@ def _carry_settings(app):
 
 
 ROOT = "User parameter:"
+# Settings this FreeCAD set for its own sake, kept over an imported file's.
+_KEEP = [("BaseApp/Preferences/NotificationArea", "NonIntrusiveNotificationsEnabled")]
 # Commands that would hold the window (modal dialogs) or end the session.
 REFUSED = {
     "Std_DlgPreferences": "pref_get / pref_set read and write the same settings",
@@ -645,6 +647,54 @@ def tools(session):
         p = subprocess.Popen([py, "-I", job, version, state], start_new_session=True, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         return {"started": True, "pid": p.pid, "version": version, "note": "Downloading FreeCAD's official disk image from its GitHub release, SHA-256 checked against the release's; the FreeCAD.app there now is kept under its version's name. app_install with no arguments follows it (a few minutes)."}
 
+    def pref_import(a):
+        """Merge another settings file (the release before this one's, by
+        default) into this FreeCAD's settings; this one's kept first."""
+        import shutil
+        import time
+
+        src = a.get("path")
+        if not src:
+            cfg = FreeCAD.getUserConfigDir().rstrip("/")
+            tries = [os.path.join(os.path.dirname(cfg), "user.cfg")]
+            AD = getattr(FreeCAD, "ApplicationDirectories", None)
+            if AD is not None:
+                try:
+                    if not AD.usingCurrentVersionConfig(cfg):
+                        tries = []
+                except Exception:
+                    pass
+            src = next((t for t in tries if os.path.exists(t)), None)
+            if not src:
+                raise ToolError("not_found", "No earlier release's settings beside this one's (" + cfg + "): give path: a user.cfg.")
+        src = os.path.expanduser(src)
+        if not os.path.isfile(src):
+            raise ToolError("not_found", "No settings file at " + src)
+        backup = os.path.join(os.path.expanduser("~"), "AgentLink", "prefs-backup-%d.cfg" % int(time.time()))
+        os.makedirs(os.path.dirname(backup), exist_ok=True)
+        root = FreeCAD.ParamGet(ROOT)
+        root.Export(backup)
+        keep = {}
+        for path, name in _KEEP:
+            g = FreeCAD.ParamGet(ROOT + path)
+            if name in g.GetBools():
+                keep[(path, name)] = g.GetBool(name)
+        root.Insert(src)
+        for (path, name), v in keep.items():
+            FreeCAD.ParamGet(ROOT + path).SetBool(name, v)
+        FreeCAD.saveParameter()
+        copied = []
+        if a.get("macros", True):
+            new_mac = os.path.join(FreeCAD.getUserAppDataDir(), "Macro")
+            old_mac = os.path.join(os.path.dirname(FreeCAD.getUserAppDataDir().rstrip("/")), "Macro")
+            if os.path.isdir(old_mac) and os.path.realpath(old_mac) != os.path.realpath(new_mac):
+                os.makedirs(new_mac, exist_ok=True)
+                for n in os.listdir(old_mac):
+                    if os.path.isfile(os.path.join(old_mac, n)) and not os.path.exists(os.path.join(new_mac, n)):
+                        shutil.copy2(os.path.join(old_mac, n), os.path.join(new_mac, n))
+                        copied.append(n)
+        return {"from": src, "backup": backup, "kept": {"/".join(k): v for k, v in keep.items()}, "macros": copied, "note": "Merged: the file's values win, this one's other settings stay. Some (theme, toolbars) show after app_restart. pref_import { path: backup } puts this back."}
+
     return [
         Tool("app_install", "Install another FreeCAD release beside this one on a Mac: version (\"1.1.3\", \"latest\") from FreeCAD's GitHub release, SHA-256 checked; the current FreeCAD.app kept as \"FreeCAD <version>.app\". Runs in the background: no arguments reads its progress. Then app_restart { app } switches the window over; with the window closed, open: an .app carries settings over and opens it.",
              obj({"version": {"type": "string"}, "open": {"type": "string"}}), app_install, changes=False),
@@ -652,6 +702,8 @@ def tools(session):
              obj({"path": {"type": "string"}, "name": {"type": "string"}}), pref_get),
         Tool("pref_set", "Change FreeCAD's settings: path, then name + value or values { name: value }; the type follows the setting's own (or type: bool, int, uint, float, string). Says what each was.",
              obj({"path": {"type": "string"}, "name": {"type": "string"}, "value": {}, "values": {"type": "object"}, "type": {"type": "string"}}), pref_set, changes=True),
+        Tool("pref_import", "Bring settings over from another file: by default the release before this one's user.cfg (after a FreeCAD upgrade), or path. Merged in, the file's values winning; this FreeCAD's settings exported to a backup first; macros the new one lacks copied too (macros: false not).",
+             obj({"path": {"type": "string"}, "macros": {"type": "boolean"}}), pref_import),
         Tool("pref_reset", "Take settings back to FreeCAD's defaults: path, names.", obj({"path": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}}, ["names"]), pref_reset),
         Tool("pref_pack", "Preference packs (themes and their settings, the Studio packs among them): list them, or apply: name to set its values.", obj({"apply": {"type": "string"}}), pref_pack, changes=True),
         Tool("cmd_list", "FreeCAD's commands (every toolbar button and menu item is one), with menu text, tip and shortcut; query filters by name or words. Window only.",

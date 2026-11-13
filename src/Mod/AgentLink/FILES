@@ -197,6 +197,7 @@ tests/test_panel_tabs.py
 tests/test_param.py
 tests/test_parts.py
 tests/test_paths.py
+tests/test_pref_import.py
 tests/test_printer.py
 tests/test_printmass.py
 tests/test_protocol.py
