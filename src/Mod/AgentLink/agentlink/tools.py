@@ -904,9 +904,10 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
             on |= set(a.get("enable") or [])
             on -= set(a.get("disable") or []) - {"core"}
             server.set_groups(on)
-        # Names of every tool on every call cost ~6k tokens: the tools of the
-        # groups just changed or asked about (group, or detail: true for all).
-        shown = set(a.get("enable") or []) | set(a.get("disable") or [])
+        # Names of every tool on every call cost ~6k tokens: a group's tools
+        # only when asked (group, or detail: true for all); the client lists
+        # what an enable added on its own.
+        shown = set()
         if a.get("group"):
             shown.add(a["group"])
         if a.get("detail"):
