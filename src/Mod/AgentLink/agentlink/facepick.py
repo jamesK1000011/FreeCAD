@@ -78,6 +78,16 @@ def pick(shape, q, what="faces"):
                 out.append((name, f))
         if q.get("largest") and out:
             out = [max(out, key=lambda t: t[1].Area)]
+        # normal with near: the faces that way, the nearest of them (or those
+        # within radius) — near was ignored once normal had picked, so an
+        # outside wall came with the inside one facing the same way.
+        if "near" in q and out:
+            vx = Part.Vertex(_vec(q["near"], f"{what}.near"))
+            dd = sorted(((vx.distToShape(f)[0], n, f) for n, f in out), key=lambda t: t[0])
+            if "radius" in q:
+                out = [(n, f) for d, n, f in dd if d <= float(q["radius"])]
+            else:
+                out = [(n, f) for d, n, f in dd if d <= dd[0][0] + 1e-6]
         if not out:
             raise ToolError("not_found", f"{what}: no flat face faces {list(q['normal'])}" + (" at that plane" if any(a in q for a in "xyz") else "") + " — session_state gives the box; or pick with near.")
         return out
