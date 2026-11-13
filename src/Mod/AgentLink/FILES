@@ -44,6 +44,7 @@ agentlink/families/electronics.py
 agentlink/families/embed.py
 agentlink/families/feature.py
 agentlink/families/feature_more.py
+agentlink/families/fem_more.py
 agentlink/families/ifc.py
 agentlink/families/inspection.py
 agentlink/families/mass.py
@@ -169,6 +170,7 @@ tests/test_embed.py
 tests/test_ext.py
 tests/test_feature.py
 tests/test_feature_more.py
+tests/test_fem_more.py
 tests/test_files.py
 tests/test_fitting.py
 tests/test_flat2d.py

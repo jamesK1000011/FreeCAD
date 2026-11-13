@@ -52,6 +52,7 @@ def tools(s):
         return o
 
     def reading(o):
+        d().recompute()
         sh = getattr(o, "Shape", None)
         if sh is None or sh.isNull():
             return {}

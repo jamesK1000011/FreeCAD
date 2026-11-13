@@ -43,11 +43,11 @@ class TechDrawGaps(Base):
         self.ok("td_dim_format", {"dims": [h["dimension"]], "prefix": "diameter"})
         e = self.ok("td_dim_special", {"view": v, "kind": "extent_h"})
         self.assertAlmostEqual(e["measured"], 60, delta=0.1)
-        w2 = self.dim(v, [0, 40, 8], [30, 40, 8])
+        w2 = self.dim(v, [0, 40, 8], [60, 40, 8])
         a = self.ok("td_dim_align", {"dims": [w["dimension"], w2["dimension"]], "direction": "horizontal"})
         self.assertEqual(a["dims"][0]["at"][1], a["dims"][1]["at"][1])
-        r = self.ok("td_dim_repair", {"dimension": w2["dimension"], "refs": [{"point": [0, 40, 8]}, {"point": [60, 40, 8]}]})
-        self.assertAlmostEqual(r["measured"], 60, delta=0.05)
+        r = self.ok("td_dim_repair", {"dimension": h["dimension"], "refs": [{"point": [0, 0, 8]}, {"point": [0, 40, 8]}]})
+        self.assertAlmostEqual(r["measured"], 40, delta=0.05)
 
     def test_2_views(self):
         v = self.ok("td_view", {"page": "Gaps", "bodies": ["Plate"], "direction": "front", "scale": 1, "at": [200, 120], "name": "G front"})["view"]
