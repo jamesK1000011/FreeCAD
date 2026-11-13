@@ -945,15 +945,28 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
             shown.add(a["group"])
         if a.get("detail"):
             shown = set(groups)
+        # The overview was ~3,500 tokens: every group's full "about" on
+        # every call. A listed group's tools are already in front of the
+        # agent, so it gets its count; one not listed gets a short about
+        # (what it is for), and the whole text with group: g.
+        def short(t, n=110):
+            t = t or ""
+            if len(t) <= n:
+                return t
+            cut = t[:n].rsplit(" ", 1)[0].rstrip(",;:(")
+            return cut + " …"
+
         rows = []
         for g in groups:
             ts = sorted(t.name for t in server.tools.values() if t.group == g)
-            row = {"group": g, "on": g in on, "count": len(ts), "about": info.get(g, "")}
             if g in shown:
-                row["tools"] = ts
-            rows.append(row)
+                rows.append({"group": g, "on": g in on, "count": len(ts), "about": info.get(g, ""), "tools": ts})
+            elif g in on:
+                rows.append({"group": g, "on": True, "count": len(ts)})
+            else:
+                rows.append({"group": g, "on": False, "count": len(ts), "about": short(info.get(g, ""))})
         return {"groups": rows, "listed": sum(1 for t in server.tools.values() if server.groups is None or t.group in server.groups),
-                "note": "Every tool is callable by name, listed or not. group: g (or detail: true) names a group's tools."}
+                "note": "Every tool is callable by name, listed or not. group: g (or detail: true) gives a group's whole about and its tools."}
 
     def guide_read(a):
         topic = a.get("topic")

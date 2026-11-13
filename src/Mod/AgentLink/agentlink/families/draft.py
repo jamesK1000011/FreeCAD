@@ -585,7 +585,15 @@ def tools(session):
         have = fonts()
         q = (a.get("name") or "").lower()
         hit = [f for f in have if q in os.path.basename(f).lower()] if q else have
-        return {"fonts": [{"name": os.path.basename(f), "path": f} for f in hit[:60]], "found": len(hit), "default": os.path.basename(font_file(None)) if have else None}
+        # Names only (font takes a name), 25 at a time: 60 names with full
+        # paths were ~1,700 tokens. name: filters; paths: true adds them.
+        lim = int(a.get("limit", 25))
+        out = {"fonts": [os.path.basename(f) for f in hit[:lim]], "found": len(hit), "default": os.path.basename(font_file(None)) if have else None}
+        if a.get("paths"):
+            out["paths"] = hit[:lim]
+        if len(hit) > lim:
+            out["more"] = f"{len(hit) - lim} more: name filters (\"Sans\"), limit raises it."
+        return out
 
     def surface_fill(a):
         edges = []
@@ -765,7 +773,7 @@ def tools(session):
         Tool("texture_check", "Check a textured STL against the body it was made from, face by face: on each face the texture was for, the share of points moved and how deep (p95, out, into); leaked — faces meant to stay plain that moved (a mating face, a datum); bare — faces meant for texture that barely moved; and whether the mesh is closed. path: the textured STL; mask: texture_prepare's -mask.json (found beside it by name); tolerance as texture_prepare used. verdict ok or check. Changes nothing.",
              obj({"body": {"type": "string"}, "path": {"type": "string"}, "mask": {"type": "string"}, "tolerance": {"type": "number"}, "flat": {"type": "number", "description": "mm a point may move and count as unmoved (0.01)."}, "reach": {"type": "number"}}, ["path"]),
              texture_check),
-        Tool("draft_fonts", "The TrueType fonts on this computer (name filters), and the one draft_text takes by default.", obj({"name": {"type": "string"}}), draft_fonts),
+        Tool("draft_fonts", "The TrueType fonts on this computer by name (name filters; limit, 25; paths: true adds their paths), and the one draft_text takes by default.", obj({"name": {"type": "string"}, "limit": {"type": "integer"}, "paths": {"type": "boolean"}}), draft_fonts),
         Tool("surface_loft", "A surface through curves in order — edges (\"Body.Edge3\"), sketches, or { points: [[x,y,z] …], closed } for a smooth curve through them: open curves make a sheet, closed ones a tube. ruled for straight lines between; thickness mm makes it a solid (side out, in or both). A curved panel, a duct, a shell for an organic shape.",
              obj({"curves": {"type": "array", "items": {}}, "body": {"type": "string"}, "ruled": {"type": "boolean"}, "closed": {"type": "boolean"}, "thickness": {"type": "number"}, "side": {"type": "string", "enum": ["out", "in", "both"]}, "name": {"type": "string"}}, ["curves"]), surface_loft, changes=True),
         Tool("surface_points", "A smooth surface through a grid of points, row by row (rows: [[[x,y,z] …] …], every row the same length) — through every point, or within tolerance mm of them for a smoother one; answers how far the farthest point is. thickness makes it a solid. Points measured off a real thing, a shape from numbers.",
