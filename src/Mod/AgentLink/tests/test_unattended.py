@@ -134,6 +134,19 @@ class Unattended(Base):
         self.assertTrue(os.path.isfile(ok["previousFile"]))
         self.assertEqual(self.ok("dialog_answer")["dialog"], None)
 
+    def test_8_settings_logged_and_snapshotted(self):
+        from agentlink import keep
+
+        r = self.ok("pref_set", {"path": "BaseApp/Preferences/Mod/AgentLinkTest", "name": "Probe", "value": 3})
+        self.assertIn("Probe", r["set"])
+        h = self.ok("pref_history", {"limit": 5})["changes"]
+        self.assertEqual((h[0]["tool"], h[0]["name"], h[0]["to"]), ("pref_set", "Probe", 3))
+        snaps = os.listdir(keep.path("settings"))
+        self.assertTrue(snaps)
+        if not os.environ.get("AGENTLINK_SUPERVISED"):
+            self.assertEqual(self.refused("pref_rollback", {"to": h[0]["change"]})["code"], "unavailable")
+        self.assertEqual(self.refused("pref_rollback", {"to": 99999})["code"], "not_found")
+
 
 if __name__ == "__main__":
     unittest.main()

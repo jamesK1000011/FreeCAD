@@ -30,6 +30,11 @@ FAKE_HIDDEN = textwrap.dedent('''
             time.sleep(3600)
         if name == "crash":
             os._exit(3)
+        if name == "settings_restart":
+            json.dump({"why": "settings"}, open(os.path.join(home, ".hidden-restart"), "w"))
+            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"content": [{"type": "text", "text": json.dumps({"rolledBackTo": "x"})}]}}) + "\\n")
+            sys.stdout.flush()
+            os._exit(0)
         body = {"recovered": [{"label": "Bracket", "source": "autosave", "time": "now", "lost": "about 1 min of changes lost"}]} if name == "app_recover" else {"ok": name}
         sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"content": [{"type": "text", "text": json.dumps(body)}]}}) + "\\n")
         sys.stdout.flush()
@@ -149,6 +154,11 @@ class Hidden(Sup):
         err, out = self.call("hang", timeout=5)
         self.assertTrue(err)
         self.assertIn("hung FreeCAD twice", out["error"]["message"])
+
+    def test_settings_restart_is_quiet(self):
+        self.assertEqual(self.call("settings_restart")[1], {"rolledBackTo": "x"})
+        self.assertEqual(self.call("ping")[1], {"ok": "ping"})
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".hidden-restart")))
 
     def test_crash_is_recovered(self):
         err, out = self.call("crash")

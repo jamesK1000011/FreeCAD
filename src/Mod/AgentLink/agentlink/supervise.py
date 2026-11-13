@@ -317,6 +317,7 @@ def run(script, argv):
     os.dup2(2, 1)
     lock = threading.Lock()
     pending = {}
+    lines = {}  # id -> the line, for a quiet restart to send again
     inflight = {}  # hidden: id -> {tool, args, start}
     hangs = {}  # call key -> times it hung
     deaths = []
@@ -350,6 +351,7 @@ def run(script, argv):
                     continue
                 if mid is not None:
                     pending.pop(mid, None)
+                    lines.pop(mid, None)
                     if inflight.pop(mid, None) is not None:
                         state["last_reply"] = time.time()
                 write(line)
@@ -366,6 +368,28 @@ def run(script, argv):
         state["child"].stdin.flush()
 
     def died(code):
+        quiet = keep is not None and os.path.exists(keep.path(".hidden-restart"))
+        if quiet and code == 0:
+            # Asked for (a settings rollback with the window closed): started
+            # again without a word; nothing was in hand.
+            try:
+                os.remove(keep.path(".hidden-restart"))
+            except OSError:
+                pass
+            start()
+            try:
+                send_child(json.dumps({"jsonrpc": "2.0", "id": "__restart", "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "agentlink-supervisor", "version": "1"}}}))
+                send_child(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+                # It left right after its answer: calls queued behind it never
+                # ran, so they go to the fresh one.
+                for mid in list(pending):
+                    if mid in lines:
+                        if mid in inflight:
+                            inflight[mid]["start"] = time.time()
+                        send_child(lines[mid])
+            except OSError:
+                pass
+            return
         hang = state.pop("hang", None)
         state["hang"] = None
         why = f"stopped by signal {-code}" if code < 0 else f"exited with code {code}"
@@ -413,6 +437,7 @@ def run(script, argv):
             write(json.dumps({"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": json.dumps({"error": {"code": "failed", "message": msg}})}], "isError": True} if method == "tools/call" else {}}))
         pending.clear()
         inflight.clear()
+        lines.clear()
 
     window = Window(write)
 
@@ -485,6 +510,7 @@ def run(script, argv):
         if msg and msg.get("method") == "tools/call":
             mid, tool, args = _call_info(line)
             inflight[mid] = {"tool": tool, "args": args, "start": time.time()}
+            lines[mid] = line
         try:
             send_child(line)
         except OSError:

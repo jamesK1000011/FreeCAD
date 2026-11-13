@@ -109,6 +109,23 @@ def main(argv=None):
             except Exception:
                 pass
 
+        how = getattr(session, "exit_after_reply", None)
+        if how and supervised:
+            # A settings rollback with the window closed: start again on the
+            # settings file as it now is. The supervisor sees the mark and
+            # starts this FreeCAD again quietly.
+            try:
+                from . import keep
+
+                keep._save(keep.path(".hidden-restart"), {"why": "settings"})
+                if how != "nosave":
+                    import FreeCAD
+
+                    FreeCAD.saveParameter()
+            except Exception:
+                pass
+            os._exit(0)
+
     serve_lines(server, sys.stdin.readline, write)
     return 0
 
