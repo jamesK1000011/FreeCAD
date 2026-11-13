@@ -204,6 +204,7 @@ tests/test_slicer_presets.py
 tests/test_std_more.py
 tests/test_strength.py
 tests/test_techdraw.py
+tests/test_techdraw_gaps.py
 tests/test_theme.py
 tests/test_thread.py
 tests/test_threemf.py
