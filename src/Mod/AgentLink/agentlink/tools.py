@@ -904,7 +904,22 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
             on |= set(a.get("enable") or [])
             on -= set(a.get("disable") or []) - {"core"}
             server.set_groups(on)
-        return {"groups": [{"group": g, "on": g in on, "tools": sorted(t.name for t in server.tools.values() if t.group == g), "about": info.get(g, "")} for g in groups], "note": "Every tool is callable by name, listed or not."}
+        # Names of every tool on every call cost ~6k tokens: the tools of the
+        # groups just changed or asked about (group, or detail: true for all).
+        shown = set(a.get("enable") or []) | set(a.get("disable") or [])
+        if a.get("group"):
+            shown.add(a["group"])
+        if a.get("detail"):
+            shown = set(groups)
+        rows = []
+        for g in groups:
+            ts = sorted(t.name for t in server.tools.values() if t.group == g)
+            row = {"group": g, "on": g in on, "count": len(ts), "about": info.get(g, "")}
+            if g in shown:
+                row["tools"] = ts
+            rows.append(row)
+        return {"groups": rows, "listed": sum(1 for t in server.tools.values() if server.groups is None or t.group in server.groups),
+                "note": "Every tool is callable by name, listed or not. group: g (or detail: true) names a group's tools."}
 
     def guide_read(a):
         topic = a.get("topic")
@@ -1029,7 +1044,7 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
     core = [
         Tool("usage_report", "What working through Agent Link has cost the agent, estimated on this side: calls, tokens (text at ~3.5 characters a token, pictures by size) and the tool list each session loads up front — per day over days (7), per session, the costliest tools, and tips to cut it. session: true gives this session alone. Not Claude's own count: the plan's usage page has that. Changes nothing.",
              obj({"days": {"type": "integer", "minimum": 1, "maximum": 60}, "session": {"type": "boolean"}}), usage_report),
-        Tool("tool_groups", "The tool groups, which are listed and what each holds; enable / disable: [group …] lists or hides them (core stays). Every tool is callable by name either way.", obj({"enable": {"type": "array", "items": {"type": "string"}}, "disable": {"type": "array", "items": {"type": "string"}}}), tool_groups),
+        Tool("tool_groups", "The tool groups, which are listed and what each holds (count, about); enable / disable: [group …] lists or hides them (core stays); group: g, or detail: true, names their tools. Every tool is callable by name either way.", obj({"enable": {"type": "array", "items": {"type": "string"}}, "disable": {"type": "array", "items": {"type": "string"}}, "group": {"type": "string"}, "detail": {"type": "boolean"}}), tool_groups),
         Tool("guide_read", "How to do a task with these tools: the workflow and the traps the tools' own descriptions do not carry. No topic: the index. topic: a guide whole; section: one of its ## sections.", obj({"topic": {"type": "string"}, "section": {"type": "string"}}), guide_read),
         Tool("batch", "Run several tools in one call, in order: calls [{ tool, arguments }]. The first refused stops the rest (stopOnError: false runs them all), and with rollback (the default) undoes what the batch changed before it, so it stands or falls whole.", obj({"calls": {"type": "array", "items": {"type": "object"}}, "rollback": {"type": "boolean"}, "stopOnError": {"type": "boolean"}}, ["calls"]), batch),
         Tool("history_undo", "Undo the last change (steps: how many), as FreeCAD's Edit › Undo does.", obj({"steps": {"type": "integer"}}), history("undo")),
