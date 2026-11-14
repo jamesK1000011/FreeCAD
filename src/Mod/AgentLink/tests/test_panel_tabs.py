@@ -52,7 +52,11 @@ class NarrowPanel(unittest.TestCase):
     def setUpClass(cls):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         QW = panel_tabs.QtWidgets
-        cls.app = QW.QApplication.instance() or QW.QApplication([])
+        app = QW.QApplication.instance()
+        if app is not None and not isinstance(app, QW.QApplication):
+            # FreeCAD without its window runs a QCoreApplication: no widgets there.
+            raise unittest.SkipTest("a Qt core application is running (FreeCAD headless): no widgets")
+        cls.app = app or QW.QApplication([])
 
     def test_flow_row_wraps(self):
         QW = panel_tabs.QtWidgets
