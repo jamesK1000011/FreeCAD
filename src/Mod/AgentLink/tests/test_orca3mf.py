@@ -222,6 +222,8 @@ class Project(unittest.TestCase):
         self.assertIn(1, pr.ranges())  # tall is first now
 
     def test_namespaces_kept(self):
+        # Another module taking the default prefix must not cost ours.
+        ET.register_namespace("", "http://www.w3.org/2000/svg")
         pr = O.Project(self.p)
         pr.set_object(1, "wall_loops", 3)
         pr.save()

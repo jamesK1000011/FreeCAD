@@ -1695,6 +1695,10 @@ def invert(m):
 
 
 def _xml(root):
+    # Other modules register namespaces too (one taking the default prefix
+    # drops ours): ours again, each time, so Orca reads p:path and no ns0:.
+    for _p, _u in (("", CORE), ("p", PROD), ("BambuStudio", BBS)):
+        ET.register_namespace(_p, _u)
     buf = io.BytesIO()
     ET.ElementTree(root).write(buf, encoding="UTF-8", xml_declaration=True)
     return buf.getvalue()
