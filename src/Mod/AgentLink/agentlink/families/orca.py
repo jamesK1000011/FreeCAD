@@ -804,8 +804,7 @@ def tools(session):
         proj = O.Project(dest)
         skipped = []
         try:
-            if pl.get("trim"):
-                trim(proj, 1, *pl["trim"])
+            trimmed = trim(proj, 1, *pl["trim"]) if pl.get("trim") else None
             first = float(proj.config.get("initial_layer_print_height") or 0.2)
             objs = proj.objects()
             for o in objs:
@@ -838,6 +837,8 @@ def tools(session):
                "next": "orca_slice { path } slices it; printing it is the person's call."}
         if skipped:
             out["notInThisOrca"] = sorted(set(skipped))
+        if trimmed:
+            out["model"] = trimmed
         return out
 
     def trim(proj, which, low, high):
@@ -857,13 +858,23 @@ def tools(session):
         b = m.BoundBox
         if low <= b.ZMin + 1e-6 and high >= b.ZMax - 1e-6:
             return
-        sh = Part.Shape()
-        sh.makeShapeFromMesh(m.Topology, 0.05)
-        solid = Part.makeSolid(Part.makeShell(sh.Faces))
         big = b.DiagonalLength * 2 + 10
         lo, hi = max(low, b.ZMin - 1), min(high, b.ZMax + 1)
-        kept = solid.common(Part.makeBox(big, big, hi - lo, FreeCAD.Vector(b.XMin - big / 4, b.YMin - big / 4, b.ZMin + lo - b.ZMin)))
-        mm = MeshPart.meshFromShape(Shape=kept, LinearDeflection=0.02, AngularDeflection=0.1, Relative=False)
+        try:
+            sh = Part.Shape()
+            sh.makeShapeFromMesh(m.Topology, 0.05)
+            solid = Part.makeSolid(Part.makeShell(sh.Faces)).removeSplitter()
+            kept = solid.common(Part.makeBox(big, big, hi - lo, FreeCAD.Vector(b.XMin - big / 4, b.YMin - big / 4, lo)))
+            if kept.Volume <= 1e-6:
+                raise ValueError("nothing kept")
+            mm = MeshPart.meshFromShape(Shape=kept, LinearDeflection=0.02, AngularDeflection=0.1, Relative=False)
+        except Exception:  # noqa: BLE001 — some OpenCASCADE builds refuse a mesh-made solid
+            # The mesh's own boolean with a box: no B-rep in between.
+            box = Mesh.createBox(big, big, hi - lo)
+            box.translate(b.XMin - big / 4 + big / 2, b.YMin - big / 4 + big / 2, lo + (hi - lo) / 2)
+            mm = m.intersect(box)
+            if mm.CountFacets == 0:
+                return "kept whole (this FreeCAD could not cut it): the values past the range repeat the last"
         pts = [(q.x, q.y, q.z - lo) for q in mm.Points]
         proj.replace_mesh(o["index"], 1, [[pts[i], pts[j], pts[k]] for i, j, k in mm.Topology[1]])
         proj.place(o["index"])
