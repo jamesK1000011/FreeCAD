@@ -141,6 +141,7 @@ agentlink/paths.py
 agentlink/printability.py
 agentlink/printers.py
 agentlink/printmass.py
+agentlink/printstrength.py
 agentlink/protocol.py
 agentlink/render.py
 agentlink/restart_mark.py
@@ -224,6 +225,7 @@ tests/test_paths.py
 tests/test_pref_import.py
 tests/test_printer.py
 tests/test_printmass.py
+tests/test_printstrength.py
 tests/test_protocol.py
 tests/test_share.py
 tests/test_sheet.py

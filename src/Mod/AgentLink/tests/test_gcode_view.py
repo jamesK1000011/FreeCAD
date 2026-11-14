@@ -29,7 +29,12 @@ G1 X10 Y10 E0.5
 ;TYPE:Sparse infill
 ;WIDTH:0.5
 G1 X0 Y10 E0.5 F6000
+G1 E-.8 F2100
+;WIPE_START
+G1 X2 Y8 F3000
+;WIPE_END
 G0 X0 Y0 F12000
+G1 E.8
 ;LAYER_CHANGE
 ;Z:0.4
 ;HEIGHT:0.2
@@ -76,7 +81,7 @@ class GcodeView(unittest.TestCase):
         self.assertAlmostEqual(ly["features"]["Outer wall"]["lengthMm"], round(math.pi * 5, 1), places=1)
         self.assertEqual(G.layer(d, index=-1)["layer"], 1)
         first = G.layer(d, 0)
-        self.assertAlmostEqual(first["travelMm"], 10.2, places=3)  # the 0.2 mm lift counts
+        self.assertAlmostEqual(first["travelMm"], round(0.2 + 8 ** 0.5 + 68 ** 0.5, 1), places=3)  # lift, wipe, travel
         self.assertEqual(first["width"], [0.45, 0.5])
 
     def test_legend_and_svg(self):
@@ -95,6 +100,47 @@ class GcodeView(unittest.TestCase):
 
 
 import math  # noqa: E402
+
+class Preview(unittest.TestCase):
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".gcode")
+        with os.fdopen(fd, "w") as f:
+            f.write(SAMPLE)
+
+    def tearDown(self):
+        os.remove(self.path)
+
+    def test_retracts_wipes_seams(self):
+        d = G.read(self.path, keep_paths={0})
+        ly = G.layer(d, 0)
+        self.assertEqual(ly["retracts"], 1)
+        self.assertEqual(ly["wipes"], 1)
+        self.assertEqual(ly["seams"], [[0.0, 0.0]] if isinstance(ly["seams"][0], list) else [(0.0, 0.0)])
+        self.assertEqual(ly["moves"], 7)  # the lift to the layer, 3 extrusions, retract, wipe, travel
+
+    def test_move_slider(self):
+        d = G.read(self.path, keep_paths={0})
+        m = G.move(d, 0, 1)
+        self.assertEqual(m["kind"], "extrude")
+        self.assertEqual(m["gcode"], "G1 X10 Y0 E0.5 F1800")
+        self.assertEqual(G.move(d, 0, 4)["kind"], "retract")
+        self.assertEqual(G.move(d, 0, 5)["kind"], "wipe")
+
+    def test_actual_speed_is_lower(self):
+        d = G.read(self.path)
+        s = G.summary(d)
+        self.assertLessEqual(s["ranges"]["actual_speed"][1], s["ranges"]["speed"][1])
+        self.assertTrue(G.legend(d, "actual_flow")["bands"])
+
+    def test_toolpaths_and_toggles(self):
+        d = G.read(self.path, keep_paths="all")
+        out = G.toolpaths_obj(d, self.path + ".obj")
+        self.assertEqual(out["ribbons"], 5)
+        svg = G.svg(d, 0, "feature", show=("travel", "wipe", "retract", "seams"))
+        self.assertIn("stroke-dasharray", svg)
+        self.assertIn("#ff4fa3", svg)
+        os.remove(self.path + ".obj")
+
 
 if __name__ == "__main__":
     unittest.main()

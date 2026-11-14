@@ -168,11 +168,35 @@ def tools(session):
         old = _study(s.doc) or {}
         keep = old.get("body") == o.Label and not a.get("reset")
         st = {"body": o.Label, "material": mid, "mesh": mesh, "buildDir": build, "holds": old.get("holds", []) if keep else [], "loads": old.get("loads", []) if keep else []}
+        if a.get("printed"):
+            # The slicer's settings read back: what the print falls short of the solid body.
+            from .. import orca3mf as O3, printstrength as PS
+
+            pr = a["printed"]
+            try:
+                proj = O3.Project(os.path.expanduser(pr["project"]) if os.path.isabs(os.path.expanduser(pr["project"])) else os.path.join(s.out_dir, pr["project"]))
+                po = proj.object(pr.get("object", 1))
+            except (KeyError, OSError, ValueError) as e:
+                raise ToolError("invalid_input", f"printed: {{ project (an OrcaSlicer .3mf), object }} — {e}")
+            eff = {k: v for k, v in proj.config.items()}
+            eff.update(po.get("settings") or {})
+            ft = proj.config.get("filament_type") or []
+            if ft:
+                eff["filament"] = ft[min(int(po.get("extruder") or 1), len(ft)) - 1]
+            d = PS.describe(eff, o.Shape)
+            st["print"] = {"project": pr["project"], "object": po["name"], **{k: d[k] for k in ("shellMm", "solidShare", "stiffnessFactor", "strengthFactor", "layerFactor")},
+                           "settings": d["settings"], "advice": d["advice"]}
+            if not build:
+                st["buildDir"] = build = _dir((setup or {}).get("up", "+z"))
+        elif keep and old.get("print"):
+            st["print"] = old["print"]
         _save(s.doc, st)
         s.snapshot("fea_setup")
         out = {"study": st, "material": {"id": mid, "name": c["name"], "E": c["E"], "nu": c.get("nu"), "yield": c.get("yield"), "from": said}}
         if build:
-            out["printed"] = f"Built along {build}: the safety across the layers is judged at {LAYER_FACTOR}× yield."
+            out["printed"] = f"Built along {build}: the safety across the layers is judged at {(st.get('print') or {}).get('layerFactor', LAYER_FACTOR)}× yield."
+        if st.get("print"):
+            out["printSettings"] = st["print"]
         if mesh > least / 2:
             out["warning"] = f"mesh {mesh:g} mm is over half the part's least size ({least:.1f} mm): too coarse to read stress — {round(least / 3, 2)} mm or less."
         out["next"] = "fea_hold the faces it is held by, fea_load what pushes on it, then fea_solve."
@@ -876,10 +900,18 @@ def tools(session):
             bd = st["buildDir"]
             sn = {n: ccx_io.normal_stress(sv, bd) for n, sv in stress.items()}
             n_l = max(sn, key=sn.get)
-            out["acrossLayers"] = {"tensileMPa": round(max(0.0, sn[n_l]), 3), **where(n_l), "buildDir": bd, "factor": LAYER_FACTOR}
+            lf = (st.get("print") or {}).get("layerFactor", LAYER_FACTOR)
+            out["acrossLayers"] = {"tensileMPa": round(max(0.0, sn[n_l]), 3), **where(n_l), "buildDir": bd, "factor": lf}
             if y:
-                out["acrossLayers"]["safety"] = round(LAYER_FACTOR * y / sn[n_l], 2) if sn[n_l] > 0 else None
+                out["acrossLayers"]["safety"] = round(lf * y / sn[n_l], 2) if sn[n_l] > 0 else None
             out["acrossLayers"]["note"] = f"Printed layers are weaker across than along: the tension along the build direction is judged against {LAYER_FACTOR}× yield. A simplification — the real factor depends on printer, material and settings."
+        if st.get("print") and y and smax > 0:
+            pp = st["print"]
+            out["asPrinted"] = {"safety": round(pp["strengthFactor"] * y / smax, 2), "displacementMm": round(dmag[n_dmax] / pp["stiffnessFactor"], 4),
+                                "from": f"{pp['object']} in {os.path.basename(pp['project'])}: shell {pp['shellMm']} mm, solid share {pp['solidShare']}",
+                                "note": "Solved on the solid body, scaled by the print's estimated knock-downs: a feasibility check, never a sign-off."}
+            if out["asPrinted"]["safety"] < 2 and pp.get("advice"):
+                out["asPrinted"]["stronger"] = pp["advice"]
         if n_max in fixed:
             warnings.append("The peak is on a held face: a rigid hold makes stress no real mount does — read it as high, and look a little away from the hold.")
         bb = shape.BoundBox
@@ -1584,8 +1616,9 @@ def tools(session):
                   "friction": {"type": "number"}, "tolerance": {"type": "number"}, "mesh": {"type": "number"}, "name": {"type": "string"}}, ["bodies"]), fea_parts, changes=True),
         Tool(
             "fea_setup",
-            "Start (or change) a strength study of one body: material (the body's by default), mesh (largest element edge, mm; a third of the least size by default), buildDir for a printed part (+z from its print setup). reset: true drops the holds and loads. " + TRAPS,
-            obj({"body": {"type": "string"}, "material": {"type": "string"}, "mesh": {"type": "number"}, "buildDir": {}, "reset": {"type": "boolean"}}),
+            "Start (or change) a strength study of one body: material (the body's by default), mesh (largest element edge, mm; a third of the least size by default), buildDir for a printed part (+z from its print setup), printed { project, object } (an OrcaSlicer project: its walls, infill and layers read back and the results given as printed too). reset: true drops the holds and loads. " + TRAPS,
+            obj({"body": {"type": "string"}, "material": {"type": "string"}, "mesh": {"type": "number"}, "buildDir": {}, "reset": {"type": "boolean"},
+                 "printed": {"type": "object", "properties": {"project": {"type": "string"}, "object": {"type": ["string", "integer"]}}, "required": ["project"]}}),
             fea_setup,
             changes=True,
         ),

@@ -18,7 +18,7 @@ file's header) is the one to quote for the whole print. No FreeCAD needed.
 import math
 import re
 
-VIEWS = ("feature", "height", "width", "speed", "fan", "temperature", "flow", "layer_time", "tool", "acceleration")
+VIEWS = ("feature", "height", "width", "speed", "actual_speed", "fan", "temperature", "flow", "actual_flow", "layer_time", "tool", "acceleration")
 
 _NUM = re.compile(r"([A-Za-z])\s*(-?\d*\.?\d+(?:[eE][-+]?\d+)?)")
 _TYPE = re.compile(r"^;\s*(?:TYPE|FEATURE)\s*:\s*(.+?)\s*$")
@@ -37,9 +37,17 @@ PAUSES = ("M601", "M0", "M1", "M25", "M400 U1")
 COLOR_CHANGES = ("M600",)
 
 
+class _AllLayers:
+    def __contains__(self, _):
+        return True
+
+
+_ALL = _AllLayers()
+
+
 class _Layer:
     __slots__ = ("index", "z", "height", "features", "moves", "time", "travel", "travel_time", "fan", "temp", "tools", "events", "speeds", "widths",
-                 "flows", "accels", "paths")
+                 "flows", "accels", "paths", "retracts", "wipes", "seams", "steps", "actual_speeds", "actual_flows")
 
     def __init__(self, index, z):
         self.index, self.z, self.height = index, z, None
@@ -50,6 +58,11 @@ class _Layer:
         self.events = []
         self.speeds, self.widths, self.flows, self.accels = [], [], [], []
         self.paths = []
+        self.retracts = self.wipes = 0
+        self.seams = []
+        # Kept layers: every move (kind, G-code line, x0, y0, x1, y1, mm/s, feature).
+        self.steps = []
+        self.actual_speeds, self.actual_flows = [], []
 
 
 def _rng(vals):
@@ -78,7 +91,7 @@ def read(path, keep_paths=None, filament_diameter=1.75):
     role, width, height = None, None, None
     fan, temp, tool, accel = 0.0, None, 0, None
     layers, cur = [], None
-    keep = set(keep_paths or [])
+    keep = _ALL if keep_paths == "all" else set(keep_paths or [])
     pending_z = None
 
     def new_layer(z):
@@ -91,7 +104,9 @@ def read(path, keep_paths=None, filament_diameter=1.75):
             cur.temp.add(temp)
         layers.append(cur)
 
-    for raw in text.splitlines():
+    wiping = False
+    last_role = None
+    for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line:
             continue
@@ -107,6 +122,14 @@ def read(path, keep_paths=None, filament_diameter=1.75):
             m = _TYPE.match(line)
             if m:
                 role = m.group(1)
+                continue
+            if line.startswith(";WIPE_START"):
+                wiping = True
+                if cur is not None:
+                    cur.wipes += 1
+                continue
+            if line.startswith(";WIPE_END"):
+                wiping = False
                 continue
             m = _WIDTH.match(line)
             if m:
@@ -192,10 +215,27 @@ def read(path, keep_paths=None, filament_diameter=1.75):
             if cur is None and (de > 0 and dist > 0):
                 new_layer(new["Z"])
             secs = dist / (feed / 60.0) if feed > 0 else 0.0
+            kept = cur is not None and cur.index in keep
+            if cur is not None and de < -1e-9 and math.hypot(dx, dy) < 1e-9:
+                cur.retracts += 1
+                if kept:
+                    cur.steps.append(("retract", lineno, pos["X"], pos["Y"], new["X"], new["Y"], round(feed / 60.0, 2), role or "?"))
             if cur is not None and dist > 0:
                 cur.moves += 1
                 speed = feed / 60.0
+                if de > 1e-9 and (role or "").lower() in ("outer wall", "external perimeter", "outer_wall") and last_role != role:
+                    cur.seams.append((round(pos["X"], 3), round(pos["Y"], 3)))
                 if de > 1e-9:
+                    last_role = role
+                    # The speed the move reaches: from rest at the layer's
+                    # acceleration, over half its length (no lookahead).
+                    a_ = accel or 1000.0
+                    actual = min(speed, math.sqrt(a_ * dist)) if dist > 0 else speed
+                    cur.actual_speeds.append(actual)
+                    if actual > 0:
+                        cur.actual_flows.append(de * area * actual / dist if dist else 0.0)
+                    if kept:
+                        cur.steps.append(("extrude", lineno, pos["X"], pos["Y"], new["X"], new["Y"], round(speed, 2), role or "?"))
                     feat = cur.features.setdefault(role or "?", {"length": 0.0, "filament": 0.0, "time": 0.0, "moves": 0, "speed": [], "width": []})
                     feat["length"] += dist
                     feat["filament"] += de
@@ -217,6 +257,8 @@ def read(path, keep_paths=None, filament_diameter=1.75):
                 elif dist > 0:
                     cur.travel += dist
                     cur.travel_time += secs
+                    if kept:
+                        cur.steps.append(("wipe" if wiping else "travel", lineno, pos["X"], pos["Y"], new["X"], new["Y"], round(speed, 2), role or "?"))
             pos = new
     return {"header": header, "layers": layers, "path": path}
 
@@ -247,6 +289,8 @@ def summary(data):
             "fan": _rng([f for ly in L for f in ly.fan]),
             "temperature": _rng([t for ly in L for t in ly.temp]),
             "flow": _rng([q for ly in L for q in ly.flows]),
+            "actual_speed": _rng([q for ly in L for q in ly.actual_speeds]),
+            "actual_flow": _rng([q for ly in L for q in ly.actual_flows]),
             "layer_time": _rng([ly.time + ly.travel_time for ly in L]),
             "acceleration": _rng([a for ly in L for a in ly.accels]),
         },
@@ -269,8 +313,61 @@ def layer(data, index=None, z=None):
         "features": {k: {"lengthMm": round(f["length"], 1), "filamentMm": round(f["filament"], 2), "timeS": round(f["time"], 1), "speed": _rng(f["speed"]),
                          "width": _rng(f["width"])} for k, f in ly.features.items()},
         "fan": sorted(ly.fan), "temperature": sorted(ly.temp), "tools": sorted(ly.tools), "events": ly.events,
-        "speed": _rng(ly.speeds), "width": _rng(ly.widths), "flow": _rng(ly.flows),
+        "speed": _rng(ly.speeds), "width": _rng(ly.widths), "flow": _rng(ly.flows), "actualSpeed": _rng(ly.actual_speeds),
+        "retracts": ly.retracts, "wipes": ly.wipes, "seams": ly.seams[:50], **({"moves": len(ly.steps)} if ly.steps else {}),
     }
+
+
+def move(data, index, n):
+    """The nth move (0..) of a kept layer, as the preview's move slider and
+    G-code window show it: its kind, where from and to, speed, feature, and
+    the G-code line (number and text)."""
+    ly = data["layers"][index]
+    if not ly.steps:
+        raise ValueError("no moves kept for that layer: read it with keep_paths")
+    if n < 0:
+        n += len(ly.steps)
+    k, lineno, x0, y0, x1, y1, v, role = ly.steps[max(0, min(len(ly.steps) - 1, n))]
+    line = None
+    try:
+        with open(data["path"], encoding="utf-8", errors="replace") as f:
+            for i, ln in enumerate(f, 1):
+                if i == lineno:
+                    line = ln.rstrip("\n")
+                    break
+    except OSError:
+        pass
+    return {"move": n, "of": len(ly.steps), "kind": k, "from": [round(x0, 3), round(y0, 3)], "to": [round(x1, 3), round(y1, 3)], "speed": v,
+            "feature": role, "line": lineno, "gcode": line}
+
+
+def toolpaths_obj(data, out, layers=None):
+    """The extrusions as ribbons (width x layer height boxes along each
+    move), one OBJ file: the preview's Export toolpaths as OBJ. Read with
+    keep_paths for the layers wanted ("all" for every one)."""
+    vs, fs = [], []
+    for ly in data["layers"]:
+        if layers is not None and ly.index not in layers:
+            continue
+        h = ly.height or 0.2
+        for p in ly.paths:
+            role, x0, y0, x1, y1, w = p[:6]
+            dx, dy = x1 - x0, y1 - y0
+            ln = math.hypot(dx, dy)
+            if ln < 1e-9:
+                continue
+            nx, ny = -dy / ln * w / 2, dx / ln * w / 2
+            z0, z1 = ly.z - h, ly.z
+            b = len(vs) + 1
+            vs += [(x0 + nx, y0 + ny, z0), (x0 - nx, y0 - ny, z0), (x1 - nx, y1 - ny, z0), (x1 + nx, y1 + ny, z0),
+                   (x0 + nx, y0 + ny, z1), (x0 - nx, y0 - ny, z1), (x1 - nx, y1 - ny, z1), (x1 + nx, y1 + ny, z1)]
+            for a, c, d in ((0, 2, 1), (0, 3, 2), (4, 5, 6), (4, 6, 7), (0, 1, 5), (0, 5, 4), (1, 2, 6), (1, 6, 5), (2, 3, 7), (2, 7, 6), (3, 0, 4), (3, 4, 7)):
+                fs.append((b + a, b + c, b + d))
+    with open(out, "w", encoding="utf-8") as f:
+        f.write("# toolpaths\n")
+        f.writelines(f"v {x:.4f} {y:.4f} {z:.4f}\n" for x, y, z in vs)
+        f.writelines(f"f {a} {b} {c}\n" for a, b, c in fs)
+    return {"path": out, "ribbons": len(fs) // 12}
 
 
 def legend(data, view, buckets=6):
@@ -301,7 +398,7 @@ def legend(data, view, buckets=6):
             elif view == "temperature":
                 pairs += [(v, ly.time / max(1, len(ly.temp))) for v in ly.temp]
             else:
-                src = {"width": ly.widths, "speed": ly.speeds, "flow": ly.flows, "acceleration": ly.accels}[view]
+                src = {"width": ly.widths, "speed": ly.speeds, "flow": ly.flows, "acceleration": ly.accels, "actual_speed": ly.actual_speeds, "actual_flow": ly.actual_flows}[view]
                 w = ly.time / max(1, len(src))
                 pairs += [(v, w) for v in src]
         if not pairs:
@@ -321,8 +418,9 @@ def legend(data, view, buckets=6):
 _PALETTE = ["#e8553e", "#f2a33a", "#f7d04b", "#7bc24a", "#3fa7a3", "#3d7bd9", "#7a5fd1", "#c25bb5", "#8a8a8a", "#4f4f4f"]
 
 
-def svg(data, index, view="feature", size=600):
-    """One layer's extrusion moves as an SVG, coloured by a view."""
+def svg(data, index, view="feature", size=600, show=()):
+    """One layer's extrusion moves as an SVG, coloured by a view; show
+    travel, wipe, retract, seams draws those too (the preview's toggles)."""
     ly = data["layers"][index]
     if not ly.paths:
         raise ValueError("no moves kept for that layer: read it with keep_paths")
@@ -339,7 +437,7 @@ def svg(data, index, view="feature", size=600):
         return size - 10 - (y - y0) * k
 
     col = {}
-    idx = {"feature": 0, "width": 5, "speed": 6, "fan": 7, "flow": 8, "tool": 9}.get(view, 0)
+    idx = {"feature": 0, "width": 5, "speed": 6, "actual_speed": 6, "fan": 7, "flow": 8, "actual_flow": 8, "tool": 9}.get(view, 0)
     vals = [p[idx] for p in ly.paths]
     if isinstance(vals[0], str):
         for i, v in enumerate(sorted(set(vals))):
@@ -358,6 +456,15 @@ def svg(data, index, view="feature", size=600):
     for p in ly.paths:
         out.append(f'<line x1="{X(p[1]):.2f}" y1="{Y(p[2]):.2f}" x2="{X(p[3]):.2f}" y2="{Y(p[4]):.2f}" stroke="{colour(p[idx])}" '
                    f'stroke-width="{max(0.5, p[5] * k):.2f}" stroke-linecap="round"/>')
+    for st in ly.steps:
+        if st[0] in show and st[0] in ("travel", "wipe"):
+            out.append(f'<line x1="{X(st[2]):.2f}" y1="{Y(st[3]):.2f}" x2="{X(st[4]):.2f}" y2="{Y(st[5]):.2f}" stroke="{"#5aa0ff" if st[0] == "travel" else "#ffd75a"}" '
+                       'stroke-width="0.6" stroke-dasharray="3 2"/>')
+        elif st[0] == "retract" and "retract" in show:
+            out.append(f'<circle cx="{X(st[2]):.2f}" cy="{Y(st[3]):.2f}" r="2.5" fill="#ff4fa3"/>')
+    if "seams" in show:
+        for sx, sy in ly.seams:
+            out.append(f'<circle cx="{X(sx):.2f}" cy="{Y(sy):.2f}" r="3" fill="none" stroke="#ffffff" stroke-width="1.2"/>')
     if col:
         for i, (name, c) in enumerate(col.items()):
             out.append(f'<rect x="12" y="{12 + i * 16}" width="10" height="10" fill="{c}"/><text x="26" y="{21 + i * 16}" fill="#ddd" font-size="11" font-family="sans-serif">{name}</text>')

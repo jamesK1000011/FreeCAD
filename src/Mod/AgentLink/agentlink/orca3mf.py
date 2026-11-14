@@ -202,6 +202,21 @@ def read_stl(path):
     return tris
 
 
+def read_obj(path):
+    """Triangles of an OBJ file (polygons fanned)."""
+    vs, tris = [], []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.startswith("v "):
+                vs.append(tuple(float(x) for x in line.split()[1:4]))
+            elif line.startswith("f "):
+                idx = [int(x.split("/")[0]) for x in line.split()[1:]]
+                idx = [i - 1 if i > 0 else len(vs) + i for i in idx]
+                for k in range(1, len(idx) - 1):
+                    tris.append([vs[idx[0]], vs[idx[k]], vs[idx[k + 1]]])
+    return tris
+
+
 def write_stl(path, tris):
     import struct
 
@@ -400,7 +415,9 @@ class Project:
                     pid = c.get("objectid")
                     sp = sparts.get(pid)
                     pm = _meta(sp) if sp is not None else {}
+                    so_ = [pm.get(f"source_offset_{c}") for c in "xyz"]
                     parts.append({"id": pid, "name": pm.get("name"), "kind": (sp.get("subtype") if sp is not None else None) or "normal_part",
+                                  **({"sourceOffset": [float(x) for x in so_]} if all(x is not None for x in so_) else {}),
                                   "file": c.get(_q("path", PROD)) or MODEL, "transform": matrix(c.get("transform")),
                                   **({"extruder": pm["extruder"]} if pm.get("extruder") else {}),
                                   "settings": {k: v for k, v in pm.items() if k not in BOOK}})
@@ -669,7 +686,7 @@ class Project:
         self._dirty()
         return p["name"]
 
-    def replace_mesh(self, which, part, tris, keep_paint=False):
+    def replace_mesh(self, which, part, tris, keep_paint=False, raw=False):
         """A part's mesh replaced (the FreeCAD body changed): triangles in the
         object's coordinates; the part's settings, kind and place stay. Paint
         is dropped unless keep_paint (then repainted by the caller)."""
@@ -678,8 +695,9 @@ class Project:
         verts, faces = weld(tris)
         if not faces:
             raise ProjectError("the new mesh has no triangles.")
-        inv = invert(p["transform"])
-        verts = [apply(inv, v) for v in verts]
+        if not raw:
+            inv = invert(p["transform"])
+            verts = [apply(inv, v) for v in verts]
         f = p["file"].lstrip("/")
         text = self.files[f]
         new = mesh_xml(verts, faces, p["id"]).encode()
@@ -757,6 +775,41 @@ class Project:
         self._dirty()
         b = bbox(self.world_points(self.object(o["index"]), instance=instance))
         return {"object": o["name"], "placed": [round(x, 3) for x in b] if b else None}
+
+    def lay_flat(self, which, normal, instance=0):
+        """Turn an instance so the face with outward normal (object
+        coordinates) lies on the bed, as the window's Lay on face does."""
+        o = self.object(which)
+        n = [float(x) for x in normal]
+        ln = math.sqrt(sum(x * x for x in n))
+        if ln < 1e-9:
+            raise ProjectError("normal: a direction, not zero.")
+        n = [x / ln for x in n]
+        items = [it for it in self._build_items() if it.get("objectid") == o["id"]]
+        it = items[instance]
+        m = matrix(it.get("transform"))
+        # The normal as the instance turns it now.
+        cur = [sum(m[i][j] * n[j] for j in range(3)) for i in range(3)]
+        tgt = [0.0, 0.0, -1.0]
+        axis = [cur[1] * tgt[2] - cur[2] * tgt[1], cur[2] * tgt[0] - cur[0] * tgt[2], cur[0] * tgt[1] - cur[1] * tgt[0]]
+        s_ = math.sqrt(sum(x * x for x in axis))
+        c = sum(cur[i] * tgt[i] for i in range(3))
+        if s_ < 1e-9:
+            r = [[1, 0, 0], [0, 1, 0], [0, 0, 1]] if c > 0 else [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
+        else:
+            k = [x / s_ for x in axis]
+            K = [[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]]
+            K2 = [[sum(K[i][l] * K[l][j] for l in range(3)) for j in range(3)] for i in range(3)]
+            r = [[(1 if i == j else 0) + s_ * K[i][j] + (1 - c) * K2[i][j] for j in range(3)] for i in range(3)]
+        rot = [r[0] + [0], r[1] + [0], r[2] + [0], [0, 0, 0, 1]]
+        t = [m[0][3], m[1][3], m[2][3]]
+        lin = [[m[i][j] if j < 3 else 0 for j in range(4)] for i in range(3)] + [[0, 0, 0, 1]]
+        m = mul(rot, lin)
+        for i in range(3):
+            m[i][3] = t[i]
+        it.set("transform", matrix_text(m))
+        self._dirty()
+        return self.place(o["index"], instance)
 
     def set_range(self, which, zmin, zmax, settings):
         """Settings for an object's layers from zmin to zmax (mm); settings
@@ -1243,6 +1296,278 @@ class Project:
             self.files[GCODES] = _xml(root)
         self._dirty()
         return len(plates) - 1
+
+    def copy_object(self, which, plate=None, instance=0, name=None):
+        """A new object copying one (every part, its settings, at the same
+        place): Set as an individual object, Duplicate plate."""
+        o = self.object(which)
+        parts = o["parts"]
+        first = parts[0]
+        v, t, _ = self.mesh(first)
+        w = [apply(first["transform"], x) for x in v]
+        r = self.add_object([[w[a], w[b], w[c]] for a, b, c in t], name or o["name"], plate or 1, None, int(o.get("extruder") or 1))
+        new = self.objects()[-1]
+        for k, val in o["settings"].items():
+            _set_meta(self._so(new), k, val)
+        if first["settings"]:
+            el = next(x for x in self._so(new).findall("part"))
+            for k, val in first["settings"].items():
+                _set_meta(el, k, val)
+        for p in parts[1:]:
+            v, t, _ = self.mesh(p)
+            w = [apply(p["transform"], x) for x in v]
+            self.add_part(new["index"], [[w[a], w[b], w[c]] for a, b, c in t], p["kind"], p["name"], None)
+            el = self._so(new).findall("part")[-1]
+            for k, val in p["settings"].items():
+                _set_meta(el, k, val)
+        # Same place as the copied instance.
+        src = [it for it in self._build_items() if it.get("objectid") == o["id"]][instance]
+        dst = [it for it in self._build_items() if it.get("objectid") == new["id"]][0]
+        dst.set("transform", src.get("transform"))
+        self._dirty()
+        return {"object": r["object"], "index": new["index"]}
+
+    def instance_to_object(self, which, instance):
+        r = self.copy_object(which, None, instance)
+        plate = next((p["plate"] for p in self.plates() if self.object(which)["id"] in p["objects"]), 1)
+        self.move_to_plate(r["index"], plate)
+        self.remove_instance(which, instance)
+        return r
+
+    def duplicate_plate(self, plate):
+        """A new plate holding a copy of every object on plate."""
+        pl = next((p for p in self.plates() if p["plate"] == plate), None)
+        if pl is None:
+            raise ProjectError(f"plate {plate}: 1..{len(self.plates())}.")
+        n = self.add_plate()
+        made = []
+        for oid in dict.fromkeys(pl["objects"]):
+            o = next(x for x in self.objects() if x["id"] == oid)
+            for k in range(len(o["instances"])):
+                r = self.copy_object(o["index"], n, k)
+                self.move_to_plate(r["index"], n)
+                made.append(r["object"])
+        return {"plate": n, "objects": made}
+
+    def move_plate(self, plate, to):
+        """Plates reordered: plate moves to place to (1 = the front)."""
+        plates = self.settings_xml.findall("plate")
+        n = len(plates)
+        if not (1 <= plate <= n and 1 <= to <= n):
+            raise ProjectError(f"plates are 1..{n}.")
+        order = list(range(1, n + 1))
+        order.remove(plate)
+        order.insert(to - 1, plate)
+        new_id = {old: i + 1 for i, old in enumerate(order)}
+        for p in plates:
+            _set_meta(p, "plater_id", str(new_id[int(_meta(p).get("plater_id"))]))
+        pos = list(self.settings_xml).index(plates[0])
+        for p in plates:
+            self.settings_xml.remove(p)
+        for i, p in enumerate(sorted(plates, key=lambda e: int(_meta(e).get("plater_id")))):
+            self.settings_xml.insert(pos + i, p)
+        if GCODES in self.files:
+            root = ET.fromstring(self.files[GCODES])
+            for pl in root.findall("plate"):
+                info = pl.find("plate_info")
+                if info is not None:
+                    info.set("id", str(new_id.get(int(info.get("id")), int(info.get("id")))))
+            self.files[GCODES] = _xml(root)
+        self._dirty()
+        return [new_id[i] for i in range(1, n + 1)]
+
+    def scale_to_fit(self, which, margin=0.0):
+        """Scale an object up or down to fill the printer's volume (the
+        window's Scale to build volume)."""
+        o = self.object(which)
+        bed = self.bed()
+        hz = float(self.config.get("printable_height") or 0)
+        if not bed or hz <= 0:
+            raise ProjectError("the project names no printable area and height.")
+        b = bbox(self.world_points(o))
+        size = [b[3] - b[0], b[4] - b[1], b[5] - b[2]]
+        room = [bed[2] - bed[0] - 2 * margin, bed[3] - bed[1] - 2 * margin, hz - margin]
+        k = min(room[i] / size[i] for i in range(3) if size[i] > 0)
+        return {**self.place(o["index"], scale=k, at=[(bed[0] + bed[2]) / 2, (bed[1] + bed[3]) / 2]), "scale": round(k, 4)}
+
+    def fill_bed(self, which, spacing=5.0, limit=200):
+        """As many copies as the bed holds in a grid (Fill bed with copies);
+        orca_project arrange packs them tighter."""
+        o = self.object(which)
+        bed = self.bed()
+        if not bed:
+            raise ProjectError("the project names no printable area.")
+        b = bbox(self.world_points(o))
+        w, d = b[3] - b[0] + spacing, b[4] - b[1] + spacing
+        nx, ny = max(1, int((bed[2] - bed[0] + spacing) // w)), max(1, int((bed[3] - bed[1] + spacing) // d))
+        total = min(limit, nx * ny)
+        return self.grid(o["index"], nx, ny, spacing, total)
+
+    def grid(self, which, nx, ny, spacing=5.0, total=None):
+        """Copies in a grid of nx by ny from the first one's place."""
+        o = self.object(which)
+        while len(self.object(o["index"])["instances"]) > 1:
+            self.remove_instance(o["index"], len(self.object(o["index"])["instances"]) - 1)
+        b = bbox(self.world_points(o))
+        w, d = b[3] - b[0] + spacing, b[4] - b[1] + spacing
+        bed = self.bed() or [0, 0, nx * w, ny * d]
+        x0, y0 = bed[0] + spacing / 2 - b[0], bed[1] + spacing / 2 - b[1]
+        self.place(o["index"], move=[x0, y0, 0])
+        count = 1
+        for j in range(ny):
+            for i in range(nx):
+                if i == 0 and j == 0:
+                    continue
+                if total and count >= total:
+                    break
+                self.add_instance(o["index"], [i * w, j * d])
+                count += 1
+        # add_instance offsets from the last copy: set each from the first.
+        items = [it for it in self._build_items() if it.get("objectid") == o["id"]]
+        base = matrix(items[0].get("transform"))
+        k = 0
+        for j in range(ny):
+            for i in range(nx):
+                if k >= len(items):
+                    break
+                m = [row[:] for row in base]
+                m[0][3] += i * w
+                m[1][3] += j * d
+                items[k].set("transform", matrix_text(m))
+                k += 1
+        self._dirty()
+        return {"object": o["name"], "copies": len(items), "grid": [nx, ny]}
+
+    def subdivide(self, which, part=None):
+        """Each triangle split in four (Subdivision mesh)."""
+        o = self.object(which)
+        p = self.part(o, part)
+        v, t, _ = self.mesh(p)
+        w = [apply(p["transform"], x) for x in v]
+        tris = []
+        for a, b, c in t:
+            A, B, C = w[a], w[b], w[c]
+            ab = tuple((A[i] + B[i]) / 2 for i in range(3))
+            bc = tuple((B[i] + C[i]) / 2 for i in range(3))
+            ca = tuple((C[i] + A[i]) / 2 for i in range(3))
+            tris += [[A, ab, ca], [ab, B, bc], [ca, bc, C], [ab, bc, ca]]
+        return self.replace_mesh(o["index"], part, tris)
+
+    def decompose_color(self, which, part=None):
+        """A part painted in colours split into one part per colour, each on
+        its filament (Decompose Color). Triangles painted in pieces stay
+        with the part."""
+        o = self.object(which)
+        p = self.part(o, part)
+        v, t, attrs = self.mesh(p)
+        states = attrs.get("paint_color")
+        if not states or not any(states):
+            raise ProjectError(f"{p['name']} has no colour painting.")
+        w = [apply(p["transform"], x) for x in v]
+        groups = {}
+        rest = []
+        for i, (a, b, c) in enumerate(t):
+            s_ = paint_value(states[i]) if states[i] else 0
+            tri = [w[a], w[b], w[c]]
+            if s_:
+                groups.setdefault(s_, []).append(tri)
+            else:
+                rest.append(tri)
+        if not rest:
+            # Every triangle painted: the first colour keeps the part.
+            first = min(groups)
+            rest = groups.pop(first)
+            self.set_part(o["index"], part, "extruder", first)
+        made = []
+        for slot, tris in sorted(groups.items()):
+            r = self.add_part(o["index"], tris, "normal_part", f"{p['name']} colour {slot}")
+            el = self._so(self.object(o["index"])).findall("part")[-1]
+            _set_meta(el, "extruder", str(slot))
+            made.append(r["part"])
+        self.replace_mesh(o["index"], part, rest)
+        return {"object": o["name"], "parts": made}
+
+    def apply_presets(self, machine=None, process=None, filaments=None):
+        """The project's printer, process and filament presets swapped for
+        others (flattened JSON, as slicer_presets writes them): their values
+        go in, the project's own changes to the old ones go."""
+        t = options()["options"]
+        done = {}
+        for kind, data in (("machine", machine), ("process", process)):
+            if not data:
+                continue
+            for k, val in data.items():
+                if k in t and k not in ("inherits", "name", "from", "type"):
+                    self.config[k] = val
+            key = {"machine": "printer_settings_id", "process": "print_settings_id"}[kind]
+            if data.get("name"):
+                self.config[key] = data["name"]
+            done[kind] = data.get("name")
+        if filaments:
+            n = len(self.config.get("filament_settings_id") or [])
+            while n < len(filaments):
+                n = self.add_filament(1)
+            for i, data in enumerate(filaments):
+                for k, val in data.items():
+                    if k in t and isinstance(self.config.get(k), list) and len(self.config[k]) >= n:
+                        v = val[0] if isinstance(val, list) and val else val
+                        self.config[k][i] = v
+                ids = self.config.get("filament_settings_id")
+                if data.get("name") and isinstance(ids, list):
+                    ids[i] = data["name"]
+            done["filaments"] = [d.get("name") for d in filaments]
+        d = self.config.get("different_settings_to_system")
+        if isinstance(d, list):
+            self.config["different_settings_to_system"] = [""] * len(d)
+        self._dirty()
+        return done
+
+    def export_amf(self, path):
+        """The printable objects as placed, one AMF file."""
+        out = ['<?xml version="1.0" encoding="UTF-8"?>', '<amf unit="millimeter" version="1.1">']
+        for n, o in enumerate(self.objects(), 1):
+            for k, inst in enumerate(o["instances"]):
+                out.append(f' <object id="{n * 1000 + k}"><metadata type="name">{(o["name"] or "object").replace("&", "&amp;").replace("<", "&lt;")}</metadata><mesh><vertices>')
+                vols, base = [], 0
+                for p in o["parts"]:
+                    if p["kind"] != "normal_part":
+                        continue
+                    v, t, _ = self.mesh(p)
+                    tr = mul(inst["transform"], p["transform"])
+                    out += ["  <vertex><coordinates><x>%s</x><y>%s</y><z>%s</z></coordinates></vertex>" % tuple(_fmt(x) for x in apply(tr, q)) for q in v]
+                    vols.append((base, t))
+                    base += len(v)
+                out.append(" </vertices>")
+                for b0, t in vols:
+                    out.append("  <volume>")
+                    out += [f"   <triangle><v1>{a + b0}</v1><v2>{b + b0}</v2><v3>{c + b0}</v3></triangle>" for a, b, c in t]
+                    out.append("  </volume>")
+                out.append(" </mesh></object>")
+        out.append("</amf>")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        return path
+
+    def export_obj(self, path, plate=None):
+        """The printable objects as placed (solid parts) in one OBJ file."""
+        lines, base = ["# OrcaSlicer project objects, as placed"], 1
+        plates = {p["plate"]: set(p["objects"]) for p in self.plates()}
+        for o in self.objects():
+            if plate and o["id"] not in plates.get(plate, set()):
+                continue
+            for k, inst in enumerate(o["instances"]):
+                for p in o["parts"]:
+                    if p["kind"] != "normal_part":
+                        continue
+                    v, t, _ = self.mesh(p)
+                    tr = mul(inst["transform"], p["transform"])
+                    lines.append(f"o {re.sub(r'[^A-Za-z0-9_.-]', '_', o['name'] or 'object')}_{k + 1}")
+                    lines += ["v %s %s %s" % tuple(_fmt(x) for x in apply(tr, q)) for q in v]
+                    lines += [f"f {a + base} {b + base} {c + base}" for a, b, c in t]
+                    base += len(v)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return path
 
     def strip_results(self):
         """The sliced results dropped (they no longer match): plate G-code,

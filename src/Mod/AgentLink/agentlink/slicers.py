@@ -155,7 +155,12 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
     return exe, used
 
 
-def slice_project(name, threemf, out_dir, timeout=900, export=None, plate=0):
+SLICE_FLAGS = {"timelapse": "--enable-timelapse", "allow_mix_temp": "--allow-mix-temp", "allow_multicolor_oneplate": "--allow-multicolor-oneplate",
+               "no_check": "--no-check", "skip_modified_gcodes": "--skip-modified-gcodes", "load_defaultfila": "--load-defaultfila", "allow_newer_file": "--allow-newer-file"}
+SLICE_VALUES = {"skip_objects": "--skip-objects", "mtcpp": "--mtcpp", "mstpp": "--mstpp", "clone_objects": "--clone-objects", "load_filament_ids": "--load-filament-ids"}
+
+
+def slice_project(name, threemf, out_dir, timeout=900, export=None, plate=0, options=None):
     """A project (.3mf) sliced as it stands — its own presets, settings,
     plates and objects, as the person left them in the slicer's window.
     export: a .3mf path for the sliced project. Returns (exe, [G-code
@@ -172,6 +177,14 @@ def slice_project(name, threemf, out_dir, timeout=900, export=None, plate=0):
         args += ["--export-statistics"]
     if export:
         args += ["--export-3mf", "sliced.3mf"]
+    for k, v in (options or {}).items():
+        if k in SLICE_FLAGS:
+            if v:
+                args.append(SLICE_FLAGS[k])
+        elif k in SLICE_VALUES:
+            args += [SLICE_VALUES[k], str(v)]
+        else:
+            raise RuntimeError(f"options.{k}: one of {', '.join(list(SLICE_FLAGS) + list(SLICE_VALUES))}.")
     args += [os.path.abspath(threemf)]
     LAST.clear()
     run = _run(args, timeout, cwd=out_dir)
@@ -225,10 +238,15 @@ def make_project(name, stls, dest, settings, profiles=None, options=None, timeou
     return exe
 
 
+RELAYOUT_FLAGS = ("allow_rotations", "align_to_y_axis", "avoid_extrusion_cali_region", "allow_multicolor_oneplate", "ensure_on_bed", "uptodate",
+                  "min_save", "allow_newer_file", "skip_modified_gcodes", "repair", "ground_largest_face", "convert_unit")
+
+
 def relayout(name, threemf, arrange=False, orient=False, options=None, timeout=600):
     """The project's objects arranged on their plates and/or turned to their
     best side by the slicer itself, the project re-saved in place. options:
-    allow_rotations, align_to_y_axis, avoid_extrusion_cali_region (bools)."""
+    any of RELAYOUT_FLAGS (true), clone_objects "1,3,…", repetitions n,
+    scale f, rotate/rotate_x/rotate_y degrees, ground_face_normal "x,y,z"."""
     exe = find(name)
     if not exe:
         raise FileNotFoundError(f"{name} is not on this computer.")
@@ -242,9 +260,14 @@ def relayout(name, threemf, arrange=False, orient=False, options=None, timeout=6
         args += ["--arrange", "1"]
     if orient:
         args += ["--orient", "1"]
-    for k in ("allow_rotations", "align_to_y_axis", "avoid_extrusion_cali_region"):
-        if (options or {}).get(k):
-            args += ["--" + k.replace("_", "-")]
+    for k, v in (options or {}).items():
+        if k in RELAYOUT_FLAGS:
+            if v:
+                args += ["--" + k.replace("_", "-")]
+        elif k in ("clone_objects", "repetitions", "scale", "rotate", "rotate_x", "rotate_y", "ground_face_normal", "ground_face_point"):
+            args += ["--" + k.replace("_", "-"), str(v)]
+        else:
+            raise RuntimeError(f"options.{k}: one of {', '.join(RELAYOUT_FLAGS)}, clone_objects, repetitions, scale, rotate, rotate_x, rotate_y, ground_face_normal, ground_face_point.")
     args += ["--export-3mf", "layout.3mf", os.path.abspath(threemf)]
     run = _run(args, timeout, cwd=out_dir)
     if not os.path.isfile(made):
@@ -252,6 +275,27 @@ def relayout(name, threemf, arrange=False, orient=False, options=None, timeout=6
         raise RuntimeError((why + " — " if why else "") + _tail(run))
     shutil.move(made, threemf)
     return exe
+
+
+def inspect(name, threemf, what="mesh", timeout=300):
+    """The slicer's own report on a project: what mesh (--inspect-mesh, each
+    object's size and mesh), paint (--inspect-paint, painted layers) or info
+    (--info). JSON when it prints JSON, else the text."""
+    exe = find(name)
+    if not exe:
+        raise FileNotFoundError(f"{name} is not on this computer.")
+    flag = {"mesh": "--inspect-mesh", "paint": "--inspect-paint", "info": "--info"}[what]
+    if not supports(exe, flag):
+        raise RuntimeError(f"This {name} has no {flag}.")
+    run = _run([exe, flag, os.path.abspath(threemf)], timeout)
+    text = run.stdout or ""
+    i = min([x for x in (text.find("{"), text.find("[")) if x >= 0] or [-1])
+    if i >= 0:
+        try:
+            return json.loads(text[i:text.rfind("}" if text[i] == "{" else "]") + 1])
+        except ValueError:
+            pass
+    return {"text": text.strip()[-6000:]}
 
 
 EXPORTS = {"stl": ("--export-stl", None), "stls": ("--export-stls", "stls"), "settings": ("--export-settings", "settings.json"),

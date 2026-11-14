@@ -312,6 +312,96 @@ class Project(unittest.TestCase):
         self.assertEqual(layer.get("extra"), "M117 hi")  # Orca reads it from extra
         self.assertEqual(self.reopen().gcodes()[1]["items"][0]["gcode"], "M117 hi")
 
+    def test_lay_flat(self):
+        pr = O.Project(self.p)
+        r = pr.lay_flat("tall", [1, 0, 0])  # its +X side down
+        size = [round(r["placed"][i + 3] - r["placed"][i], 4) for i in range(3)]
+        self.assertEqual(size, [20, 8, 8])
+        self.assertAlmostEqual(r["placed"][2], 0)
+
+    def test_export_obj(self):
+        pr = O.Project(self.p)
+        out = pr.export_obj(os.path.join(self.d, "o.obj"))
+        with open(out) as f:
+            text = f.read()
+        self.assertEqual(text.count("\no "), 2)
+        self.assertEqual(sum(1 for ln in text.splitlines() if ln.startswith("f ")), 24)
+
+    def test_copies_and_plates(self):
+        pr = O.Project(self.p)
+        pr.set_object("box", "wall_loops", 6)
+        pr.add_part("box", box(4, 4, 5, at=(2, 2, 0)), "modifier_part", "m", {"sparse_infill_density": "90%"})
+        r = pr.copy_object("box")
+        c = pr.object(r["index"])
+        self.assertEqual(c["settings"]["wall_loops"], "6")
+        self.assertEqual([p["kind"] for p in c["parts"]], ["normal_part", "modifier_part"])
+        self.assertEqual(c["parts"][1]["settings"], {"sparse_infill_density": "90%"})
+        self.assertEqual(c["instances"][0]["transform"], pr.object("box")["instances"][0]["transform"])
+        d = pr.duplicate_plate(1)
+        self.assertEqual(d["plate"], 2)
+        self.assertEqual(len(pr.plates()[1]["objects"]), 3)
+        order = pr.move_plate(2, 1)
+        self.assertEqual(order, [2, 1])
+        self.assertEqual(len(pr.plates()[0]["objects"]), 3)
+        pr.save()
+        self.assertEqual(len(self.reopen().plates()), 2)
+
+    def test_instance_to_object(self):
+        pr = O.Project(self.p)
+        pr.add_instance("tall")
+        r = pr.instance_to_object("tall", 1)
+        self.assertEqual(len(pr.object("tall")["instances"]), 1)
+        self.assertEqual(len(pr.objects()), 3)
+        self.assertEqual(pr.object(r["index"])["name"], "tall.stl")
+
+    def test_fit_fill_grid(self):
+        pr = O.Project(self.p)
+        bed = pr.bed()
+        self.assertTrue(bed)
+        r = pr.scale_to_fit("tall")
+        self.assertGreater(r["scale"], 1)
+        pr = O.Project(self.p)
+        f = pr.fill_bed("box", spacing=5)
+        self.assertGreater(f["copies"], 20)
+        g = pr.grid("tall", 3, 2)
+        self.assertEqual(g["copies"], 6)
+        xs = sorted({round(i["transform"][0][3], 3) for i in pr.object("tall")["instances"]})
+        self.assertEqual(len(xs), 3)
+
+    def test_subdivide(self):
+        pr = O.Project(self.p)
+        r = pr.subdivide("box")
+        self.assertEqual(r["triangles"], 48)
+        self.assertEqual(pr.info()["objects"][0]["size"], [20, 10, 5])
+
+    def test_decompose_color(self):
+        pr = O.Project(self.p)
+        n = len(pr.mesh(pr.object("box")["parts"][0])[1])
+        pr.paint("box", 1, "color", [2 if i < 4 else 0 for i in range(n)])
+        r = pr.decompose_color("box")
+        o = pr.object("box")
+        self.assertEqual(len(o["parts"]), 2)
+        self.assertEqual(o["parts"][1]["extruder"], "2")
+        self.assertEqual(len(pr.mesh(o["parts"][1])[1]), 4)
+        self.assertEqual(r["parts"], ["box.stl colour 2"])
+
+    def test_apply_presets(self):
+        pr = O.Project(self.p)
+        pr.apply_presets({"name": "Big printer", "printable_height": "400", "nozzle_diameter": ["0.6"]}, {"name": "Strong", "wall_loops": "5"},
+                         [{"name": "PETG blue", "filament_type": ["PETG"], "filament_colour": ["#0000FF"]}])
+        self.assertEqual(pr.config["printer_settings_id"], "Big printer")
+        self.assertEqual(pr.config["wall_loops"], "5")
+        self.assertEqual(pr.config["filament_type"][0], "PETG")
+        self.assertEqual(pr.config["filament_settings_id"][0], "PETG blue")
+
+    def test_export_amf_and_obj_reader(self):
+        pr = O.Project(self.p)
+        a = pr.export_amf(os.path.join(self.d, "o.amf"))
+        root = ET.parse(a).getroot()
+        self.assertEqual(len(root.findall("object")), 2)
+        o = pr.export_obj(os.path.join(self.d, "o.obj"))
+        self.assertEqual(len(O.read_obj(o)), 24)
+
     def test_options_table(self):
         t = O.options()["options"]
         self.assertGreater(len(t), 700)

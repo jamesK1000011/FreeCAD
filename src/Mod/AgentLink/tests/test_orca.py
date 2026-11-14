@@ -94,6 +94,12 @@ class OrcaLoop(unittest.TestCase):
         self.assertEqual(info["settings"]["wall_loops"], "4")
         s2 = self.ok("orca_slice", {"path": p})
         self.assertGreater(s2["layers"], s1["layers"])
+        # Read back for strength: the peg's own four walls count.
+        st = self.ok("orca_project", {"action": "strength", "path": p, "object": "Peg"})
+        self.assertEqual(st["settings"]["walls"], 4)
+        self.assertLess(st["strengthFactor"], 1.0)
+        f = self.ok("fea_setup", {"body": "Peg", "printed": {"project": p, "object": "Peg"}})
+        self.assertEqual(f["printSettings"]["settings"]["walls"], 4)
 
     def test_window_tools(self):
         # The window's object, plate, filament and mesh tools, then a slice.
@@ -119,12 +125,56 @@ class OrcaLoop(unittest.TestCase):
         names = [o["name"] for o in info["objects"]]
         self.assertIn("cube upper", names)
         self.assertEqual(len(info["filaments"]), 2)
+        for action, args in (("emboss", {"object": "Plate", "text": "AL", "size": 6, "depth": 0.6, "kind": "negative_part"}),
+                             ("lay_flat", {"object": "cube upper", "normal": [0, 0, 1]}),
+                             ("cli", {"options": {"uptodate": True}})):
+            r = self.ok("orca_project", {"action": action, "path": p, **args})
+            print(action, json.dumps(r)[:300], flush=True)
+        rep = self.ok("orca_slice", {"path": p, "export": "inspect_mesh"})
+        print("inspect_mesh", json.dumps(rep)[:400], flush=True)
+        self.ok("orca_slice", {"path": p, "export": "obj"})
         r = self.ok("orca_paint", {"path": p, "object": "Plate", "kind": "supports", "faces": ["Face1"], "state": "enforce"})
         self.assertGreater(r["triangles"], 0)
         s = self.ok("orca_slice", {"path": p})
         print("slice:", json.dumps({k: v for k, v in s.items() if k != "gcode"})[:600], flush=True)
         self.assertGreater(s["layers"], 10)
         self.ok("orca_slice", {"path": p, "export": "stls"})
+
+    def test_more_window_tools(self):
+        if not slicers.find("orcaslicer"):
+            self.skipTest("no OrcaSlicer on this machine")
+        import zipfile
+
+        from agentlink import orca3mf as O
+
+        p = self.ok("orca_project", {"action": "new", "bodies": ["Peg"], "path": "more2.3mf"})["project"]
+        stl = os.path.join(self.dir, "wedge.stl")
+        O.write_stl(stl, [[(0, 0, 0), (10, 0, 0), (0, 10, 0)], [(0, 0, 0), (0, 10, 0), (0, 0, 5)], [(0, 0, 0), (0, 0, 5), (10, 0, 0)], [(10, 0, 0), (0, 0, 5), (0, 10, 0)]])
+        zp = os.path.join(self.dir, "models.zip")
+        with zipfile.ZipFile(zp, "w") as z:
+            z.write(stl, "a/wedge.stl")
+        steps = [
+            ("object_add", {"file": zp}),
+            ("object_add", {"handy": "3DBenchy"}),
+            ("copy", {"object": "Peg"}),
+            ("scale_to_fit", {"object": "wedge"}),
+            ("mesh", {"object": "Peg", "op": "cut_grid", "size": [6, 6]}),
+            ("fill_bed", {"object": "wedge", "spacing": 40}),
+            ("plate_duplicate", {"plate": 1}),
+            ("plate_move", {"plate": 2, "to": 1}),
+        ]
+        for action, args in steps:
+            err, r = self.call("orca_project", {"action": action, "path": p, **args})
+            print(action, json.dumps(r)[:300], flush=True)
+            if action == "object_add" and args.get("handy") and err:
+                continue  # this OrcaSlicer may ship no handy models
+            self.assertFalse(err, r)
+        s = self.ok("orca_slice", {"path": p, "plate": 1})
+        g = self.ok("gcode_read", {"path": s["gcode"][0], "layer": 5, "move": 3, "svg": True, "show": ["travel", "retract", "seams"]})
+        self.assertIn("gcode", g["move"])
+        t = self.ok("gcode_read", {"path": s["gcode"][0], "toolpaths": True})
+        self.assertGreater(t["ribbons"], 10)
+        self.ok("orca_slice", {"path": p, "export": "amf"})
 
     def test_calibrations(self):
         if not slicers.find("orcaslicer"):
