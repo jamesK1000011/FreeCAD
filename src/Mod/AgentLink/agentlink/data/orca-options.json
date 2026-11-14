@@ -181,7 +181,12 @@
 "bed_exclude_volume_mode": {
 "mode": "comAdvanced",
 "preset": "machine",
-"type": "enum"
+"type": "enum",
+"values": [
+"shared",
+"toolhead_offset",
+"per_extruder"
+]
 },
 "bed_exclude_volumes": {
 "default": "",
@@ -234,7 +239,18 @@
 "mode": "comExpert",
 "preset": "machine",
 "sidetext": "\u00b0",
-"type": "float"
+"type": "float",
+"values": [
+"pos_x",
+"pos_y",
+"pos_z",
+"neg_x",
+"neg_y",
+"neg_z",
+"rev_x",
+"rev_y",
+"rev_z"
+]
 },
 "belt_frame_tilt_decouple": {
 "category": "Printable space",
@@ -277,7 +293,13 @@
 "category": "Printable space",
 "mode": "comDevelop",
 "preset": "machine",
-"type": "enum"
+"type": "enum",
+"values": [
+"none",
+"x",
+"y",
+"z"
+]
 },
 "belt_slice_rotation_angle": {
 "category": "Printable space",
@@ -490,7 +512,17 @@
 "category": "Support",
 "mode": "comSimple",
 "preset": "process",
-"type": "enum"
+"type": "enum",
+"values": [
+"auto_brim",
+"brim_ears",
+"painted",
+"outer_only",
+"inner_only",
+"outer_and_inner",
+"no_brim",
+"leading_edge_only"
+]
 },
 "brim_use_efc_outline": {
 "category": "Support",
@@ -673,11 +705,24 @@
 "category": "Quality",
 "mode": "comAdvanced",
 "preset": "process",
-"type": "enum"
+"type": "enum",
+"values": [
+"none",
+"partiallybridge",
+"sacrificiallayer"
+]
 },
 "curr_bed_type": {
 "mode": "comSimple",
-"type": "enum"
+"type": "enum",
+"values": [
+"Cool Plate",
+"Engineering Plate",
+"High Temp Plate",
+"Textured PEI Plate",
+"Textured Cool Plate",
+"Supertack Plate"
+]
 },
 "default_acceleration": {
 "category": "Speed",
@@ -2637,7 +2682,22 @@
 "input_shaping_type": {
 "mode": "comExpert",
 "preset": "machine",
-"type": "enum"
+"type": "enum",
+"values": [
+"Default",
+"MZV",
+"ZV",
+"ZVD",
+"ZVDD",
+"ZVDDD",
+"EI",
+"EI2",
+"2HUMP_EI",
+"EI3",
+"3HUMP_EI",
+"DAA",
+"Disable"
+]
 },
 "interface_shells": {
 "category": "Quality",
@@ -3502,7 +3562,15 @@
 "default": "(int)Overhang_threshold_bridge",
 "mode": "comAdvanced",
 "preset": "filament",
-"type": "enums"
+"type": "enums",
+"values": [
+"0%",
+"10%",
+"25%",
+"50%",
+"75%",
+"95%"
+]
 },
 "overhang_flow_ratio": {
 "category": "Advanced",
@@ -5123,7 +5191,11 @@
 "timelapse_type": {
 "mode": "comSimple",
 "preset": "process",
-"type": "enum"
+"type": "enum",
+"values": [
+"0",
+"1"
+]
 },
 "tool_change_on_wipe_tower": {
 "default": "false",
@@ -5149,7 +5221,11 @@
 "category": "Advanced",
 "mode": "comAdvanced",
 "preset": "process",
-"type": "enum"
+"type": "enum",
+"values": [
+"default",
+"cyclic"
+]
 },
 "top_bottom_infill_wall_overlap": {
 "category": "Strength",
@@ -5747,12 +5823,21 @@
 "wipe_tower_type": {
 "mode": "comAdvanced",
 "preset": "machine",
-"type": "enum"
+"type": "enum",
+"values": [
+"type1",
+"type2"
+]
 },
 "wipe_tower_wall_type": {
 "mode": "comAdvanced",
 "preset": "process",
-"type": "enum"
+"type": "enum",
+"values": [
+"rectangle",
+"cone",
+"rib"
+]
 },
 "wipe_tower_x": {
 "default": "15.",

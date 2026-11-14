@@ -225,6 +225,35 @@ def make_project(name, stls, dest, settings, profiles=None, options=None, timeou
     return exe
 
 
+def relayout(name, threemf, arrange=False, orient=False, options=None, timeout=600):
+    """The project's objects arranged on their plates and/or turned to their
+    best side by the slicer itself, the project re-saved in place. options:
+    allow_rotations, align_to_y_axis, avoid_extrusion_cali_region (bools)."""
+    exe = find(name)
+    if not exe:
+        raise FileNotFoundError(f"{name} is not on this computer.")
+    out_dir = os.path.splitext(threemf)[0] + "-layout"
+    os.makedirs(out_dir, exist_ok=True)
+    made = os.path.join(out_dir, "layout.3mf")
+    if os.path.exists(made):
+        os.remove(made)
+    args = [exe, "--outputdir", out_dir]
+    if arrange:
+        args += ["--arrange", "1"]
+    if orient:
+        args += ["--orient", "1"]
+    for k in ("allow_rotations", "align_to_y_axis", "avoid_extrusion_cali_region"):
+        if (options or {}).get(k):
+            args += ["--" + k.replace("_", "-")]
+    args += ["--export-3mf", "layout.3mf", os.path.abspath(threemf)]
+    run = _run(args, timeout, cwd=out_dir)
+    if not os.path.isfile(made):
+        why = result_error(out_dir)
+        raise RuntimeError((why + " — " if why else "") + _tail(run))
+    shutil.move(made, threemf)
+    return exe
+
+
 EXPORTS = {"stl": ("--export-stl", None), "stls": ("--export-stls", "stls"), "settings": ("--export-settings", "settings.json"),
            "slicedata": ("--export-slicedata", "slicedata"), "3mf": ("--export-3mf", "export.3mf")}
 

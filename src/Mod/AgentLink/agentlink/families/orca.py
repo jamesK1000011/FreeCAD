@@ -33,6 +33,10 @@ def _mesh_of(shape, tol=0.01):
     return [[pts[a], pts[b], pts[c]] for a, b, c in m.Topology[1]]
 
 
+ACTIONS = ["new", "info", "set", "part_add", "part_remove", "replace", "place", "plate", "gcode", "object_add", "object_remove", "instance", "printable",
+           "layer_heights", "brim_ears", "filament", "flush", "plate_add", "plate_remove", "mesh", "arrange", "orient", "settings"]
+
+
 def tools(session):
     s = session
 
@@ -174,7 +178,218 @@ def tools(session):
             return {"plate": a.get("plate", 1), "gcodes": proj.set_gcode(float(a["z"]), a.get("kind", "pause"), int(a.get("plate", 1)), a.get("gcode"), int(a.get("extruder", 1)), a.get("color"), bool(a.get("remove")))}
         if action == "object_remove":
             return {"removed": proj.remove_object(a["object"])}
-        raise ToolError("invalid_input", "action: new, info, set, part_add, part_remove, replace, place, plate, gcode, object_remove, settings.")
+        if action == "object_add":
+            if a.get("body"):
+                b = s.body(a["body"])
+                tris, name = _mesh_of(b.Shape), a.get("name") or f"{b.Label}.stl"
+            else:
+                tris, name = primitive(a), a.get("name") or str(a.get("primitive", "cube"))
+            return proj.add_object(tris, name, int(a.get("plate", 1)), a.get("at"), int(a.get("extruder", 1)))
+        if action == "instance":
+            if a.get("remove"):
+                return proj.remove_instance(a["object"], int(a.get("instance", 0)))
+            out = None
+            for _ in range(max(1, int(a.get("count", 1)))):
+                out = proj.add_instance(a["object"], a.get("move"))
+            return out
+        if action == "printable":
+            return proj.set_printable(a["object"], a.get("value", True), a.get("instance"))
+        if action == "layer_heights":
+            if a.get("adaptive") is not None:
+                return {"layerHeights": proj.set_layer_heights(a["object"], adaptive(proj, a))}
+            return {"layerHeights": proj.set_layer_heights(a["object"], a.get("profile") or [])}
+        if action == "brim_ears":
+            return {"brimEars": proj.set_brim_ears(a["object"], a.get("points") or [], a.get("radius"))}
+        if action == "filament":
+            if a.get("remove"):
+                return {"filaments": proj.remove_filament(int(a["slot"]))}
+            slot = int(a["slot"]) if a.get("slot") else proj.add_filament(int(a.get("like", 1)))
+            return proj.set_filament(slot, a.get("color"), a.get("type"), **(a.get("settings") or {}))
+        if action == "flush":
+            return proj.set_flush(a.get("matrix"), a.get("multiplier"))
+        if action == "plate_add":
+            return {"plate": proj.add_plate(a.get("name"))}
+        if action == "plate_remove":
+            return {"plates": proj.remove_plate(int(a["plate"]))}
+        if action == "mesh":
+            return mesh_op(proj, a)
+        if action in ("arrange", "orient"):
+            return cli_layout(proj, action, a)
+        raise ToolError("invalid_input", "action: " + ", ".join(ACTIONS) + ".")
+
+    def primitive(a):
+        import Part
+
+        kind = a.get("primitive", "cube")
+        d = a.get("size") or [20, 20, 20]
+        d = d if isinstance(d, list) else [d] * 3
+        shapes = {"cube": lambda: Part.makeBox(*d), "cylinder": lambda: Part.makeCylinder(d[0] / 2, d[2]), "sphere": lambda: Part.makeSphere(d[0] / 2),
+                  "cone": lambda: Part.makeCone(d[0] / 2, 0, d[2]), "disc": lambda: Part.makeCylinder(d[0] / 2, d[2] if len(d) > 2 and a.get("size") else 2),
+                  "torus": lambda: Part.makeTorus(d[0] / 2 - d[2] / 2, d[2] / 2)}
+        if kind not in shapes:
+            raise ToolError("invalid_input", f"primitive: {', '.join(shapes)}.")
+        return _mesh_of(shapes[kind]())
+
+    def adaptive(proj, a):
+        """Layer heights from the object's slope, as the window's Adaptive
+        button: thin where the surface is near flat, thick on walls.
+        adaptive is the quality 0 (thickest) .. 1 (thinnest)."""
+        o = proj.object(a["object"])
+        pts_tris = []
+        for p in o["parts"]:
+            if p["kind"] != "normal_part":
+                continue
+            v, t, _ = proj.mesh(p)
+            w = [O.apply(p["transform"], x) for x in v]
+            pts_tris += [(w[i], w[j], w[k]) for i, j, k in t]
+        if not pts_tris:
+            raise ToolError("invalid_state", "the object has no solid part.")
+        import math
+
+        lo, hi = 0.08, 0.28
+        for k in ("min_layer_height", "max_layer_height"):
+            v = proj.config.get(k)
+            v = v[0] if isinstance(v, list) and v else v
+            if v is not None:
+                lo, hi = (float(v), hi) if k.startswith("min") else (lo, float(v))
+        if hi <= lo:
+            nz = proj.config.get("nozzle_diameter") or ["0.4"]
+            hi = 0.75 * float(nz[0] if isinstance(nz, list) else nz)
+        q = float(a.get("adaptive") or 0.5)
+        top = max(p[2] for t in pts_tris for p in t)
+        bins = max(4, int(top / 0.5))
+        slope = [0.0] * (bins + 1)
+        for t in pts_tris:
+            (ax, ay, az), (bx, by, bz), (cx, cy, cz) = t
+            n = ((by - ay) * (cz - az) - (bz - az) * (cy - ay), (bz - az) * (cx - ax) - (bx - ax) * (cz - az), (bx - ax) * (cy - ay) - (by - ay) * (cx - ax))
+            ln = math.sqrt(sum(x * x for x in n)) or 1
+            nz = abs(n[2]) / ln
+            if nz > 0.999:
+                continue  # flat tops and bottoms take the even height
+            for z in (az, bz, cz):
+                i = min(bins, int(z / top * bins))
+                slope[i] = max(slope[i], nz)
+        out = []
+        for i in range(bins + 1):
+            h = hi - (hi - lo) * min(1.0, slope[i] * (0.5 + q))
+            out.append([round(i * top / bins, 3), round(max(lo, min(hi, h)), 3)])
+        return out
+
+    def mesh_op(proj, a):
+        """The window's mesh tools, done by FreeCAD's Mesh module on a part:
+        simplify, fix, smooth, mirror, boolean, split, merge, cut."""
+        import Mesh
+
+        op = a.get("op")
+        o = proj.object(a["object"])
+        p = proj.part(o, a.get("part"))
+
+        def to_mesh(part):
+            v, t, _ = proj.mesh(part)
+            w = [O.apply(part["transform"], x) for x in v]
+            return Mesh.Mesh([[w[i], w[j], w[k]] for i, j, k in t])
+
+        def tris(m):
+            pts = [(q.x, q.y, q.z) for q in m.Points]
+            return [[pts[i], pts[j], pts[k]] for i, j, k in m.Topology[1]]
+
+        m = to_mesh(p)
+        before = m.CountFacets
+        if op == "simplify":
+            m.decimate(float(a.get("tolerance", 0.05)), float(a.get("ratio", 0.5)))
+        elif op == "fix":
+            m.harmonizeNormals()
+            m.removeDuplicatedPoints()
+            m.removeDuplicatedFacets()
+            m.fixDegenerations(1e-6)
+            m.fixSelfIntersections()
+            m.fillupHoles(1000)
+        elif op == "smooth":
+            m.smooth(int(a.get("iterations", 3)))
+        elif op == "mirror":
+            axis = a.get("axis", "x")
+            k = "xyz".index(axis)
+            s_ = [1, 1, 1]
+            s_[k] = -1
+            b = m.BoundBox
+            c = [(b.XMin + b.XMax) / 2, (b.YMin + b.YMax) / 2, (b.ZMin + b.ZMax) / 2]
+            pts = [tuple(c[i] + s_[i] * (q[i] - c[i]) for i in range(3)) for q in ((pp.x, pp.y, pp.z) for pp in m.Points)]
+            m = Mesh.Mesh([[pts[i], pts[k_], pts[j]] for i, j, k_ in m.Topology[1]])  # flipped winding keeps normals out
+        elif op == "boolean":
+            other = proj.part(o, a["with"])
+            om = to_mesh(other)
+            mode = a.get("mode", "difference")
+            m = {"union": m.unite, "difference": m.difference, "intersection": m.intersect}[mode](om)
+            if a.get("consume", True):
+                proj.remove_part(o["index"], a["with"])
+        elif op == "cut":
+            import MeshPart
+            import Part
+
+            sh = Part.Shape()
+            sh.makeShapeFromMesh(m.Topology, 0.05)
+            solid = Part.makeSolid(Part.makeShell(sh.Faces)) if sh.Faces else None
+            if solid is None:
+                raise ToolError("failed", "the part's mesh does not close: orca_project mesh { op: fix } first.")
+            z = float(a.get("z", (m.BoundBox.ZMin + m.BoundBox.ZMax) / 2))
+            bb = m.BoundBox
+            big = 2 * bb.DiagonalLength + 10
+            keep = a.get("keep", "both")
+            lower = solid.common(Part.makeBox(big, big, z - bb.ZMin + 1, __import__("FreeCAD").Vector(bb.XMin - big / 4, bb.YMin - big / 4, bb.ZMin - 1)))
+            upper = solid.cut(Part.makeBox(big, big, z - bb.ZMin + 1, __import__("FreeCAD").Vector(bb.XMin - big / 4, bb.YMin - big / 4, bb.ZMin - 1)))
+            def mesh_s(x):
+                mm = MeshPart.meshFromShape(Shape=x, LinearDeflection=0.02, AngularDeflection=0.1, Relative=False)
+                return tris(mm)
+            made = []
+            if keep in ("both", "upper") and upper.Volume > 1e-6:
+                r = proj.add_object(mesh_s(upper), f"{o['name']} upper", 1)
+                made.append(r["object"])
+            if keep in ("both", "lower") and lower.Volume > 1e-6:
+                r = proj.add_object(mesh_s(lower), f"{o['name']} lower", 1)
+                made.append(r["object"])
+            proj.remove_object(o["index"])
+            return {"cut": o["name"], "atZ": z, "objects": made, "next": "orca_project arrange lays them out."}
+        elif op in ("split", "split_objects"):
+            comps = m.getSeparateComponents()
+            if len(comps) < 2:
+                return {"object": o["name"], "pieces": 1, "note": "One piece: nothing to split."}
+            if op == "split":
+                for i, c in enumerate(comps[1:], 2):
+                    proj.add_part(o["index"], tris(c), "normal_part", f"{p['name']} {i}")
+                m = comps[0]
+            else:
+                made = [proj.add_object(tris(c), f"{o['name']} {i}", 1)["object"] for i, c in enumerate(comps, 1)]
+                proj.remove_object(o["index"])
+                return {"object": o["name"], "objects": made}
+        elif op == "merge":
+            # Other objects' solid parts brought into this one, where they stand.
+            inst = O.invert(o["instances"][0]["transform"])
+            names = []
+            for w in a.get("objects") or []:
+                oo = proj.object(w)
+                for pp in oo["parts"]:
+                    t = O.mul(inst, O.mul(oo["instances"][0]["transform"], pp["transform"]))
+                    v, tt, _ = proj.mesh(pp)
+                    wv = [O.apply(t, x) for x in v]
+                    proj.add_part(o["index"], [[wv[i], wv[j], wv[k]] for i, j, k in tt], pp["kind"], pp["name"], {k: v for k, v in pp["settings"].items()} or None)
+                names.append(oo["name"])
+                proj.remove_object(oo["index"])
+            return {"object": o["name"], "merged": names}
+        else:
+            raise ToolError("invalid_input", "op: simplify, fix, smooth, mirror, boolean, cut, split, split_objects, merge.")
+        out = proj.replace_mesh(o["index"], a.get("part"), tris(m))
+        return {**out, "op": op, "trianglesBefore": before}
+
+    def cli_layout(proj, action, a):
+        proj.save()
+        try:
+            slicers.relayout("orcaslicer", proj.path, arrange=action == "arrange", orient=action == "orient", options=a.get("options") or {})
+        except FileNotFoundError as e:
+            raise ToolError("unavailable", str(e))
+        except RuntimeError as e:
+            raise ToolError("failed", str(e))
+        fresh = O.Project(proj.path)
+        return {"done": action, "objects": [{"name": x["name"], "placed": x.get("placed")} for x in fresh.info()["objects"]]}
 
     def effective(proj, o):
         """What prints for an object: project, then its own, then its first
@@ -376,15 +591,19 @@ def tools(session):
     return [
         Tool(
             "orca_project",
-            "OrcaSlicer projects (.3mf), headless, all the window keeps: action new { bodies, path, orient, arrange } (from FreeCAD bodies, the print setup's presets); info { path, object } (objects, parts, plates, filaments, ranges, per-layer G-code; object: its effective print settings); set { path, scope project|object|part|range|plate, key, value | settings {}, object, part, slot (filament), zmin, zmax, plate }; part_add { path, object, kind modifier_part|negative_part|support_blocker|support_enforcer|normal_part, body | box [x,y,z] + at, name, settings }; part_remove; replace { path, object, part, body } (the body changed: its mesh follows, settings stay); place { object, instance, move, rotate, scale, at [x,y], drop }; plate { object, plate } (moves it; next number makes a plate); gcode { z, kind pause|color_change|tool_change|template|custom, gcode, extruder, plate, remove }; object_remove; settings { query, preset } (every setting's key, type, limits, values). Values checked before saving; saveAs writes a copy.",
-            obj({"action": {"type": "string", "enum": ["new", "info", "set", "part_add", "part_remove", "replace", "place", "plate", "gcode", "object_remove", "settings"]},
+            "OrcaSlicer projects (.3mf), headless, all the window keeps: action new { bodies, path, orient, arrange } (from FreeCAD bodies, the print setup's presets); info { path, object } (objects, parts, plates, filaments, ranges, per-layer G-code; object: its effective print settings); set { path, scope project|object|part|range|plate, key, value | settings {}, object, part, slot (filament), zmin, zmax, plate }; part_add { path, object, kind modifier_part|negative_part|support_blocker|support_enforcer|normal_part, body | box [x,y,z] + at, name, settings }; part_remove; replace { path, object, part, body } (the body changed: its mesh follows, settings stay); place { object, instance, move, rotate, scale, at [x,y], drop }; plate { object, plate } (moves it; next number makes a plate); gcode { z, kind pause|color_change|tool_change|template|custom, gcode, extruder, plate, remove }; object_add { body | primitive cube|cylinder|sphere|cone|disc|torus + size, plate, at }; object_remove; instance { object, count, move | remove, instance }; printable { object, value }; layer_heights { object, profile [[z, h]…] | adaptive 0..1 }; brim_ears { object, points [[x, y]…], radius }; filament { slot | like (adds one), color, type, settings | remove }; flush { matrix, multiplier }; plate_add { name }; plate_remove { plate }; mesh { object, part, op simplify|fix|smooth|mirror|boolean (with, mode)|cut (z, keep)|split|split_objects|merge (objects) }; arrange, orient (Orca's own, on the project); settings { query, preset } (every setting's key, type, limits, values). Values checked before saving; saveAs writes a copy.",
+            obj({"action": {"type": "string", "enum": ACTIONS},
                  "path": {"type": "string"}, "saveAs": {"type": "string"}, "body": {"type": "string"}, "bodies": {"type": "array", "items": {"type": "string"}}, "of": {"type": "string"},
                  "object": {"type": ["string", "integer"]}, "part": {"type": ["string", "integer"]}, "scope": {"type": "string", "enum": ["project", "object", "part", "range", "plate"]},
                  "key": {"type": "string"}, "value": {}, "settings": {"type": "object"}, "slot": {"type": "integer"}, "zmin": {"type": "number"}, "zmax": {"type": "number"},
                  "plate": {"type": "integer"}, "kind": {"type": "string"}, "box": VEC, "at": VEC, "name": {"type": "string"}, "instance": {"type": "integer"},
                  "move": VEC, "rotate": VEC, "scale": {}, "drop": {"type": "boolean"}, "z": {"type": "number"}, "gcode": {"type": "string"}, "extruder": {"type": "integer"},
                  "color": {"type": "string"}, "remove": {"type": "boolean"}, "orient": {"type": "boolean"}, "arrange": {"type": "boolean"}, "profiles": {"type": "object"},
-                 "query": {"type": "string"}, "preset": {"type": "string", "enum": ["process", "machine", "filament"]}, "limit": {"type": "integer"}}),
+                 "query": {"type": "string"}, "preset": {"type": "string", "enum": ["process", "machine", "filament"]}, "limit": {"type": "integer"},
+                 "primitive": {"type": "string"}, "size": {}, "count": {"type": "integer"}, "profile": {"type": "array"}, "adaptive": {"type": "number"}, "points": {"type": "array"},
+                 "radius": {"type": "number"}, "type": {"type": "string"}, "like": {"type": "integer"}, "matrix": {"type": "array"}, "multiplier": {"type": "number"},
+                 "op": {"type": "string"}, "with": {"type": ["string", "integer"]}, "mode": {"type": "string"}, "consume": {"type": "boolean"}, "ratio": {"type": "number"},
+                 "tolerance": {"type": "number"}, "iterations": {"type": "integer"}, "axis": {"type": "string"}, "keep": {"type": "string"}, "objects": {"type": "array"}, "options": {"type": "object"}}),
             orca_project,
             changes=False,
         ),

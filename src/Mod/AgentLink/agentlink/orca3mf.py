@@ -445,7 +445,7 @@ class Project:
 
     def world_points(self, obj, part=None, instance=0):
         """The points of an object's parts (or one) placed on the plate."""
-        inst = obj["instances"][instance]["transform"] if obj["instances"] else matrix(None)
+        inst = obj["instances"][instance]["transform"] if obj["instances"] and instance is not None else matrix(None)
         pts = []
         for p in ([part] if part else obj["parts"]):
             if p["kind"] != "normal_part" and part is None:
@@ -490,7 +490,7 @@ class Project:
             out[n] = {"mode": mode.get("value") if mode is not None else "SingleExtruder",
                       "items": [{"z": float(l.get("top_z")), "type": GCODE_NAMES.get(int(l.get("type", 4)), l.get("type")),
                                  "extruder": int(l.get("extruder", 1)), "color": l.get("color", ""), "extra": l.get("extra", ""),
-                                 "gcode": l.get("gcode", "")} for l in pl.findall("layer")]}
+                                 "gcode": l.get("extra") if int(l.get("type", 4)) == 4 else l.get("gcode", "")} for l in pl.findall("layer")]}
         return out
 
     def info(self):
@@ -795,9 +795,9 @@ class Project:
         return self.ranges().get(o["index"], [])
 
     def set_gcode(self, z, kind, plate=1, gcode=None, extruder=1, color=None, remove=False):
-        """G-code at the layer whose top is z (mm) on a plate: kind pause,
-        color_change, tool_change, template, custom (gcode given); remove
-        takes the one at z away."""
+        """G-code at the layer whose top is z (mm) on a plate: kind pause
+        (gcode: the message shown), color_change, tool_change, template,
+        custom (gcode: the lines); remove takes the one at z away."""
         if kind not in GCODE_TYPES and not remove:
             raise ProjectError(f"kind: one of {', '.join(GCODE_TYPES)}.")
         if kind == "custom" and not gcode and not remove:
@@ -815,7 +815,9 @@ class Project:
             colours = self.config.get("filament_colour") or ["#FFFFFF"]
             attrs = {"top_z": _fmt(float(z)), "type": str(GCODE_TYPES[kind]), "extruder": str(int(extruder)),
                      "color": color or (colours[int(extruder) - 1] if kind in ("color_change", "tool_change") and int(extruder) <= len(colours) else ""),
-                     "extra": "", "gcode": gcode or {"pause": "M601", "color_change": "M600", "tool_change": f"tool_change"}.get(kind, "")}
+                     # Orca reads the custom lines (and a pause's message) from extra.
+                     "extra": gcode or "", "gcode": gcode if kind == "custom" else {"pause": str(self.config.get("machine_pause_gcode") or "M601"), "color_change": "M600", "tool_change": "tool_change",
+                                                                                     "template": str(self.config.get("template_custom_gcode") or "")}.get(kind, "")}
             layer = ET.Element("layer", attrs)
             mode = pl.find("mode")
             pl.insert(list(pl).index(mode) if mode is not None else len(pl), layer)
@@ -837,8 +839,8 @@ class Project:
             raise ProjectError(f"plate settings: {', '.join(PLATE_KEYS)}.")
         k = PLATE_KEYS[key]
         if key == "bed_type" and value is not None:
-            ok = ("Cool Plate", "Engineering Plate", "High Temp Plate", "Textured PEI Plate", "Smooth PEI Plate", "Textured Cool Plate", "Supertack Plate")
-            if value not in ok:
+            ok = options()["options"].get("curr_bed_type", {}).get("values") or []
+            if ok and value not in ok:
                 raise ProjectError(f"bed_type: one of {', '.join(ok)}.")
         if key == "locked":
             value = "true" if value in (True, "1", "true") else "false"
@@ -905,6 +907,342 @@ class Project:
             self.files[RANGES] = _xml(root)
         self._dirty()
         return o["name"]
+
+    # -- objects, instances, layer heights, brim ears ------------------------------------------
+    def add_object(self, tris, name, plate=1, at=None, extruder=1):
+        """A new object of one part from triangles (its source coordinates,
+        as an STL of the body would have them), put on a plate."""
+        verts, faces = weld(tris)
+        if not faces:
+            raise ProjectError("the object's mesh has no triangles.")
+        b = bbox(verts)
+        c = [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2]
+        pid = self._next_id()
+        oid = pid + 1
+        safe = re.sub(r"[^\w.-]", "_", name)
+        fname = f"3D/Objects/{safe}_{pid}.model"
+        self.files[fname] = (f'<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" xmlns="{CORE}" xmlns:p="{PROD}" requiredextensions="p">\n <resources>\n'
+                             + mesh_xml([(x - c[0], y - c[1], z - c[2]) for x, y, z in verts], faces, pid) + " </resources>\n <build/>\n</model>\n").encode()
+        self._rels_add(fname)
+        comp = [[1, 0, 0, c[0]], [0, 1, 0, c[1]], [0, 0, 1, c[2]], [0, 0, 0, 1]]
+        res = self.model.find(_q("resources"))
+        o = ET.SubElement(res, _q("object"), {"id": str(oid), "type": "model"})
+        comps = ET.SubElement(o, _q("components"))
+        ET.SubElement(comps, _q("component"), {_q("path", PROD): "/" + fname, "objectid": str(pid), "transform": matrix_text(comp)})
+        build = self.model.find(_q("build"))
+        if build is None:
+            build = ET.SubElement(self.model, _q("build"))
+        ET.SubElement(build, _q("item"), {"objectid": str(oid), "transform": matrix_text([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]), "printable": "1"})
+        so = ET.Element("object", {"id": str(oid)})
+        _set_meta(so, "name", name)
+        _set_meta(so, "extruder", str(int(extruder)))
+        part = ET.SubElement(so, "part", {"id": str(pid), "subtype": "normal_part"})
+        for k, v in (("name", name), ("matrix", " ".join(_fmt(float(x)) for row in comp for x in row)), ("source_file", name),
+                     ("source_object_id", "0"), ("source_volume_id", "0"), ("source_offset_x", _fmt(c[0])), ("source_offset_y", _fmt(c[1])), ("source_offset_z", _fmt(c[2]))):
+            _set_meta(part, k, v)
+        ET.SubElement(part, "mesh_stat", {"edges_fixed": "0", "degenerate_facets": "0", "facets_removed": "0", "facets_reversed": "0", "backwards_edges": "0"})
+        objs = self.settings_xml.findall("object")
+        at_ = list(self.settings_xml).index(objs[-1]) + 1 if objs else 0
+        self.settings_xml.insert(at_, so)
+        self._dirty()
+        self.move_to_plate(self.objects()[-1]["index"], plate)
+        o_ = self.objects()[-1]
+        bed = self.bed()
+        where = at or ([(bed[0] + bed[2]) / 2, (bed[1] + bed[3]) / 2] if bed else [0, 0])
+        r = self.place(o_["index"], at=where)
+        return {"object": name, "index": o_["index"], "placed": r["placed"]}
+
+    def bed(self):
+        """[xmin, ymin, xmax, ymax] of the printer's bed (its printable area)."""
+        area = self.config.get("printable_area") or []
+        pts = []
+        for p in area:
+            try:
+                x, y = p.split("x")
+                pts.append((float(x), float(y)))
+            except ValueError:
+                pass
+        if not pts:
+            return None
+        xs, ys = zip(*pts)
+        return [min(xs), min(ys), max(xs), max(ys)]
+
+    def add_instance(self, which, offset=None):
+        """Another copy of an object, beside the last (offset [dx, dy] mm,
+        default its width plus 5 mm along X)."""
+        o = self.object(which)
+        items = [it for it in self._build_items() if it.get("objectid") == o["id"]]
+        last = items[-1]
+        m = matrix(last.get("transform"))
+        b = bbox(self.world_points(o, instance=len(items) - 1)) or [0, 0, 0, 0, 0, 0]
+        d = offset or [b[3] - b[0] + 5, 0]
+        m[0][3] += d[0]
+        m[1][3] += d[1] if len(d) > 1 else 0
+        build = self.model.find(_q("build"))
+        new = ET.Element(_q("item"), {"objectid": o["id"], "transform": matrix_text(m), "printable": last.get("printable", "1")})
+        build.insert(list(build).index(last) + 1, new)
+        # The plate the first copy is on gets this one too.
+        for p in self.settings_xml.findall("plate"):
+            if any(_meta(mi).get("object_id") == o["id"] for mi in p.findall("model_instance")):
+                mi = ET.SubElement(p, "model_instance")
+                _set_meta(mi, "object_id", o["id"])
+                _set_meta(mi, "instance_id", str(len(items)))
+                _set_meta(mi, "identify_id", str(self._next_id() + 2000 + len(items)))
+                break
+        self._dirty()
+        return {"object": o["name"], "instances": len(items) + 1}
+
+    def remove_instance(self, which, instance):
+        o = self.object(which)
+        items = [it for it in self._build_items() if it.get("objectid") == o["id"]]
+        if len(items) < 2:
+            raise ProjectError(f"{o['name']} has one copy: remove the object instead.")
+        if not 0 <= instance < len(items):
+            raise ProjectError(f"instance: 0..{len(items) - 1}.")
+        self.model.find(_q("build")).remove(items[instance])
+        for p in self.settings_xml.findall("plate"):
+            for mi in p.findall("model_instance"):
+                m = _meta(mi)
+                if m.get("object_id") == o["id"]:
+                    i = int(m.get("instance_id", "0"))
+                    if i == instance:
+                        p.remove(mi)
+                    elif i > instance:
+                        _set_meta(mi, "instance_id", str(i - 1))
+        self._dirty()
+        return {"object": o["name"], "instances": len(items) - 1}
+
+    def set_printable(self, which, printable, instance=None):
+        o = self.object(which)
+        for i, it in enumerate(x for x in self._build_items() if x.get("objectid") == o["id"]):
+            if instance is None or i == instance:
+                it.set("printable", "1" if printable else "0")
+        self._dirty()
+        return {"object": o["name"], "printable": bool(printable)}
+
+    def layer_heights(self):
+        """{object index: [[z, layer height], ...]} — variable layer height."""
+        t = self.files.get("Metadata/layer_heights_profile.txt", b"").decode()
+        out = {}
+        for line in t.splitlines():
+            if "|" in line and line.startswith("object_id="):
+                head, vals = line.split("|", 1)
+                v = [float(x) for x in vals.split(";") if x]
+                out[int(head.split("=")[1])] = [[v[i], v[i + 1]] for i in range(0, len(v) - 1, 2)]
+        return out
+
+    def set_layer_heights(self, which, profile):
+        """An object's layer heights along Z: [[z, height], ...] (at least
+        three points, z rising from 0); [] goes back to the even height."""
+        o = self.object(which)
+        cur = self.layer_heights()
+        if profile:
+            pts = sorted((float(z), float(h)) for z, h in profile)
+            if len(pts) < 3:
+                raise ProjectError("layer heights: at least three [z, height] points.")
+            lo, hi = 0.04, 0.6
+            for k in ("min_layer_height", "max_layer_height"):
+                v = self.config.get(k)
+                if isinstance(v, list) and v:
+                    v = v[0]
+                if v is not None:
+                    if k.startswith("min"):
+                        lo = float(v)
+                    else:
+                        hi = float(v)
+            if hi <= lo:  # 0: not set — the nozzle decides
+                nz = self.config.get("nozzle_diameter") or ["0.4"]
+                hi = 0.75 * float(nz[0] if isinstance(nz, list) else nz)
+            for z, h in pts:
+                if not lo - 1e-9 <= h <= hi + 1e-9:
+                    raise ProjectError(f"layer height {_fmt(h)} at z {_fmt(z)}: the printer takes {_fmt(lo)} to {_fmt(hi)} mm.")
+            cur[o["index"]] = [list(p) for p in pts]
+        else:
+            cur.pop(o["index"], None)
+        text = "".join(f"object_id={i}|" + ";".join(f"{v:f}" for p in prof for v in p) + "\n" for i, prof in sorted(cur.items()))
+        if text:
+            self.files["Metadata/layer_heights_profile.txt"] = text.encode()
+        else:
+            self.files.pop("Metadata/layer_heights_profile.txt", None)
+        self._dirty()
+        return cur.get(o["index"], [])
+
+    def brim_ears(self):
+        t = self.files.get("Metadata/brim_ear_points.txt", b"").decode()
+        out = {}
+        for line in t.splitlines():
+            if line.startswith("object_id=") and "|" in line:
+                head, vals = line.split("|", 1)
+                v = [float(x) for x in vals.split()]
+                out[int(head.split("=")[1])] = [v[i:i + 4] for i in range(0, len(v) - 3, 4)]
+        return out
+
+    def set_brim_ears(self, which, points, radius=None):
+        """Brim ears at points [[x, y] or [x, y, z, r]] on the object's
+        bottom (object coordinates); brim_type brim_ears turns them on for
+        it. [] removes them."""
+        o = self.object(which)
+        cur = self.brim_ears()
+        if points:
+            b = bbox(self.world_points(o, instance=None))
+            r = float(radius or 5)
+            cur[o["index"]] = [[float(q[0]), float(q[1]), float(q[2]) if len(q) > 2 else (b[2] if b else 0.0), float(q[3]) if len(q) > 3 else r] for q in points]
+            self.set_object(o["index"], "brim_type", "brim_ears")
+        else:
+            cur.pop(o["index"], None)
+        text = "".join(f"object_id={i}|" + " ".join(f"{v:f}" for q in pts for v in q) + "\n" for i, pts in sorted(cur.items()))
+        if text:
+            self.files["Metadata/brim_ear_points.txt"] = ("brim_points_format_version=0\n" + text).encode()
+        else:
+            self.files.pop("Metadata/brim_ear_points.txt", None)
+        self._dirty()
+        return cur.get(o["index"], [])
+
+    # -- filaments -------------------------------------------------------------------------
+    def filament_keys(self):
+        """The project's per-filament lists (each as long as the slots)."""
+        n = len(self.config.get("filament_settings_id") or [])
+        t = options()["options"]
+        return [k for k, v in self.config.items() if isinstance(v, list) and len(v) == n and (t.get(k, {}).get("preset") == "filament" or k.startswith("filament_") or k in ("nozzle_temperature", "nozzle_temperature_initial_layer"))
+                and k not in ("filament_map", "different_settings_to_system", "inherits_group", "flush_volumes_matrix", "flush_volumes_vector")]
+
+    def add_filament(self, like=1, colour=None, type_=None):
+        """Another filament slot, a copy of slot like's settings; colour
+        "#RRGGBB" and type change it."""
+        n = len(self.config.get("filament_settings_id") or [])
+        if not 1 <= like <= n:
+            raise ProjectError(f"like: a slot 1..{n}.")
+        for k in self.filament_keys():
+            self.config[k] = list(self.config[k]) + [self.config[k][like - 1]]
+        for k in ("filament_map",):
+            if isinstance(self.config.get(k), list):
+                self.config[k] = list(self.config[k]) + [self.config[k][like - 1] if like <= len(self.config[k]) else "1"]
+        d = self.config.get("different_settings_to_system")
+        if isinstance(d, list) and len(d) >= 2:
+            d.insert(len(d) - 1, d[like] if like < len(d) - 1 else "")
+        ig = self.config.get("inherits_group")
+        if isinstance(ig, list) and len(ig) >= 2:
+            ig.insert(len(ig) - 1, ig[like] if like < len(ig) - 1 else "")
+        self._resize_flush(n + 1)
+        slot = n + 1
+        if colour:
+            self.set_filament(slot, colour=colour)
+        if type_:
+            self.set_filament(slot, type_=type_)
+        self._dirty()
+        return slot
+
+    def remove_filament(self, slot):
+        n = len(self.config.get("filament_settings_id") or [])
+        if n < 2:
+            raise ProjectError("the project's only filament stays.")
+        if not 1 <= slot <= n:
+            raise ProjectError(f"slot: 1..{n}.")
+        for k in self.filament_keys() + [k for k in ("filament_map",) if isinstance(self.config.get(k), list) and len(self.config[k]) == n]:
+            v = list(self.config[k])
+            del v[slot - 1]
+            self.config[k] = v
+        for k in ("different_settings_to_system", "inherits_group"):
+            d = self.config.get(k)
+            if isinstance(d, list) and len(d) == n + 2:
+                del d[slot]
+        self._resize_flush(n - 1, drop=slot)
+        # Objects and parts on the slot go to slot 1; later slots move down.
+        for el in self.settings_xml.iter():
+            if el.tag in ("object", "part"):
+                e = _meta(el).get("extruder")
+                if e and e.isdigit():
+                    e = int(e)
+                    _set_meta(el, "extruder", "1" if e == slot else str(e - 1 if e > slot else e))
+        self._dirty()
+        return n - 1
+
+    def set_filament(self, slot, colour=None, type_=None, **settings):
+        n = len(self.config.get("filament_settings_id") or [])
+        if not 1 <= slot <= n:
+            raise ProjectError(f"slot: 1..{n}.")
+        if colour:
+            if not re.match(r"^#[0-9A-Fa-f]{6}$", colour):
+                raise ProjectError("colour: \"#RRGGBB\".")
+            self.set("filament_colour", colour.upper(), slot)
+        if type_:
+            self.set("filament_type", type_, slot)
+        for k, v in settings.items():
+            self.set(k, v, slot)
+        return {"slot": slot, "colour": (self.config.get("filament_colour") or [None] * slot)[slot - 1], "type": (self.config.get("filament_type") or [None] * slot)[slot - 1]}
+
+    def _resize_flush(self, n, drop=None):
+        m = self.config.get("flush_volumes_matrix")
+        if not isinstance(m, list):
+            return
+        old = int(round(len(m) ** 0.5)) if m else 0
+        if old * old != len(m):
+            return
+        grid = [m[i * old:(i + 1) * old] for i in range(old)]
+        if drop:
+            grid = [row[:drop - 1] + row[drop:] for i, row in enumerate(grid) if i != drop - 1]
+        while len(grid) < n:
+            fill = grid[0][1] if old > 1 else "280"
+            for row in grid:
+                row.append(fill)
+            grid.append([fill] * (len(grid)) + ["0"])
+        self.config["flush_volumes_matrix"] = [v for row in grid for v in row]
+
+    def set_flush(self, matrix_=None, multiplier=None):
+        """Flushing volumes (mm³) between filaments: an n x n matrix, row
+        from, column to; multiplier scales them all."""
+        n = len(self.config.get("filament_settings_id") or [])
+        if matrix_ is not None:
+            if len(matrix_) != n or any(len(r) != n for r in matrix_):
+                raise ProjectError(f"flush: a {n} x {n} matrix.")
+            self.config["flush_volumes_matrix"] = [_fmt(float(v)) for r in matrix_ for v in r]
+        if multiplier is not None:
+            self.config["flush_multiplier"] = [_fmt(float(multiplier))] if isinstance(self.config.get("flush_multiplier"), list) else _fmt(float(multiplier))
+        self._dirty()
+        return {"matrix": self.config.get("flush_volumes_matrix"), "multiplier": self.config.get("flush_multiplier")}
+
+    # -- plates ----------------------------------------------------------------------------
+    def add_plate(self, name=None):
+        plates = self.settings_xml.findall("plate")
+        n = len(plates) + 1
+        el = ET.Element("plate")
+        for k, v in (("plater_id", str(n)), ("plater_name", name or ""), ("locked", "false")):
+            _set_meta(el, k, v)
+        at = list(self.settings_xml).index(plates[-1]) + 1 if plates else len(self.settings_xml)
+        self.settings_xml.insert(at, el)
+        self._dirty()
+        return n
+
+    def remove_plate(self, plate):
+        """A plate and the objects on it removed; later plates move up."""
+        plates = self.settings_xml.findall("plate")
+        if len(plates) < 2:
+            raise ProjectError("the project's only plate stays.")
+        el = next((p for p in plates if _meta(p).get("plater_id") == str(plate)), None)
+        if el is None:
+            raise ProjectError(f"plate {plate}: 1..{len(plates)}.")
+        ids = {_meta(mi).get("object_id") for mi in el.findall("model_instance")}
+        for oid in ids:
+            o = next((x for x in self.objects() if x["id"] == oid), None)
+            if o:
+                self.remove_object(o["index"])
+        self.settings_xml.remove(el)
+        for p in self.settings_xml.findall("plate"):
+            i = int(_meta(p).get("plater_id"))
+            if i > plate:
+                _set_meta(p, "plater_id", str(i - 1))
+        if GCODES in self.files:
+            root = ET.fromstring(self.files[GCODES])
+            for pl in list(root.findall("plate")):
+                info = pl.find("plate_info")
+                i = int(info.get("id")) if info is not None else 1
+                if i == plate:
+                    root.remove(pl)
+                elif i > plate:
+                    info.set("id", str(i - 1))
+            self.files[GCODES] = _xml(root)
+        self._dirty()
+        return len(plates) - 1
 
     def strip_results(self):
         """The sliced results dropped (they no longer match): plate G-code,

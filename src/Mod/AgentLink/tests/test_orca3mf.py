@@ -230,6 +230,88 @@ class Project(unittest.TestCase):
         self.assertNotIn("ns0:", text)
         self.assertNotIn("ns1:", text)
 
+    def test_add_object_and_instances(self):
+        pr = O.Project(self.p)
+        r = pr.add_object(box(5, 5, 5, at=(100, 100, 0)), "cube.stl")
+        self.assertEqual(r["index"], 3)
+        pr.add_instance("cube")
+        pr.add_instance("cube", [0, 20])
+        pr.set_printable("cube", False, 2)
+        pr.save()
+        pr = self.reopen()
+        o = pr.object("cube")
+        self.assertEqual(len(o["instances"]), 3)
+        self.assertFalse(o["instances"][2]["printable"])
+        self.assertEqual(sorted(pr.plates()[0]["objects"]), sorted(["2", "4", o["id"], o["id"], o["id"]]))
+        # Its source coordinates are kept, like Orca's own.
+        pts = [O.apply(o["parts"][0]["transform"], v) for v in pr.mesh(o["parts"][0])[0]]
+        self.assertEqual([round(x, 6) for x in O.bbox(pts)], [100, 100, 0, 105, 105, 5])
+        pr.remove_instance("cube", 0)
+        self.assertEqual(len(pr.object("cube")["instances"]), 2)
+
+    def test_layer_heights(self):
+        pr = O.Project(self.p)
+        pr.set_layer_heights("tall", [[0, 0.2], [10, 0.1], [20, 0.25]])
+        with self.assertRaises(O.ProjectError):
+            pr.set_layer_heights("tall", [[0, 0.2], [10, 0.1]])
+        with self.assertRaises(O.ProjectError):
+            pr.set_layer_heights("tall", [[0, 0.2], [10, 3], [20, 0.2]])
+        pr.save()
+        with zipfile.ZipFile(self.p) as z:
+            text = z.read("Metadata/layer_heights_profile.txt").decode()
+        self.assertTrue(text.startswith("object_id=2|0.000000;0.200000;10.000000;0.100000"))
+        self.assertEqual(self.reopen().layer_heights()[2][1], [10, 0.1])
+
+    def test_brim_ears(self):
+        pr = O.Project(self.p)
+        pr.set_brim_ears("box", [[0, 0], [20, 10]], radius=4)
+        pr.save()
+        pr = self.reopen()
+        self.assertEqual(pr.brim_ears()[1], [[0, 0, 0, 4], [20, 10, 0, 4]])
+        self.assertEqual(pr.object("box")["settings"]["brim_type"], "brim_ears")
+        with zipfile.ZipFile(self.p) as z:
+            self.assertTrue(z.read("Metadata/brim_ear_points.txt").startswith(b"brim_points_format_version=0\n"))
+
+    def test_filaments(self):
+        pr = O.Project(self.p)
+        n = len(pr.config["filament_settings_id"])
+        slot = pr.add_filament(1, colour="#00ff00", type_="PETG")
+        self.assertEqual(slot, n + 1)
+        for k in pr.filament_keys():
+            self.assertEqual(len(pr.config[k]), n + 1, k)
+        self.assertEqual(pr.config["filament_colour"][-1], "#00FF00")
+        self.assertEqual(pr.config["filament_type"][-1], "PETG")
+        m = pr.config.get("flush_volumes_matrix")
+        if isinstance(m, list):
+            self.assertEqual(len(m), (n + 1) ** 2)
+        pr.set_object("tall", "extruder", slot)
+        pr.remove_filament(1)
+        self.assertEqual(len(pr.config["filament_settings_id"]), n)
+        self.assertEqual(pr.object("tall")["extruder"], str(slot - 1))
+        with self.assertRaises(O.ProjectError):
+            pr.set_filament(1, colour="green")
+
+    def test_plate_add_remove(self):
+        pr = O.Project(self.p)
+        self.assertEqual(pr.add_plate("spare"), 2)
+        pr.move_to_plate("tall", 2)
+        pr.set_gcode(2.0, "pause", plate=2)
+        pr.remove_plate(2)
+        pr.save()
+        pr = self.reopen()
+        self.assertEqual(len(pr.plates()), 1)
+        self.assertEqual([o["name"] for o in pr.objects()], ["box.stl"])
+        self.assertNotIn(2, pr.gcodes())
+
+    def test_custom_gcode_in_extra(self):
+        pr = O.Project(self.p)
+        pr.set_gcode(1.0, "custom", gcode="M117 hi")
+        pr.save()
+        with zipfile.ZipFile(self.p) as z:
+            layer = ET.fromstring(z.read(O.GCODES)).find("plate/layer")
+        self.assertEqual(layer.get("extra"), "M117 hi")  # Orca reads it from extra
+        self.assertEqual(self.reopen().gcodes()[1]["items"][0]["gcode"], "M117 hi")
+
     def test_options_table(self):
         t = O.options()["options"]
         self.assertGreater(len(t), 700)
