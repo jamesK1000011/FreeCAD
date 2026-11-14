@@ -199,7 +199,9 @@ class Project(unittest.TestCase):
 
     def test_plates(self):
         pr = O.Project(self.p)
+        x = pr.object("tall")["instances"][0]["transform"][0][3]
         pr.move_to_plate("tall", 2)
+        self.assertGreater(pr.object("tall")["instances"][0]["transform"][0][3], x + 100)
         pr.set_plate(2, "name", "tall one")
         pr.set_plate(1, "bed_type", "Textured PEI Plate")
         with self.assertRaises(O.ProjectError):
@@ -340,7 +342,15 @@ class Project(unittest.TestCase):
         d = pr.duplicate_plate(1)
         self.assertEqual(d["plate"], 2)
         self.assertEqual(len(pr.plates()[1]["objects"]), 3)
+        # Plate 2 sits beside plate 1, a bed and a fifth along X: its copies with it.
+        bed = pr.bed()
+        w = bed[2] - bed[0]
+        x1 = pr.object("box")["instances"][0]["transform"][0][3]
+        x2 = pr.object(4)["instances"][0]["transform"][0][3]
+        self.assertAlmostEqual(x2 - x1, 1.2 * w, places=3)
+        self.assertEqual(pr.bed(2)[0], bed[0] + 1.2 * w)
         order = pr.move_plate(2, 1)
+        self.assertAlmostEqual(pr.object(4)["instances"][0]["transform"][0][3], x1, places=3)
         self.assertEqual(order, [2, 1])
         self.assertEqual(len(pr.plates()[0]["objects"]), 3)
         pr.save()

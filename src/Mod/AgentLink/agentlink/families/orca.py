@@ -228,7 +228,7 @@ def tools(session):
         if action == "plate_move":
             return {"order": proj.move_plate(int(a["plate"]), int(a.get("to", 1)))}
         if action == "scale_to_fit":
-            return proj.scale_to_fit(a["object"], float(a.get("margin", 0)))
+            return proj.scale_to_fit(a["object"], float(a.get("margin", 5)))
         if action == "fill_bed":
             out = proj.fill_bed(a["object"], float(a.get("spacing", 5)))
             if a.get("arrange", True) and slicers.find("orcaslicer"):

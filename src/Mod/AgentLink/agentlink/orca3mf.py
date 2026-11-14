@@ -919,21 +919,42 @@ class Project:
             _set_meta(target, "plater_id", str(plate))
             at = list(self.settings_xml).index(plates[-1]) + 1 if plates else len(self.settings_xml)
             self.settings_xml.insert(at, target)
-        moved = None
+        n_before = len(plates)
+        n_after = len(self.settings_xml.findall("plate"))
+        if n_after != n_before:
+            self._relayout(n_before, n_after, {i: i for i in range(1, n_before + 1)})
+        moved, came_from = None, None
         for p in plates:
             for mi in p.findall("model_instance"):
                 m = _meta(mi)
                 if m.get("object_id") == o["id"] and m.get("instance_id", "0") == str(instance):
                     p.remove(mi)
-                    moved = mi
+                    moved, came_from = mi, int(_meta(p).get("plater_id"))
         if moved is None:
             moved = ET.Element("model_instance")
             _set_meta(moved, "object_id", o["id"])
             _set_meta(moved, "instance_id", str(instance))
             _set_meta(moved, "identify_id", str(self._next_id() + 1000))
         target.append(moved)
+        if came_from and came_from != plate:
+            a0, b0 = self.plate_origin(came_from), self.plate_origin(plate)
+            it = [x for x in self._build_items() if x.get("objectid") == o["id"]][instance]
+            m = matrix(it.get("transform"))
+            m[0][3] += b0[0] - a0[0]
+            m[1][3] += b0[1] - a0[1]
+            it.set("transform", matrix_text(m))
         self._dirty()
         return self.plates()
+
+    def _relayout(self, n_old, n_new, slot):
+        """Plates' objects moved when the plate count changes the columns,
+        or plates change places: slot maps each plate's old number to its
+        new one (numbers as they will stand)."""
+        moves = {}
+        for old, new in slot.items():
+            a0, b0 = self.plate_origin(old, n_old), self.plate_origin(new, n_new)
+            moves[new] = (b0[0] - a0[0], b0[1] - a0[1])
+        self._shift_plates(moves)
 
     def remove_object(self, which):
         o = self.object(which)
@@ -1000,13 +1021,61 @@ class Project:
         self._dirty()
         self.move_to_plate(self.objects()[-1]["index"], plate)
         o_ = self.objects()[-1]
-        bed = self.bed()
-        where = at or ([(bed[0] + bed[2]) / 2, (bed[1] + bed[3]) / 2] if bed else [0, 0])
+        bed = self.bed(plate)
+        where = [a + b for a, b in zip(at, self.plate_origin(plate))] if at else ([(bed[0] + bed[2]) / 2, (bed[1] + bed[3]) / 2] if bed else [0, 0])
         r = self.place(o_["index"], at=where)
         return {"object": name, "index": o_["index"], "placed": r["placed"]}
 
-    def bed(self):
-        """[xmin, ymin, xmax, ymax] of the printer's bed (its printable area)."""
+    def bed(self, plate=1):
+        """[xmin, ymin, xmax, ymax] of a plate's bed (the printable area, at
+        the place the plate has in the project's world, as Orca lays plates
+        out side by side)."""
+        b = self._bed0()
+        if not b:
+            return None
+        ox, oy = self.plate_origin(plate)
+        return [b[0] + ox, b[1] + oy, b[2] + ox, b[3] + oy]
+
+    def plate_origin(self, plate, count=None):
+        """Where plate (1..) sits: Orca's plates in rows of ceil-ish
+        sqrt(count) columns, each a bed and a fifth apart."""
+        b = self._bed0()
+        if not b:
+            return (0.0, 0.0)
+        n = count or max(1, len(self.settings_xml.findall("plate")))
+        r = math.sqrt(n)
+        cols = int(round(r)) + (1 if r > round(r) else 0)
+        i = plate - 1
+        w, d = b[2] - b[0], b[3] - b[1]
+        return ((i % cols) * w * 1.2, -(i // cols) * d * 1.2)
+
+    def plate_of(self, which, instance=0):
+        o = self.object(which)
+        for p in self.plates():
+            for mi in p["instances"]:
+                if mi.get("object_id") == o["id"] and mi.get("instance_id", "0") == str(instance):
+                    return p["plate"]
+        return 1
+
+    def _shift_plates(self, moves):
+        """Move every instance on plate k by moves[k] = (dx, dy)."""
+        on = {}
+        for p in self.plates():
+            for mi in p["instances"]:
+                on[(mi.get("object_id"), int(mi.get("instance_id", "0")))] = p["plate"]
+        counters = {}
+        for it in self._build_items():
+            oid = it.get("objectid")
+            k = counters.get(oid, 0)
+            counters[oid] = k + 1
+            d = moves.get(on.get((oid, k)))
+            if d and (d[0] or d[1]):
+                m = matrix(it.get("transform"))
+                m[0][3] += d[0]
+                m[1][3] += d[1]
+                it.set("transform", matrix_text(m))
+
+    def _bed0(self):
         area = self.config.get("printable_area") or []
         pts = []
         for p in area:
@@ -1263,6 +1332,7 @@ class Project:
             _set_meta(el, k, v)
         at = list(self.settings_xml).index(plates[-1]) + 1 if plates else len(self.settings_xml)
         self.settings_xml.insert(at, el)
+        self._relayout(n - 1, n, {i: i for i in range(1, n)})
         self._dirty()
         return n
 
@@ -1284,6 +1354,8 @@ class Project:
             i = int(_meta(p).get("plater_id"))
             if i > plate:
                 _set_meta(p, "plater_id", str(i - 1))
+        n = len(plates)
+        self._relayout(n, n - 1, {i: (i - 1 if i > plate else i) for i in range(1, n + 1) if i != plate})
         if GCODES in self.files:
             root = ET.fromstring(self.files[GCODES])
             for pl in list(root.findall("plate")):
@@ -1301,11 +1373,13 @@ class Project:
         """A new object copying one (every part, its settings, at the same
         place): Set as an individual object, Duplicate plate."""
         o = self.object(which)
+        src_plate = self.plate_of(o["index"], instance)
+        plate = plate or src_plate
         parts = o["parts"]
         first = parts[0]
         v, t, _ = self.mesh(first)
         w = [apply(first["transform"], x) for x in v]
-        r = self.add_object([[w[a], w[b], w[c]] for a, b, c in t], name or o["name"], plate or 1, None, int(o.get("extruder") or 1))
+        r = self.add_object([[w[a], w[b], w[c]] for a, b, c in t], name or o["name"], plate, None, int(o.get("extruder") or 1))
         new = self.objects()[-1]
         for k, val in o["settings"].items():
             _set_meta(self._so(new), k, val)
@@ -1323,7 +1397,11 @@ class Project:
         # Same place as the copied instance.
         src = [it for it in self._build_items() if it.get("objectid") == o["id"]][instance]
         dst = [it for it in self._build_items() if it.get("objectid") == new["id"]][0]
-        dst.set("transform", src.get("transform"))
+        m = matrix(src.get("transform"))
+        a0, b0 = self.plate_origin(src_plate), self.plate_origin(plate)
+        m[0][3] += b0[0] - a0[0]
+        m[1][3] += b0[1] - a0[1]
+        dst.set("transform", matrix_text(m))
         self._dirty()
         return {"object": r["object"], "index": new["index"]}
 
@@ -1361,6 +1439,7 @@ class Project:
         new_id = {old: i + 1 for i, old in enumerate(order)}
         for p in plates:
             _set_meta(p, "plater_id", str(new_id[int(_meta(p).get("plater_id"))]))
+        self._relayout(n, n, new_id)
         pos = list(self.settings_xml).index(plates[0])
         for p in plates:
             self.settings_xml.remove(p)
@@ -1380,7 +1459,7 @@ class Project:
         """Scale an object up or down to fill the printer's volume (the
         window's Scale to build volume)."""
         o = self.object(which)
-        bed = self.bed()
+        bed = self.bed(self.plate_of(o["index"]))
         hz = float(self.config.get("printable_height") or 0)
         if not bed or hz <= 0:
             raise ProjectError("the project names no printable area and height.")
@@ -1394,7 +1473,7 @@ class Project:
         """As many copies as the bed holds in a grid (Fill bed with copies);
         orca_project arrange packs them tighter."""
         o = self.object(which)
-        bed = self.bed()
+        bed = self.bed(self.plate_of(o["index"]))
         if not bed:
             raise ProjectError("the project names no printable area.")
         b = bbox(self.world_points(o))
@@ -1410,7 +1489,7 @@ class Project:
             self.remove_instance(o["index"], len(self.object(o["index"])["instances"]) - 1)
         b = bbox(self.world_points(o))
         w, d = b[3] - b[0] + spacing, b[4] - b[1] + spacing
-        bed = self.bed() or [0, 0, nx * w, ny * d]
+        bed = self.bed(self.plate_of(o["index"])) or [0, 0, nx * w, ny * d]
         x0, y0 = bed[0] + spacing / 2 - b[0], bed[1] + spacing / 2 - b[1]
         self.place(o["index"], move=[x0, y0, 0])
         count = 1
