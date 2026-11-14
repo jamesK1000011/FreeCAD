@@ -506,8 +506,9 @@ class Project:
             mode = pl.find("mode")
             out[n] = {"mode": mode.get("value") if mode is not None else "SingleExtruder",
                       "items": [{"z": float(l.get("top_z")), "type": GCODE_NAMES.get(int(l.get("type", 4)), l.get("type")),
-                                 "extruder": int(l.get("extruder", 1)), "color": l.get("color", ""), "extra": l.get("extra", ""),
-                                 "gcode": l.get("extra") if int(l.get("type", 4)) == 4 else l.get("gcode", "")} for l in pl.findall("layer")]}
+                                 "extruder": int(l.get("extruder", 1)), **({"color": l.get("color")} if l.get("color") else {}),
+                                 "gcode": l.get("extra") if int(l.get("type", 4)) == 4 else l.get("gcode", ""),
+                                 **({"message": l.get("extra")} if int(l.get("type", 4)) == 1 and l.get("extra") else {})} for l in pl.findall("layer")]}
         return out
 
     def info(self):

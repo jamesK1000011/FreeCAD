@@ -6,6 +6,13 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# FreeCAD's PySide shim comes with FreeCAD: load it first where it is here.
+if os.environ.get("FREECAD_LIB"):
+    sys.path.append(os.environ["FREECAD_LIB"])
+try:
+    import FreeCAD  # noqa: F401,E402
+except ImportError:
+    pass
 
 from agentlink import panel_tabs  # noqa: E402
 
@@ -33,12 +40,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-try:
-    from PySide import QtGui as _QtGui  # noqa: F401
-
-    HAVE_QT = panel_tabs.QtWidgets is not None
-except ImportError:
-    HAVE_QT = False
+HAVE_QT = panel_tabs.QtWidgets is not None
 
 
 @unittest.skipUnless(HAVE_QT, "no PySide here")
