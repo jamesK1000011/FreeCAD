@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# The Agent Link panel in the FreeCAD window: Notes and Steps, modelled on
+# The Agent Link panel in the FreeCAD window: Notes and Steps, inspired by
 # the Reverse engineer panel of Stefan Hermann's ScanRuler (CNC Kitchen) —
-# its notes pinned to the part between the person and the agent, and its
-# feature-list playback with a caption a step. The records are the notes
+# notes pinned to the part between the person and the agent, and the
+# feature list played back with a caption a step. Agent Link's own code;
+# extensions that port ScanRuler's tools credit him where they load. The records are the notes
 # family's (families/notes.py), kept in the document; this panel only shows
 # and edits them, so the agent and the person see the same notes.
 #
@@ -13,7 +14,7 @@ import FreeCAD
 import FreeCADGui
 
 from .families import notes as nf
-from .panel_tabs import Tabs
+from .panel_tabs import FlowRow, Tabs, muted
 
 try:
     from PySide import QtCore, QtGui
@@ -26,8 +27,25 @@ try:
 except ImportError:  # pragma: no cover
     QtCore = QtGui = QtWidgets = None
 
-CREDIT = "Notes, step playback, review, setups, materials, fits and the manual after Stefan Hermann's ScanRuler (CNC Kitchen)."
+# Agent Link's own panel, its own code: the idea credited, not the code.
+CREDIT = "Inspired by ScanRuler by Stefan Hermann (CNC Kitchen)."
 PIN_AGENT = (0.85, 0.45, 0.15)
+
+
+def credit_text():
+    """Agent Link's line, then each loaded extension's own credit and
+    licence (an extension porting ScanRuler's tools names Stefan Hermann
+    there, where his work loads)."""
+    from . import families
+
+    lines = [CREDIT]
+    for e in getattr(families, "EXTENSIONS", []):
+        if e.get("credit"):
+            lines.append(e["credit"] + (f" ({e['license']})" if e.get("license") else ""))
+    return "\n".join(lines)
+
+
+from .usage import strip as usage_strip, text as usage_text  # noqa: E402
 PIN_PERSON = (0.25, 0.55, 0.85)
 PIN_DONE = (0.55, 0.55, 0.55)
 
@@ -166,6 +184,9 @@ class Panel(Tabs, QtWidgets.QDockWidget if QtWidgets else object):
         self.play_timer.timeout.connect(self.next_step)
 
         tabs = QtWidgets.QTabWidget()
+        # Narrow docks: the tab bar scrolls rather than squeezing the panel wide.
+        tabs.setUsesScrollButtons(True)
+        tabs.setElideMode(QtCore.Qt.ElideRight)
         tabs.addTab(self._notes_tab(), "Notes")
         tabs.addTab(self._steps_tab(), "Steps")
         tabs.addTab(self._review_tab(), "Review")
@@ -174,6 +195,7 @@ class Panel(Tabs, QtWidgets.QDockWidget if QtWidgets else object):
         tabs.addTab(self._fits_tab(), "Fits")
         tabs.addTab(self._manual_tab(), "Manual")
         tabs.addTab(self._activity_tab(), "Activity")
+        tabs.addTab(self._session_tab(), "Session")
         tabs.setUsesScrollButtons(True)
         tabs.currentChanged.connect(lambda k: self.fill_tab(tabs.tabText(k)))
         self.tabs = tabs
@@ -192,9 +214,17 @@ class Panel(Tabs, QtWidgets.QDockWidget if QtWidgets else object):
             except Exception as e:
                 FreeCAD.Console.PrintLog(f"Agent Link panel extension: {e}\n")
         lay.addWidget(tabs)
-        credit = QtWidgets.QLabel(CREDIT)
+        # What the agent's work here has cost, apart from any credit.
+        self.usage = QtWidgets.QPushButton("")
+        self.usage.setFlat(True)
+        self.usage.setStyleSheet(f"text-align: left; color: {muted(self.usage)}; font-size: 10px; padding: 0;")
+        self.usage.setToolTip("Estimated tokens through Agent Link — click for where they went")
+        self.usage.clicked.connect(self.usage_breakdown)
+        lay.addWidget(self.usage)
+        self._usage_seen = 0.0
+        credit = QtWidgets.QLabel(credit_text())
         credit.setWordWrap(True)
-        credit.setStyleSheet("color: palette(mid); font-size: 10px;")
+        credit.setStyleSheet(f"color: {muted(credit)}; font-size: 10px;")
         lay.addWidget(credit)
         self.setWidget(box)
         self.refresh()
@@ -299,7 +329,36 @@ class Panel(Tabs, QtWidgets.QDockWidget if QtWidgets else object):
 
     _filling = False
 
+    def refresh_usage(self):
+        import time
+
+        if time.time() - self._usage_seen < 30:
+            return
+        self._usage_seen = time.time()
+        try:
+            from . import usage
+
+            u = usage_strip(usage.report(7))
+        except Exception as e:  # noqa: BLE001 — the strip is a convenience
+            FreeCAD.Console.PrintLog(f"Agent Link usage strip: {e}\n")
+            return
+        self.usage.setText(u)
+
+    def usage_breakdown(self):
+        try:
+            from . import usage
+
+            r = usage.report(7)
+        except Exception as e:  # noqa: BLE001
+            r = {"error": str(e)}
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Agent Link — usage")
+        box.setText(usage_text(r))
+        box.exec_() if hasattr(box, "exec_") else box.exec()
+
     def refresh(self, force=False):
+        if hasattr(self, "usage"):
+            self.refresh_usage()
         for wdg in getattr(self, "extras", []):
             try:
                 if hasattr(wdg, "refresh"):
@@ -487,15 +546,27 @@ class Panel(Tabs, QtWidgets.QDockWidget if QtWidgets else object):
         self.caption.setWordWrap(True)
         self.caption.setStyleSheet("font-weight: 600; padding: 4px;")
         lay.addWidget(self.caption)
-        keys = QtWidgets.QHBoxLayout()
+        keys = FlowRow()
         for label, tip, fn in (("Play", "Play the build from the top", self.play), ("Pause", "Hold on this step", self.pause),
                                ("Step", "The next step", self.next_step), ("Stop", "End the playback and show the part again", self.stop)):
             b = QtWidgets.QPushButton(label)
             b.setToolTip(tip)
             b.clicked.connect(fn)
             keys.addWidget(b)
-        lay.addLayout(keys)
+        lay.addWidget(keys)
+        save = QtWidgets.QPushButton("Save as macro…")
+        save.setToolTip("Keep this session's steps as a FreeCAD macro to run again (it runs once you approve it)")
+        save.clicked.connect(self.save_macro)
+        lay.addWidget(save)
         return w
+
+    def save_macro(self):
+        name, ok = QtWidgets.QInputDialog.getText(self, "Save as macro", "Macro name:")
+        if not ok or not name.strip():
+            return
+        done, r = self._call("macro_save", {"name": name.strip()})
+        QtWidgets.QMessageBox.information(self, "Agent Link", (f"Saved {r.get('path') or name}." + (" Approve it in the Session tab to run it." if done else ""))
+                                          if done else (r.get("error") or {}).get("message", str(r)))
 
     def fill_bodies(self):
         doc = _doc()

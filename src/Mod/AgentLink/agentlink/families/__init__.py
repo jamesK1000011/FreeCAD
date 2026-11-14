@@ -89,8 +89,14 @@ def _discovered():
     return found
 
 
+# The extensions loaded, each with its own credit and licence (their
+# agentlink_families module's CREDIT and LICENSE): shown where they load.
+EXTENSIONS = []
+
+
 def load():
     out = []
+    del EXTENSIONS[:]
     for n in NAMES:
         try:
             out.append(importlib.import_module(f"{__name__}.{n}"))
@@ -110,7 +116,12 @@ def load():
         except Exception as e:
             sys.stderr.write(f"Agent Link: extension {n} left out — {type(e).__name__}: {e}\n")
             continue
+        credit, lic = getattr(mod, "CREDIT", None), getattr(mod, "LICENSE", None)
         for f in fams:
             f.EXTERNAL = True
+            f.CREDIT = credit
+            f.LICENSE = lic
+        if fams:
+            EXTENSIONS.append({"credit": credit, "license": lic, "groups": [getattr(f, "GROUP", "?") for f in fams]})
         out.extend(fams)
     return out

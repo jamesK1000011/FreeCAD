@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Notes pinned to the parts, between the person and the agent, and the build
-# played back step by step. Both after Stefan Hermann's ScanRuler (CNC
+# played back step by step. Both inspired by Stefan Hermann's ScanRuler (CNC
 # Kitchen): its Reverse engineer panel pins notes to the part — the person
 # writes and ticks them off, the agent answers them and pins questions of
 # its own — and plays the feature list from the top with a caption a step,
@@ -18,7 +18,7 @@ from ..protocol import Tool, ToolError
 from ..tools import obj
 
 GROUP = "notes"
-INFO = "Notes pinned to the parts between the person and the agent; the build played back step by step, a picture a step (after Stefan Hermann's ScanRuler)."
+INFO = "Notes pinned to the parts between the person and the agent; the build played back step by step, a picture a step (inspired by Stefan Hermann's ScanRuler, CNC Kitchen)."
 
 KEY_PARAMS = ("Length", "Depth", "Radius", "Size", "Occurrences", "Angle", "Offset", "Value")
 

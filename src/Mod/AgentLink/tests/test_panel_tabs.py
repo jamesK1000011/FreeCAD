@@ -31,3 +31,41 @@ class PanelTabs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+try:
+    from PySide import QtGui as _QtGui  # noqa: F401
+
+    HAVE_QT = panel_tabs.QtWidgets is not None
+except ImportError:
+    HAVE_QT = False
+
+
+@unittest.skipUnless(HAVE_QT, "no PySide here")
+class NarrowPanel(unittest.TestCase):
+    """Button rows wrap when the dock is narrow; the quiet text keeps its
+    contrast in a dark theme."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        QW = panel_tabs.QtWidgets
+        cls.app = QW.QApplication.instance() or QW.QApplication([])
+
+    def test_flow_row_wraps(self):
+        QW = panel_tabs.QtWidgets
+        row = panel_tabs.FlowRow([QW.QPushButton(t) for t in ("Use copy", "Roll back", "Approve", "Run")])
+        one = row.heightForWidth(2000)
+        self.assertGreater(row.heightForWidth(120), one * 2)
+        self.assertLessEqual(row.minimumSizeHint().width(), 200)
+
+    def test_muted_reads_on_dark(self):
+        QW, QG = panel_tabs.QtWidgets, panel_tabs.QtGui
+        lab = QW.QLabel("x")
+        pal = lab.palette()
+        pal.setColor(QG.QPalette.Window, QG.QColor(30, 30, 30))
+        pal.setColor(QG.QPalette.WindowText, QG.QColor(230, 230, 230))
+        lab.setPalette(pal)
+        c = panel_tabs.muted(lab)
+        lum = sum(int(c[i:i + 2], 16) for i in (1, 3, 5)) / 3
+        self.assertGreater(lum, 120)  # well clear of the dark background

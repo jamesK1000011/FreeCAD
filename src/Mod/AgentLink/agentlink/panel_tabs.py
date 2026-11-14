@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# More of the Agent Link panel, after the ScanRuler fork's panels: Setups
+# More of the Agent Link panel, inspired by the ScanRuler fork's panels: Setups
 # (how each part is made), Materials (what it is made of), Fits (the size to
 # model a hole or peg at, and the printer's calibration) and Manual (an
 # assembly manual, step by step). Each button runs the same tool the agent
@@ -20,6 +20,62 @@ try:
         pass
 except ImportError:  # pragma: no cover
     QtCore = QtGui = QtWidgets = None
+
+
+def muted(widget):
+    """A quiet colour that still reads in light and dark themes: the text
+    colour blended two thirds of the way towards the background (palette's
+    mid is near the background in some dark themes)."""
+    pal = widget.palette()
+    t, b = pal.color(QtGui.QPalette.WindowText), pal.color(QtGui.QPalette.Window)
+    mix = [int(t.red() * 0.6 + b.red() * 0.4), int(t.green() * 0.6 + b.green() * 0.4), int(t.blue() * 0.6 + b.blue() * 0.4)]
+    return "#%02x%02x%02x" % tuple(mix)
+
+
+class FlowRow(QtWidgets.QWidget if QtWidgets else object):
+    """Buttons in a row that wraps to the next line when the panel is narrow
+    (the panel docks beside the model tree, often under 300 px)."""
+
+    def __init__(self, widgets=(), spacing=4):
+        super().__init__()
+        self._items, self._sp = list(widgets), spacing
+        for w in self._items:
+            w.setParent(self)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+
+    def addWidget(self, w):
+        w.setParent(self)
+        self._items.append(w)
+        self.updateGeometry()
+
+    def _place(self, width, move=True):
+        x = y = line = 0
+        for w in self._items:
+            h = w.sizeHint()
+            if x and x + h.width() > width:
+                x, y = 0, y + line + self._sp
+                line = 0
+            if move:
+                w.setGeometry(x, y, h.width(), h.height())
+            x += h.width() + self._sp
+            line = max(line, h.height())
+        return y + line
+
+    def resizeEvent(self, e):
+        self._place(self.width())
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._place(width, move=False)
+
+    def sizeHint(self):
+        w = sum(x.sizeHint().width() + self._sp for x in self._items)
+        return QtCore.QSize(min(w, 280), self._place(min(w, 280), move=False))
+
+    def minimumSizeHint(self):
+        return QtCore.QSize(max((x.sizeHint().width() for x in self._items), default=0), 0)
 
 
 def _parts(doc):
@@ -171,7 +227,7 @@ class Tabs:
             self.setup_tree.addTopLevelItem(it)
         none = [b for b in _parts(self._doc_now()) if not any(b in (s.get("bodies") or []) for s in out.get("setups") or [])]
         self.setup_msg.setText(("In no setup (no process yet): " + ", ".join(none)) if none else "")
-        self.setup_msg.setStyleSheet("color: palette(mid);")
+        self.setup_msg.setStyleSheet(f"color: {muted(self.setup_msg)};")
 
     def _setup_picked(self):
         it = self.setup_tree.currentItem()
@@ -345,7 +401,7 @@ class Tabs:
         for k, v in (out.get("model") or {}).items():
             self.fit_table.addTopLevelItem(QtWidgets.QTreeWidgetItem([k, f"{v:.3f}"]))
         self.fit_msg.setText("Calibration: " + str(out.get("printerFit", "")))
-        self.fit_msg.setStyleSheet("color: palette(mid);")
+        self.fit_msg.setStyleSheet(f"color: {muted(self.fit_msg)};")
 
     def fit_calibrate(self):
         ok, out = self._call("fit", {"action": "calibrate", "hole": round(self.cal_hole.value(), 3), "shaft": round(self.cal_shaft.value(), 3)})
@@ -465,9 +521,133 @@ class Tabs:
 
     # -- all four, when their tab comes up --
 
+    # -- session: what keeps the agent's work safe while nobody watches --
+
+    def _session_tab(self):
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        self.sess_pinned = QtWidgets.QLabel("")
+        self.sess_pinned.setWordWrap(True)
+        self.sess_pinned.setToolTip("The document the agent works in, whatever is in front")
+        lay.addWidget(self.sess_pinned)
+        held = QtWidgets.QHBoxLayout()
+        self.sess_held = QtWidgets.QLabel("")
+        self.sess_held.setWordWrap(True)
+        held.addWidget(self.sess_held, 1)
+        self.sess_go = QtWidgets.QPushButton("Go")
+        self.sess_go.setToolTip("Run the heavy jobs held while you worked")
+        self.sess_go.clicked.connect(lambda: self._sess_do("queue_go", {}))
+        held.addWidget(self.sess_go)
+        lay.addLayout(held)
+        self.sess_tree = QtWidgets.QTreeWidget()
+        self.sess_tree.setHeaderLabels(["", "When", "What"])
+        self.sess_tree.setRootIsDecorated(True)
+        lay.addWidget(self.sess_tree, 1)
+        row = FlowRow()
+        for label, tip, fn in (("Use copy", "Save the recovered copy picked above over its file (you type to confirm)", self.sess_accept),
+                               ("Roll back", "Put FreeCAD's settings back as they were before the change picked above", self.sess_rollback),
+                               ("Approve", "Let Agent Link run the macro picked above (you type to confirm)", self.sess_approve),
+                               ("Run", "Run the approved macro picked above", self.sess_run)):
+            b = QtWidgets.QPushButton(label)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        lay.addWidget(row)
+        return w
+
+    def _sess_do(self, tool, args):
+        ok, r = self._call(tool, args)
+        if not ok:
+            QtWidgets.QMessageBox.information(self, "Agent Link", (r.get("error") or {}).get("message", str(r)))
+        self.fill_session()
+        return ok, r
+
+    def fill_session(self):
+        import json as _json
+
+        from . import keep
+
+        ok, d = self._call("doc_switch", {})
+        name = (d.get("label") or d.get("document")) if ok else None
+        self.sess_pinned.setText(f"Agent works in: {name}" if name else "Agent works in: the document in front")
+        q = keep._load(keep.path("queue.json"), {}) or {}
+        held = q.get("held") or []
+        self.sess_held.setText(f"Held for your go: {q.get('notice') or len(held)}" if held else "Nothing held.")
+        self.sess_go.setEnabled(bool(held))
+        self.sess_tree.clear()
+
+        def section(title, rows, kind):
+            top = QtWidgets.QTreeWidgetItem([title, "", ""])
+            for r in rows:
+                it = QtWidgets.QTreeWidgetItem(["", str(r[0]), str(r[1])])
+                it.setData(0, QtCore.Qt.UserRole, _json.dumps({"kind": kind, **r[2]}))
+                top.addChild(it)
+            self.sess_tree.addTopLevelItem(top)
+            top.setExpanded(bool(rows))
+
+        ok, rec = self._call("app_recover", {"action": "list"})
+        rows = []
+        for docrow in (rec.get("documents") or []) if ok else []:
+            for c in (docrow.get("copies") or [])[:5]:
+                rows.append((c.get("time", ""), f"{docrow.get('label')}: {c.get('source', '')}",
+                             {"document": docrow.get("document"), "label": docrow.get("label")}))
+        section("Recovered copies", rows, "recover")
+        ok, ph = self._call("pref_history", {"limit": 10})
+        section("Settings changes", [(c.get("time", ""), f"{c.get('path', '')}/{c.get('name', '')}: {c.get('from')} → {c.get('to')}", {"to": c.get("change")})
+                                     for c in (ph.get("changes") or [])] if ok else [], "pref")
+        ok, ml = self._call("macro_list", {})
+        section("Macros", [(m.get("state", ""), m.get("name"), {"name": m.get("name")})
+                           for m in (ml.get("macros") or [])] if ok else [], "macro")
+
+    def _sess_pick(self, kind):
+        import json as _json
+
+        it = self.sess_tree.currentItem()
+        raw = it.data(0, QtCore.Qt.UserRole) if it else None
+        d = _json.loads(raw) if raw else None
+        if not d or d.get("kind") != kind:
+            QtWidgets.QMessageBox.information(self, "Agent Link", f"Pick a line under {dict(recover='Recovered copies', pref='Settings changes', macro='Macros')[kind]} first.")
+            return None
+        return d
+
+    def _typed(self, title, want):
+        text, ok = QtWidgets.QInputDialog.getText(self, title, f"Type  {want}  to confirm:")
+        return text if ok and text.strip() == want else None
+
+    def sess_accept(self):
+        d = self._sess_pick("recover")
+        if d:
+            ok, r = self._sess_do("app_recover", {"action": "auto", "documents": [{"name": d["document"], "label": d.get("label")}]})
+            rec = (r.get("recovered") or [None])[0] if ok else None
+            if rec:
+                if not rec.get("file"):
+                    QtWidgets.QMessageBox.information(self, "Agent Link", f"{rec['as']} is open; it was never saved to a file — save it where you like.")
+                    return
+                typed = self._typed("Use the recovered copy", f"save over {os.path.basename(rec['file'])}")
+                if typed:
+                    self._sess_do("app_recover", {"action": "accept", "document": rec["document"], "confirm": typed})
+
+    def sess_rollback(self):
+        d = self._sess_pick("pref")
+        if d and d.get("to") is not None:
+            self._sess_do("pref_rollback", {"to": d["to"]})
+
+    def sess_approve(self):
+        d = self._sess_pick("macro")
+        if d:
+            typed = self._typed("Approve the macro", f"approve {d['name']}")
+            if typed:
+                self._sess_do("macro_approve", {"name": d["name"], "confirm": typed})
+
+    def sess_run(self):
+        d = self._sess_pick("macro")
+        if d:
+            self._sess_do("macro_run", {"name": d["name"]})
+
     def fill_tab(self, title):
         try:
-            {"Setups": self.fill_setups, "Materials": self.fill_materials, "Fits": self.fill_fits, "Manual": self.fill_manual}.get(title, lambda: None)()
+            {"Setups": self.fill_setups, "Materials": self.fill_materials, "Fits": self.fill_fits, "Manual": self.fill_manual,
+             "Session": self.fill_session}.get(title, lambda: None)()
         except Exception as e:
             import FreeCAD
 

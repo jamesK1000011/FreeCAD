@@ -244,6 +244,7 @@ tests/test_threemf.py
 tests/test_tools.py
 tests/test_unattended.py
 tests/test_usage.py
+tests/test_usage_strip.py
 tests/test_view.py
 tests/test_wall_readers.py
 tests/test_window_route.py

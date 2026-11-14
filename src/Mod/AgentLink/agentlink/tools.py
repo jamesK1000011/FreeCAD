@@ -1107,7 +1107,7 @@ def build_server(session, name="freecad-agentlink", version="0.2.0", lean=None):
                 raise
             sys.stderr.write(f"Agent Link: the {getattr(fam, 'GROUP', fam)} tools of an extension are left out — {type(e).__name__}: {e}\n")
             continue
-        info[fam.GROUP] = fam.INFO
+        info[fam.GROUP] = fam.INFO + (f" — {fam.CREDIT}" if external and getattr(fam, "CREDIT", None) and fam.CREDIT not in fam.INFO else "")
         for t in made:
             t.group = fam.GROUP
             if t.name in seen:
