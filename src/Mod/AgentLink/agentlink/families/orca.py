@@ -469,42 +469,27 @@ def tools(session):
             if a.get("consume", True):
                 proj.remove_part(o["index"], a["with"])
         elif op == "cut":
-            import MeshPart
-            import Part
-
-            sh = Part.Shape()
-            sh.makeShapeFromMesh(m.Topology, 0.05)
-            solid = Part.makeSolid(Part.makeShell(sh.Faces)) if sh.Faces else None
-            if solid is None:
-                raise ToolError("failed", "the part's mesh does not close: orca_project mesh { op: fix } first.")
-            import FreeCAD
-
+            # The cut axis turned to Z (a cyclic turn keeps the triangles'
+            # winding), cut by slab, turned back.
             bb = m.BoundBox
             axis = a.get("axis", "z")
             k = "xyz".index(axis)
-            lo_ = (bb.XMin, bb.YMin, bb.ZMin)[k]
-            z = float(a.get(axis, a.get("at", (lo_ + (bb.XMax, bb.YMax, bb.ZMax)[k]) / 2)))
-            big = 2 * bb.DiagonalLength + 10
+            fwd = {0: lambda p: (p[1], p[2], p[0]), 1: lambda p: (p[2], p[0], p[1]), 2: lambda p: tuple(p)}[k]
+            back = {0: lambda p: (p[2], p[0], p[1]), 1: lambda p: (p[1], p[2], p[0]), 2: lambda p: tuple(p)}[k]
+            lo_, hi_ = (bb.XMin, bb.YMin, bb.ZMin)[k], (bb.XMax, bb.YMax, bb.ZMax)[k]
+            z = float(a.get(axis, a.get("at", (lo_ + hi_) / 2)))
+            if not lo_ < z < hi_:
+                raise ToolError("invalid_input", f"at {z:g}: inside {lo_:.2f}..{hi_:.2f} along {axis}.")
+            src = [[fwd(q) for q in t_] for t_ in tris(m)]
             keep = a.get("keep", "both")
-            dims = [big, big, big]
-            dims[k] = z - lo_ + 1
-            org = [bb.XMin - big / 4, bb.YMin - big / 4, bb.ZMin - big / 4]
-            org[k] = lo_ - 1
-            half = Part.makeBox(*dims, FreeCAD.Vector(*org))
-            lower = solid.common(half)
-            upper = solid.cut(half)
-            def mesh_s(x):
-                mm = MeshPart.meshFromShape(Shape=x, LinearDeflection=0.02, AngularDeflection=0.1, Relative=False)
-                return tris(mm)
             made = []
-            if keep in ("both", "upper") and upper.Volume > 1e-6:
-                r = proj.add_object(mesh_s(upper), f"{o['name']} upper", 1)
-                made.append(r["object"])
-            if keep in ("both", "lower") and lower.Volume > 1e-6:
-                r = proj.add_object(mesh_s(lower), f"{o['name']} lower", 1)
-                made.append(r["object"])
+            for side, (zl, zh) in (("upper", (z, hi_)), ("lower", (lo_, z))):
+                if keep in ("both", side):
+                    piece = slab(src, zl, zh)
+                    if piece:
+                        made.append(proj.add_object([[back(q) for q in t_] for t_ in piece], f"{o['name']} {side}", 1)["object"])
             proj.remove_object(o["index"])
-            return {"cut": o["name"], "atZ": z, "objects": made, "next": "orca_project arrange lays them out."}
+            return {"cut": o["name"], "at": z, "axis": axis, "objects": made, "next": "orca_project arrange lays them out."}
         elif op == "subdivide":
             return {**proj.subdivide(o["index"], a.get("part")), "op": op}
         elif op == "decompose_color":
@@ -858,26 +843,95 @@ def tools(session):
         b = m.BoundBox
         if low <= b.ZMin + 1e-6 and high >= b.ZMax - 1e-6:
             return
-        big = b.DiagonalLength * 2 + 10
-        lo, hi = max(low, b.ZMin - 1), min(high, b.ZMax + 1)
-        try:
-            sh = Part.Shape()
-            sh.makeShapeFromMesh(m.Topology, 0.05)
-            solid = Part.makeSolid(Part.makeShell(sh.Faces)).removeSplitter()
-            kept = solid.common(Part.makeBox(big, big, hi - lo, FreeCAD.Vector(b.XMin - big / 4, b.YMin - big / 4, lo)))
-            if kept.Volume <= 1e-6:
-                raise ValueError("nothing kept")
-            mm = MeshPart.meshFromShape(Shape=kept, LinearDeflection=0.02, AngularDeflection=0.1, Relative=False)
-        except Exception:  # noqa: BLE001 — some OpenCASCADE builds refuse a mesh-made solid
-            # The mesh's own boolean with a box: no B-rep in between.
-            box = Mesh.createBox(big, big, hi - lo)
-            box.translate(b.XMin - big / 4 + big / 2, b.YMin - big / 4 + big / 2, lo + (hi - lo) / 2)
-            mm = m.intersect(box)
-            if mm.CountFacets == 0:
-                return "kept whole (this FreeCAD could not cut it): the values past the range repeat the last"
-        pts = [(q.x, q.y, q.z - lo) for q in mm.Points]
-        proj.replace_mesh(o["index"], 1, [[pts[i], pts[j], pts[k]] for i, j, k in mm.Topology[1]])
+        lo, hi = max(low, b.ZMin), min(high, b.ZMax)
+        tris = slab([[w[i], w[j], w[k]] for i, j, k in t], lo, hi)
+        if not tris:
+            return "kept whole (nothing between those heights)"
+        proj.replace_mesh(o["index"], 1, [[(q[0], q[1], q[2] - lo) for q in tri] for tri in tris])
         proj.place(o["index"])
+
+    def slab(tris, lo, hi):
+        """A closed mesh cut to the heights lo..hi and closed again: the
+        triangles clipped by the two planes, each cut's outline made a flat
+        face (holes kept) by FreeCAD and laid in. Light on the kernel: only
+        flat faces go through it, never a boolean of the whole mesh."""
+        import FreeCAD
+        import Part
+
+        def clip(poly, z, keep_above):
+            out = []
+            n = len(poly)
+            for i in range(n):
+                p, q = poly[i], poly[(i + 1) % n]
+                pin = (p[2] >= z) if keep_above else (p[2] <= z)
+                qin = (q[2] >= z) if keep_above else (q[2] <= z)
+                if pin:
+                    out.append(p)
+                if pin != qin:
+                    t_ = (z - p[2]) / (q[2] - p[2])
+                    out.append((p[0] + t_ * (q[0] - p[0]), p[1] + t_ * (q[1] - p[1]), z))
+            return out
+
+        kept, segs = [], {lo: [], hi: []}
+        for tri in tris:
+            zs = [p[2] for p in tri]
+            if max(zs) <= lo or min(zs) >= hi:
+                continue
+            poly = list(tri)
+            if min(zs) < lo:
+                poly = clip(poly, lo, True)
+            if max(p[2] for p in poly) > hi:
+                poly = clip(poly, hi, False)
+            if len(poly) < 3:
+                continue
+            for k in range(1, len(poly) - 1):
+                kept.append([poly[0], poly[k], poly[k + 1]])
+            for z in (lo, hi):
+                on = [p for p in poly if abs(p[2] - z) < 1e-9]
+                if len(on) == 2 and (min(zs) < z - 1e-9 or max(zs) > z + 1e-9):
+                    segs[z].append((on[0], on[1]))
+        for z, ss in segs.items():
+            if not ss:
+                continue
+            # The cut's outlines: segments chained end to end.
+            key = lambda p: (round(p[0], 5), round(p[1], 5))
+            nxt = {}
+            for a_, b_ in ss:
+                nxt.setdefault(key(a_), []).append(b_)
+            loops, used = [], set()
+            for a_, b_ in ss:
+                if (key(a_), key(b_)) in used:
+                    continue
+                loop, cur = [a_], b_
+                used.add((key(a_), key(b_)))
+                while key(cur) != key(a_) and len(loop) < 100000:
+                    loop.append(cur)
+                    cand = [x for x in nxt.get(key(cur), []) if (key(cur), key(x)) not in used]
+                    if not cand:
+                        break
+                    used.add((key(cur), key(cand[0])))
+                    cur = cand[0]
+                if len(loop) >= 3:
+                    loops.append(loop)
+            wires = []
+            for lp in loops:
+                try:
+                    wires.append(Part.makePolygon([FreeCAD.Vector(*p) for p in lp] + [FreeCAD.Vector(*lp[0])]))
+                except Exception:  # noqa: BLE001 — a degenerate loop
+                    pass
+            if not wires:
+                continue
+            face = Part.Face(wires, "Part::FaceMakerBullseye")
+            pts, ft = face.tessellate(0.05)
+            for i, j, k in ft:
+                A, B, C = pts[i], pts[j], pts[k]
+                up = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x) > 0
+                tri = [(A.x, A.y, z), (B.x, B.y, z), (C.x, C.y, z)]
+                # The bottom cap faces down, the top up.
+                if up == (z == lo):
+                    tri = [tri[0], tri[2], tri[1]]
+                kept.append(tri)
+        return kept
 
     # ---- orca_slice -------------------------------------------------------------------------
     def orca_slice(a):
