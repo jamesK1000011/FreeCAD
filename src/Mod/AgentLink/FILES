@@ -21,6 +21,7 @@ agentlink/code/packs.py
 agentlink/code/packs_shipped/example.demo.json
 agentlink/code/units.py
 agentlink/commands.py
+agentlink/data/orca-options.json
 agentlink/data/slicer-minimal.json
 agentlink/echo.py
 agentlink/embeds.py
@@ -57,6 +58,7 @@ agentlink/families/model.py
 agentlink/families/model_more.py
 agentlink/families/notes.py
 agentlink/families/openscad.py
+agentlink/families/orca.py
 agentlink/families/param.py
 agentlink/families/part_more.py
 agentlink/families/parts.py
@@ -81,6 +83,7 @@ agentlink/fits_hw.py
 agentlink/fitting.py
 agentlink/flat2d.py
 agentlink/frame.py
+agentlink/gcode_view.py
 agentlink/gdt.py
 agentlink/geometry.py
 agentlink/grab.py
@@ -129,6 +132,7 @@ agentlink/macros.py
 agentlink/meshdist.py
 agentlink/meshformats.py
 agentlink/millsim.py
+agentlink/orca3mf.py
 agentlink/packing.py
 agentlink/panel.py
 agentlink/panel_tabs.py
@@ -159,6 +163,7 @@ agentlink_state.py
 package.xml
 tests/_fc.py
 tests/_pd_base.py
+tests/data/orca-two-boxes.json
 tests/test_app_install.py
 tests/test_assembly.py
 tests/test_assembly_more.py
@@ -189,6 +194,7 @@ tests/test_files.py
 tests/test_fitting.py
 tests/test_flat2d.py
 tests/test_gaps_redteam.py
+tests/test_gcode_view.py
 tests/test_guides.py
 tests/test_hull3d.py
 tests/test_inspection.py
@@ -207,6 +213,8 @@ tests/test_millsim.py
 tests/test_model.py
 tests/test_model_more.py
 tests/test_more_families.py
+tests/test_orca.py
+tests/test_orca3mf.py
 tests/test_panel_tabs.py
 tests/test_param.py
 tests/test_parts.py

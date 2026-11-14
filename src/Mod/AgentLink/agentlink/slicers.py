@@ -155,7 +155,7 @@ def slice_with(name, stl, gcode, settings, profiles=None, timeout=900, options=N
     return exe, used
 
 
-def slice_project(name, threemf, out_dir, timeout=900, export=None):
+def slice_project(name, threemf, out_dir, timeout=900, export=None, plate=0):
     """A project (.3mf) sliced as it stands — its own presets, settings,
     plates and objects, as the person left them in the slicer's window.
     export: a .3mf path for the sliced project. Returns (exe, [G-code
@@ -167,7 +167,7 @@ def slice_project(name, threemf, out_dir, timeout=900, export=None):
     for old in glob.glob(os.path.join(out_dir, "*.gcode")) + glob.glob(os.path.join(out_dir, "plate_*.statistics.json")) + [os.path.join(out_dir, "result.json")]:
         if os.path.exists(old):
             os.remove(old)
-    args = [exe, "--slice", "0", "--outputdir", out_dir]
+    args = [exe, "--slice", str(int(plate or 0)), "--outputdir", out_dir]
     if name == "orcaslicer" and supports(exe, "--export-statistics"):
         args += ["--export-statistics"]
     if export:
@@ -183,6 +183,75 @@ def slice_project(name, threemf, out_dir, timeout=900, export=None):
         raise RuntimeError((why + " — " if why else "") + _tail(run))
     LAST.update(results(out_dir))
     return exe, found
+
+
+def make_project(name, stls, dest, settings, profiles=None, options=None, timeout=600):
+    """An unsliced project (.3mf) from STLs, one object each, with the
+    profiles given (or minimal ones from settings): what the window makes
+    when the files are dropped on its plate. options: orient, arrange."""
+    exe = find(name)
+    if not exe:
+        raise FileNotFoundError(f"{name} is not on this computer.")
+    options = options or {}
+    out_dir = os.path.splitext(dest)[0] + "-cli"
+    os.makedirs(out_dir, exist_ok=True)
+    profiles = profiles or {}
+    if not all(profiles.get(k) for k in ("machine", "process", "filament")):
+        profiles = {**minimal_profiles(settings, out_dir), **{k: v for k, v in profiles.items() if v}}
+    for old in (os.path.join(out_dir, "project.3mf"), os.path.join(out_dir, "result.json")):
+        if os.path.exists(old):
+            os.remove(old)
+    args = [exe, "--load-settings", f"{profiles['machine']};{profiles['process']}", "--load-filaments", ";".join([profiles["filament"]] * len(stls)),
+            "--arrange", "1" if options.get("arrange", True) else "0", "--outputdir", out_dir, "--export-3mf", "project.3mf"]
+    if options.get("orient"):
+        args += ["--orient", "1"]
+    args += [os.path.abspath(x) for x in stls]
+    run = _run(args, timeout, cwd=out_dir)
+    made = os.path.join(out_dir, "project.3mf")
+    if not os.path.isfile(made):
+        # Some builds export only what they slice: slice, then drop the results.
+        run = _run(args[:1] + ["--slice", "0"] + args[1:], timeout, cwd=out_dir)
+        if os.path.isfile(made):
+            from . import orca3mf
+
+            pr = orca3mf.Project(made)
+            pr.strip_results()
+            pr.changed = False
+            pr.save()
+    if not os.path.isfile(made):
+        why = result_error(out_dir)
+        raise RuntimeError((why + " — " if why else "") + _tail(run))
+    shutil.move(made, dest)
+    return exe
+
+
+EXPORTS = {"stl": ("--export-stl", None), "stls": ("--export-stls", "stls"), "settings": ("--export-settings", "settings.json"),
+           "slicedata": ("--export-slicedata", "slicedata"), "3mf": ("--export-3mf", "export.3mf")}
+
+
+def export_project(name, threemf, out_dir, what, filename=None, timeout=600):
+    """A project's objects or settings written out by the command line:
+    what stl (all objects in one), stls (one each, a folder), settings (the
+    project's config as JSON), slicedata (the sliced layers, a folder) or
+    3mf (re-saved by the slicer). Returns the files made."""
+    exe = find(name)
+    if not exe:
+        raise FileNotFoundError(f"{name} is not on this computer.")
+    if what not in EXPORTS:
+        raise ValueError(f"export: {', '.join(EXPORTS)}.")
+    os.makedirs(out_dir, exist_ok=True)
+    flag, arg = EXPORTS[what]
+    before = set(os.listdir(out_dir))
+    args = [exe, "--outputdir", out_dir]
+    if what == "slicedata":
+        args += ["--slice", "0"]
+    args += [flag] + ([filename or arg] if arg else []) + [os.path.abspath(threemf)]
+    run = _run(args, timeout, cwd=out_dir)
+    made = sorted(os.path.join(out_dir, n) for n in set(os.listdir(out_dir)) - before if n != "result.json")
+    if not made:
+        why = result_error(out_dir)
+        raise RuntimeError((why + " — " if why else "") + _tail(run))
+    return made
 
 
 _HELP = {}

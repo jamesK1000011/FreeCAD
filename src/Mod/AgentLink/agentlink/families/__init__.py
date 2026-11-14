@@ -30,6 +30,7 @@ NAMES = [
     "embed",
     "printer",
     "slicing",
+    "orca",
     "parts",
     "drawing",
     "techdraw",

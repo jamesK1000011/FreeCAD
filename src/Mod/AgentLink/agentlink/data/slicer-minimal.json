@@ -1,5 +1,5 @@
 {
- "_note": "The machine is written as a system preset: Bambu Studio's command line then names the printer by it when it checks the process. The profiles Agent Link writes for OrcaSlicer and Bambu Studio when no presets are chosen: only what the print setup says, the slicer's defaults for the rest. {name} is the setup's value. Edit or replace this file to change them; slicer_presets chooses the person's own instead.",
+ "_note": "The machine is written as a system preset: Bambu Studio's command line then names the printer by it when it checks the process. The profiles Agent Link writes for OrcaSlicer and Bambu Studio when no presets are chosen: only what the print setup says, the slicer's defaults for the rest. {name} is the setup's value. Edit or replace this file to change them; slicer_presets chooses the person's own instead. Each per-filament list a filament gives is one long (OrcaSlicer 2.5 checks them against the number of filaments).",
  "machine": {
   "type": "machine",
   "name": "AgentLink machine",
@@ -45,6 +45,12 @@
   "instantiation": "true",
   "filament_type": [
    "{filament}"
+  ],
+  "filament_colour": [
+   "#F2754E"
+  ],
+  "filament_is_support": [
+   "0"
   ],
   "filament_density": [
    "{density}"

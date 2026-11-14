@@ -1,0 +1,243 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# OrcaSlicer projects changed headless (agentlink/orca3mf.py), on a project
+# OrcaSlicer 2.5's command line made (data/orca-two-boxes.json, its members as
+# text, zipped here: a 20x10x5 box
+# and an 8x8x20 one, arranged, minimal profiles). Pure Python; the slicer's
+# own reading of the changed files is test_orca.py's.
+
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+import zipfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from agentlink import orca3mf as O  # noqa: E402
+
+SAMPLE = os.path.join(os.path.dirname(__file__), "data", "orca-two-boxes.json")
+
+
+def sample(path):
+    import json
+
+    with open(SAMPLE, encoding="utf-8") as f:
+        members = json.load(f)["members"]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, text in members.items():
+            z.writestr(n, text)
+
+
+def box(x, y, z, at=(0, 0, 0)):
+    v = [(0, 0, 0), (x, 0, 0), (x, y, 0), (0, y, 0), (0, 0, z), (x, 0, z), (x, y, z), (0, y, z)]
+    v = [(a + at[0], b + at[1], c + at[2]) for a, b, c in v]
+    f = [(0, 2, 1), (0, 3, 2), (4, 5, 6), (4, 6, 7), (0, 1, 5), (0, 5, 4), (1, 2, 6), (1, 6, 5), (2, 3, 7), (2, 7, 6), (3, 0, 4), (3, 4, 7)]
+    return [[v[a], v[b], v[c]] for a, b, c in f]
+
+
+class Project(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.p = os.path.join(self.d, "p.3mf")
+        sample(self.p)
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def reopen(self):
+        return O.Project(self.p)
+
+    def test_reads_objects_parts_plates(self):
+        info = O.Project(self.p).info()
+        names = [o["name"] for o in info["objects"]]
+        self.assertEqual(names, ["box.stl", "tall.stl"])
+        box_ = info["objects"][0]
+        self.assertEqual(box_["size"], [20, 10, 5])
+        self.assertEqual(box_["parts"][0]["kind"], "normal_part")
+        self.assertEqual(box_["parts"][0]["triangles"], 12)
+        self.assertEqual(box_["instances"][0]["at"], [100, 110, 0])
+        self.assertEqual(info["plates"][0]["objects"], ["2", "4"])
+        self.assertEqual(info["filaments"][0]["type"], "PLA")
+        self.assertTrue(info["sliced"])
+
+    def test_object_keeps_source_coordinates(self):
+        pr = O.Project(self.p)
+        o = pr.object("tall")
+        pts = [O.apply(o["parts"][0]["transform"], v) for v in pr.mesh(o["parts"][0])[0]]
+        self.assertEqual([round(x, 6) for x in O.bbox(pts)], [0, 0, 0, 8, 8, 20])
+
+    def test_settings_checked(self):
+        pr = O.Project(self.p)
+        pr.set("sparse_infill_density", 35)
+        pr.set("wall_loops", "4")
+        pr.set("enable_support", True)
+        pr.set("support_type", "tree(auto)")
+        for bad in (("wall_loops", 2.5), ("sparse_infill_density", 150), ("support_type", "trees"), ("no_such_key", 1)):
+            with self.assertRaises(O.ProjectError, msg=bad):
+                pr.set(*bad)
+        with self.assertRaises(O.ProjectError):
+            pr.set_object("box", "nozzle_diameter", 0.6)  # a printer setting, not per object
+        pr.save()
+        cfg = self.reopen().config
+        self.assertEqual(cfg["sparse_infill_density"], "35%")
+        self.assertEqual(cfg["wall_loops"], "4")
+        self.assertEqual(cfg["enable_support"], "1")
+        self.assertIn("sparse_infill_density", cfg["different_settings_to_system"][0].split(";"))
+
+    def test_per_filament_slot(self):
+        pr = O.Project(self.p)
+        n = len(pr.config["filament_settings_id"])
+        pr.set("nozzle_temperature", 215, slot=1)
+        self.assertEqual(len(pr.config["nozzle_temperature"]), max(n, 1))
+        self.assertEqual(pr.config["nozzle_temperature"][0], "215")
+
+    def test_object_and_part_settings(self):
+        pr = O.Project(self.p)
+        pr.set_object("box", "sparse_infill_density", "60%")
+        pr.set_object(2, "wall_loops", 5)
+        pr.set_part("box", 1, "top_shell_layers", 7)
+        pr.save()
+        objs = self.reopen().objects()
+        self.assertEqual(objs[0]["settings"]["sparse_infill_density"], "60%")
+        self.assertEqual(objs[1]["settings"]["wall_loops"], "5")
+        self.assertEqual(objs[0]["parts"][0]["settings"]["top_shell_layers"], "7")
+        # Unsliced now: the stale G-code and its notes are gone.
+        with zipfile.ZipFile(self.p) as z:
+            self.assertNotIn("Metadata/plate_1.gcode", z.namelist())
+
+    def test_modifier_and_negative_parts(self):
+        pr = O.Project(self.p)
+        r = pr.add_part("box", box(6, 6, 5, at=(2, 2, 0)), "modifier_part", "dense", {"sparse_infill_density": "100%"})
+        pr.add_part("box", box(2, 2, 10, at=(15, 4, -2)), "negative_part", "hole")
+        pr.save()
+        pr = self.reopen()
+        o = pr.object("box")
+        kinds = [(p["name"], p["kind"]) for p in o["parts"]]
+        self.assertEqual(kinds, [("box.stl", "normal_part"), ("dense", "modifier_part"), ("hole", "negative_part")])
+        self.assertEqual(o["parts"][1]["settings"], {"sparse_infill_density": "100%"})
+        self.assertEqual(pr.mesh(o["parts"][1])[1].__len__(), 12)
+        # The size counts solid parts only.
+        self.assertEqual(pr.info()["objects"][0]["size"], [20, 10, 5])
+        with zipfile.ZipFile(self.p) as z:
+            rels = z.read("3D/_rels/3dmodel.model.rels").decode()
+        self.assertIn(f"agentlink_part_{r['id']}.model", rels)
+        pr.remove_part("box", "hole")
+        pr.save()
+        self.assertEqual(len(self.reopen().object("box")["parts"]), 2)
+        with self.assertRaises(O.ProjectError):
+            self.reopen().remove_part("box", 1)
+
+    def test_replace_mesh_keeps_settings(self):
+        pr = O.Project(self.p)
+        pr.set_part("tall", 1, "wall_loops", 3)
+        pr.replace_mesh("tall", 1, box(8, 8, 30))
+        pr.save()
+        pr = self.reopen()
+        o = pr.object("tall")
+        pts = [O.apply(o["parts"][0]["transform"], v) for v in pr.mesh(o["parts"][0])[0]]
+        self.assertEqual([round(x, 6) for x in O.bbox(pts)], [0, 0, 0, 8, 8, 30])
+        self.assertEqual(o["parts"][0]["settings"]["wall_loops"], "3")
+
+    def test_paint(self):
+        pr = O.Project(self.p)
+        o = pr.object("box")
+        _, tris, _ = pr.mesh(o["parts"][0])
+        states = ["enforce" if i < 2 else "none" for i in range(len(tris))]
+        self.assertEqual(pr.paint("box", 1, "supports", states), 2)
+        pr.paint("box", 1, "seam", ["block"] * len(tris))
+        pr.save()
+        pr = self.reopen()
+        _, _, attrs = pr.mesh(pr.object("box")["parts"][0])
+        self.assertEqual(attrs["paint_supports"][:3], ["4", "4", ""])
+        self.assertEqual(set(attrs["paint_seam"]), {"8"})
+        self.assertEqual(pr.info()["objects"][0]["parts"][0]["painted"], ["seam", "supports"])
+
+    def test_paint_states(self):
+        for n in range(1, 33):
+            self.assertEqual(O.paint_value(O.paint_state(n)), n)
+        self.assertEqual(O.paint_state(3), "0C")
+        self.assertEqual(O.paint_state(17), "EC")
+        self.assertEqual(O.paint_state(18), "0FC")
+
+    def test_place(self):
+        pr = O.Project(self.p)
+        r = pr.place("tall", rotate=[90, 0, 0], at=[50, 60])
+        self.assertAlmostEqual(r["placed"][2], 0)  # dropped on the bed
+        self.assertAlmostEqual((r["placed"][0] + r["placed"][3]) / 2, 50)
+        self.assertAlmostEqual(r["placed"][5] - r["placed"][2], 8)  # lying down
+        pr.save()
+        self.assertAlmostEqual(self.reopen().info()["objects"][1]["size"][1], 20)
+
+    def test_ranges(self):
+        pr = O.Project(self.p)
+        pr.set_range("tall", 5, 10, {"sparse_infill_density": "80%", "wall_loops": 4})
+        with self.assertRaises(O.ProjectError):
+            pr.set_range("tall", 8, 12, {"wall_loops": 2})
+        pr.save()
+        r = self.reopen().ranges()
+        self.assertEqual(r[2][0]["min"], 5)
+        self.assertEqual(r[2][0]["settings"]["sparse_infill_density"], "80%")
+        pr = self.reopen()
+        pr.set_range("tall", 5, 10, {})
+        pr.save()
+        self.assertEqual(self.reopen().ranges(), {})
+
+    def test_gcodes(self):
+        pr = O.Project(self.p)
+        pr.set_gcode(3.0, "pause")
+        pr.set_gcode(1.0, "custom", gcode="M117 hello")
+        items = pr.set_gcode(2.0, "color_change")
+        self.assertEqual([i["z"] for i in items], [1.0, 2.0, 3.0])
+        pr.save()
+        g = self.reopen().gcodes()[1]
+        self.assertEqual([i["type"] for i in g["items"]], ["custom", "color_change", "pause"])
+        with zipfile.ZipFile(self.p) as z:
+            root = ET.fromstring(z.read(O.GCODES))
+        self.assertEqual(root.find("plate/plate_info").get("id"), "1")
+        self.assertEqual(root.find("plate")[-1].tag, "mode")
+
+    def test_plates(self):
+        pr = O.Project(self.p)
+        pr.move_to_plate("tall", 2)
+        pr.set_plate(2, "name", "tall one")
+        pr.set_plate(1, "bed_type", "Textured PEI Plate")
+        with self.assertRaises(O.ProjectError):
+            pr.set_plate(1, "bed_type", "glass")
+        pr.save()
+        pl = self.reopen().plates()
+        self.assertEqual([p["objects"] for p in pl], [["2"], ["4"]])
+        self.assertEqual(pl[1]["settings"]["plater_name"], "tall one")
+        self.assertEqual(pl[0]["settings"]["curr_bed_type"], "Textured PEI Plate")
+
+    def test_remove_object(self):
+        pr = O.Project(self.p)
+        pr.set_range("tall", 1, 2, {"wall_loops": 3})
+        pr.remove_object("box")
+        pr.save()
+        pr = self.reopen()
+        self.assertEqual([o["name"] for o in pr.objects()], ["tall.stl"])
+        self.assertIn(1, pr.ranges())  # tall is first now
+
+    def test_namespaces_kept(self):
+        pr = O.Project(self.p)
+        pr.set_object(1, "wall_loops", 3)
+        pr.save()
+        with zipfile.ZipFile(self.p) as z:
+            text = z.read(O.MODEL).decode()
+        self.assertIn('xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"', text)
+        self.assertIn("p:path=", text)
+        self.assertNotIn("ns0:", text)
+        self.assertNotIn("ns1:", text)
+
+    def test_options_table(self):
+        t = O.options()["options"]
+        self.assertGreater(len(t), 700)
+        self.assertEqual(t["sparse_infill_density"]["type"], "percent")
+        self.assertIn("tree(auto)", t["support_type"]["values"])
+        # Keys and limits only: no labels or help text in the table.
+        self.assertFalse(any("label" in v or "tooltip" in v for v in t.values()))
+
+
+if __name__ == "__main__":
+    unittest.main()
