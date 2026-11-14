@@ -8,6 +8,7 @@ Studio Light/Studio Light.cfg
 Studio Light/parameters/Studio Light.yaml
 agentlink/__init__.py
 agentlink/boxes.py
+agentlink/calibrate.py
 agentlink/ccx_io.py
 agentlink/cells.py
 agentlink/charts.py
@@ -169,6 +170,7 @@ tests/test_assembly.py
 tests/test_assembly_more.py
 tests/test_batch_rollback.py
 tests/test_bim_gaps.py
+tests/test_calibrate.py
 tests/test_cam.py
 tests/test_cam_more.py
 tests/test_ccx_io_more.py

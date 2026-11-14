@@ -126,6 +126,29 @@ class OrcaLoop(unittest.TestCase):
         self.assertGreater(s["layers"], 10)
         self.ok("orca_slice", {"path": p, "export": "stls"})
 
+    def test_calibrations(self):
+        if not slicers.find("orcaslicer"):
+            self.skipTest("no OrcaSlicer on this machine")
+        for kind, params in (("pressure_advance", {"start": 0, "end": 0.04, "step": 0.002}), ("temperature", {"start": 220, "end": 200}),
+                             ("flow", {"pass": 1}), ("retraction", {"start": 0.2, "end": 1.0, "step": 0.2}), ("max_flow", {"start": 5, "end": 10, "step": 1})):
+            err, r = self.call("orca_calibrate", {"kind": kind, "params": params, "path": f"cal-{kind}.3mf"})
+            print("calibrate", kind, json.dumps(r)[:500], flush=True)
+            self.assertFalse(err, r)
+            info = self.ok("orca_project", {"action": "info", "path": r["project"]})
+            if kind == "pressure_advance":
+                self.assertAlmostEqual(info["objects"][0]["size"][2], 21, delta=1.5)
+                self.assertEqual(len(info["gcodes"]["1"]["items"] if "1" in info["gcodes"] else info["gcodes"][1]["items"]), 21)
+            if kind == "flow":
+                self.assertGreater(len(info["objects"]), 5)
+            if kind in ("pressure_advance", "retraction"):
+                sl = self.ok("orca_slice", {"path": r["project"]})
+                with open(sl["gcode"][0]) as f:
+                    text = f.read()
+                if kind == "pressure_advance":
+                    self.assertIn("M900 K0.02", text)
+                else:
+                    self.assertIn("retraction tower 0.6", text)
+
     def test_slice_with_two_bodies(self):
         # Minimal profiles, two filaments: OrcaSlicer 2.5 refused these when
         # a per-filament list was shorter than the filament count.

@@ -419,6 +419,23 @@ def tools(session):
         return {"orca": t["orca"], "count": len(rows), "settings": rows[:lim], **({"more": len(rows) - lim} if len(rows) > lim else {}),
                 "note": "Keys and limits only; the person's OrcaSlicer shows each one's label and help."}
 
+    def presets_for(label, work):
+        from .slicing import DENSITY
+        from .. import store
+
+        setup = (store.setup_of(s.doc, label, "print") if label else None) or {}
+        settings = {k: v for k, v in setup.items() if k not in ("id", "name", "type", "bodies")}
+        mat = (store.materials(s.doc).get(label) if label else None) or "pla"
+        settings["filament"], settings["density"] = mat.split("-")[0], DENSITY.get(mat, 1.24)
+        chosen = setup.get("slicerPresets")
+        profiles = {}
+        if chosen:
+            from .. import slicer_presets as SP
+
+            data = SP.load_saved(s.out_dir, chosen["bundle"]) if chosen.get("bundle") else SP.bundle(chosen.get("slicer", "orcaslicer"), chosen["machine"], chosen["process"], chosen["filament"])
+            profiles = SP.write_profiles(data, os.path.join(work, "presets"))
+        return settings, profiles
+
     def new(a):
         bodies = [s.body(b) for b in (a.get("bodies") or ([a["body"]] if a.get("body") else []))]
         if not bodies:
@@ -431,20 +448,8 @@ def tools(session):
             p = os.path.join(work, f"{b.Label.replace(' ', '_')}.stl")
             O.write_stl(p, _mesh_of(b.Shape))
             stls.append(p)
-        from .slicing import DENSITY
-        from .. import store
-
-        setup = store.setup_of(s.doc, bodies[0].Label, "print") or {}
-        settings = {k: v for k, v in setup.items() if k not in ("id", "name", "type", "bodies")}
-        mat = store.materials(s.doc).get(bodies[0].Label) or "pla"
-        settings["filament"], settings["density"] = mat.split("-")[0], DENSITY.get(mat, 1.24)
-        profiles = a.get("profiles") or {}
-        chosen = setup.get("slicerPresets")
-        if not profiles and chosen:
-            from .. import slicer_presets as SP
-
-            data = SP.load_saved(s.out_dir, chosen["bundle"]) if chosen.get("bundle") else SP.bundle(chosen.get("slicer", "orcaslicer"), chosen["machine"], chosen["process"], chosen["filament"])
-            profiles = SP.write_profiles(data, os.path.join(work, "presets"))
+        settings, profiles = presets_for(bodies[0].Label, work)
+        profiles = a.get("profiles") or profiles
         try:
             exe = slicers.make_project("orcaslicer", stls, dest, settings, profiles, {k: True for k in ("orient", "arrange") if a.get(k)})
         except FileNotFoundError as e:
@@ -478,31 +483,28 @@ def tools(session):
                 raise ToolError("invalid_input", f"faces: Face names like Face3, not {f!r}.")
         if a.get("clear"):
             want, state = set(), None
-        # Sample each face on its own tessellation; each triangle goes to the
-        # face whose samples lie nearest its centre.
+        # Each triangle goes to the face nearest its centre: the faces whose
+        # (slightly grown) boxes hold the centre are measured exactly.
         import FreeCAD
+        import Part
 
-        cell = max(shape.BoundBox.DiagonalLength / 60, 0.5)
-        grid = {}
-        for i, f in enumerate(shape.Faces):
-            pts, ft = f.tessellate(cell / 4)
-            samples = [FreeCAD.Vector(*(sum(pts[t[j]][k] for j in range(3)) / 3 for k in range(3))) for t in ft] + list(pts)
-            for q in samples:
-                grid.setdefault((int(q.x // cell), int(q.y // cell), int(q.z // cell)), []).append((q, i))
+        tol = max(shape.BoundBox.DiagonalLength * 1e-3, 0.05)
+        boxes = []
+        for f in shape.Faces:
+            bb = f.BoundBox
+            boxes.append((bb.XMin - tol, bb.YMin - tol, bb.ZMin - tol, bb.XMax + tol, bb.YMax + tol, bb.ZMax + tol))
         old = attrs.get(O.PAINT[kind][0]) or [""] * len(tris)
         states, hit = [], 0
         names = O.PAINT[kind][1]
         for n, (i, j, k) in enumerate(tris):
             c = [sum(O.apply(p["transform"], verts[x])[m] for x in (i, j, k)) / 3 + d[m] for m in range(3)]
-            key = (int(c[0] // cell), int(c[1] // cell), int(c[2] // cell))
-            best, bf = None, None
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    for dz in (-1, 0, 1):
-                        for q, fi in grid.get((key[0] + dx, key[1] + dy, key[2] + dz), ()):
-                            dd = (q.x - c[0]) ** 2 + (q.y - c[1]) ** 2 + (q.z - c[2]) ** 2
-                            if best is None or dd < best:
-                                best, bf = dd, fi
+            cand = [fi for fi, bx in enumerate(boxes) if bx[0] <= c[0] <= bx[3] and bx[1] <= c[1] <= bx[4] and bx[2] <= c[2] <= bx[5]]
+            bf = None
+            if len(cand) == 1:
+                bf = cand[0]
+            elif cand:
+                v = Part.Vertex(FreeCAD.Vector(*c))
+                bf = min(cand, key=lambda fi: shape.Faces[fi].distToShape(v)[0])
             if bf in want:
                 states.append(state)
                 hit += 1
@@ -524,6 +526,110 @@ def tools(session):
             out["note"] = "Enforced supports print only with supports on: orca_project set { key: \"enable_support\", value: true } (support_type normal(manual) or tree(manual) keeps to the painted ones)."
         return out
 
+    # ---- orca_calibrate --------------------------------------------------------------------
+    def orca_calibrate(a):
+        from .. import calibrate as C
+
+        kind = a.get("kind")
+        exe = slicers.find("orcaslicer")
+        if not exe:
+            raise ToolError("unavailable", "OrcaSlicer is not on this computer (AGENTLINK_ORCASLICER sets its path): its calibration models are its own.")
+        cdir = C.calib_dir(exe)
+        if not cdir:
+            raise ToolError("unavailable", f"No calib folder beside {exe}: the calibration models ship with OrcaSlicer.")
+        dest = path_of({"path": a.get("path") or f"calibrate-{kind}.3mf"}, must=False)
+        work = os.path.splitext(dest)[0] + "-work"
+        os.makedirs(work, exist_ok=True)
+        settings, profiles = presets_for(a.get("body"), work)
+        profiles = a.get("profiles") or profiles
+        cfg = {}
+        if profiles.get("machine"):
+            import json as _j
+
+            for k in ("machine", "process", "filament"):
+                try:
+                    with open(profiles[k], encoding="utf-8") as f:
+                        cfg.update(_j.load(f))
+                except (OSError, ValueError, KeyError):
+                    pass
+        try:
+            pl = C.plan(kind, a.get("params") or {}, cfg)
+        except ValueError as e:
+            raise ToolError("invalid_input", str(e))
+        model = os.path.join(cdir, pl["model"])
+        if not os.path.isfile(model):
+            raise ToolError("unavailable", f"This OrcaSlicer has no {pl['model']} (a different version): the calibration cannot be built from it.")
+        try:
+            slicers.make_project("orcaslicer", [model], dest, settings, profiles, {"arrange": True})
+        except RuntimeError as e:
+            raise ToolError("failed", str(e))
+        proj = O.Project(dest)
+        skipped = []
+        try:
+            if pl.get("trim"):
+                trim(proj, 1, *pl["trim"])
+            first = float(proj.config.get("initial_layer_print_height") or 0.2)
+            objs = proj.objects()
+            for o in objs:
+                for k, v in pl["object"].items():
+                    try:
+                        proj.set_object(o["index"], k, v)
+                    except O.ProjectError:
+                        skipped.append(k)
+                if pl.get("flow_from_name"):
+                    r = C.flow_for(o["name"], pl["flow_from_name"])
+                    if r is not None:
+                        proj.set_object(o["index"], "print_flow_ratio", r)
+            for k, v in pl["slot"].items():
+                try:
+                    proj.set(k, v, 1)
+                except O.ProjectError:
+                    skipped.append(k)
+            for k, v in pl["project"].items():
+                proj.set(k, v)
+            for z, lines in pl["gcodes"]:
+                proj.set_gcode(max(float(z), first), "custom", gcode=lines)
+            for zmin, zmax, st in pl["ranges"]:
+                proj.set_range(1, zmin, zmax, st)
+            if pl.get("post"):
+                proj.files[C.PLAN_FILE] = C.dump(pl)
+        except O.ProjectError as e:
+            raise ToolError("failed", f"The calibration project could not be set up: {e}")
+        proj.save()
+        out = {"project": dest, "kind": kind, "objects": [o["name"] for o in proj.objects()], "howToRead": pl["read"],
+               "next": "orca_slice { path } slices it; printing it is the person's call."}
+        if skipped:
+            out["notInThisOrca"] = sorted(set(skipped))
+        return out
+
+    def trim(proj, which, low, high):
+        """Keep an object's mesh between heights low and high (its own
+        coordinates), set back on the bed — the window's cut, keep one side."""
+        import FreeCAD
+        import MeshPart
+        import Part
+
+        o = proj.object(which)
+        p = proj.part(o, 1)
+        v, t, _ = proj.mesh(p)
+        w = [O.apply(p["transform"], x) for x in v]
+        import Mesh
+
+        m = Mesh.Mesh([[w[i], w[j], w[k]] for i, j, k in t])
+        b = m.BoundBox
+        if low <= b.ZMin + 1e-6 and high >= b.ZMax - 1e-6:
+            return
+        sh = Part.Shape()
+        sh.makeShapeFromMesh(m.Topology, 0.05)
+        solid = Part.makeSolid(Part.makeShell(sh.Faces))
+        big = b.DiagonalLength * 2 + 10
+        lo, hi = max(low, b.ZMin - 1), min(high, b.ZMax + 1)
+        kept = solid.common(Part.makeBox(big, big, hi - lo, FreeCAD.Vector(b.XMin - big / 4, b.YMin - big / 4, b.ZMin + lo - b.ZMin)))
+        mm = MeshPart.meshFromShape(Shape=kept, LinearDeflection=0.02, AngularDeflection=0.1, Relative=False)
+        pts = [(q.x, q.y, q.z - lo) for q in mm.Points]
+        proj.replace_mesh(o["index"], 1, [[pts[i], pts[j], pts[k]] for i, j, k in mm.Topology[1]])
+        proj.place(o["index"])
+
     # ---- orca_slice -------------------------------------------------------------------------
     def orca_slice(a):
         p = path_of(a)
@@ -536,6 +642,16 @@ def tools(session):
             if what == "gcode":
                 plate = int(a.get("plate", 0))
                 exe, found = slicers.slice_project("orcaslicer", p, out_dir, export=os.path.splitext(p)[0] + "-sliced.3mf" if a.get("keep", True) else None, plate=plate)
+                from .. import calibrate as C
+
+                pr = O.Project(p)
+                if C.PLAN_FILE in pr.files:
+                    import json as _j
+
+                    post = (_j.loads(pr.files[C.PLAN_FILE]).get("post") or {})
+                    if post.get("retraction"):
+                        for g in found:
+                            C.retract_bands(g, post["retraction"])
                 res = {"gcode": found, **slicers.read_gcode(found[0]), **slicers.LAST}
                 if os.path.isfile(os.path.splitext(p)[0] + "-sliced.3mf"):
                     res["sliced"] = os.path.splitext(p)[0] + "-sliced.3mf"
@@ -614,6 +730,13 @@ def tools(session):
                  "kind": {"type": "string", "enum": list(O.PAINT)}, "faces": {"type": "array", "items": {"type": "string"}}, "state": {}, "replace": {"type": "boolean"}, "clear": {"type": "boolean"}},
                 ["path", "object"]),
             orca_paint,
+        ),
+        Tool(
+            "orca_calibrate",
+            "OrcaSlicer's calibration prints, headless, from its own test models: kind temperature (params start, end; 5 °C blocks), pressure_advance (start, end, step), retraction (start, end, step mm), flow (pass 1|2|\"linear\"|\"linear_fine\"), max_flow (start, end, step mm³/s), vfa (start, end, step mm/s), input_shaping_freq / input_shaping_damp (start, end, step), cornering (start, end, step). { kind, params, body (its print setup's presets; minimal otherwise), path }. Gives the project and how to read the print; orca_slice slices it.",
+            obj({"kind": {"type": "string", "enum": ["temperature", "pressure_advance", "retraction", "flow", "max_flow", "vfa", "input_shaping_freq", "input_shaping_damp", "cornering"]},
+                 "params": {"type": "object"}, "body": {"type": "string"}, "path": {"type": "string"}, "profiles": {"type": "object"}}, ["kind"]),
+            orca_calibrate,
         ),
         Tool(
             "orca_slice",
